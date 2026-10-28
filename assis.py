@@ -5,7 +5,8 @@ Dépendances : streamlit, pandas, openpyxl (facultatif pour Excel), PyMuPDF (fac
 """
 from pathlib import Path
 from datetime import date, datetime, time, timedelta
-import sqlite3, re, unicodedata, io, math, os, threading, time as time_module, base64, urllib.parse, urllib.request, urllib.error
+from email.message import EmailMessage
+import sqlite3, re, unicodedata, io, math, os, threading, time as time_module, smtplib
 import pandas as pd
 import streamlit as st
 
@@ -75,7 +76,7 @@ def init_db():
             title TEXT NOT NULL,
             details TEXT DEFAULT '',
             remind_at TEXT NOT NULL,
-            phone TEXT NOT NULL,
+            phone TEXT NOT NULL DEFAULT '',
             repeat_rule TEXT DEFAULT 'Aucun',
             enabled INTEGER DEFAULT 1,
             status TEXT DEFAULT 'En attente',
@@ -85,6 +86,7 @@ def init_db():
             source_id INTEGER,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
+        CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY, value TEXT DEFAULT '');
         """)
 init_db()
 with connect() as _conn:
@@ -96,7 +98,7 @@ with connect() as _conn:
     if 'reminder_date' not in _note_cols: _conn.execute("ALTER TABLE life_notes ADD COLUMN reminder_date TEXT DEFAULT ''")
     if 'reminder_time' not in _note_cols: _conn.execute("ALTER TABLE life_notes ADD COLUMN reminder_time TEXT DEFAULT '08:00'")
 
-DEFAULT_REMINDER_PHONE = "+221777473170"
+DEFAULT_REMINDER_PHONE = "+221777473170"  # conservé pour compatibilité avec les anciennes bases
 
 def get_config(name, default=""):
     """Lit un paramètre depuis Streamlit Secrets ou les variables d’environnement."""
@@ -106,40 +108,64 @@ def get_config(name, default=""):
         value = default
     return str(os.getenv(name, value) or default).strip()
 
-def twilio_configured():
-    return all(get_config(k) for k in ("TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_FROM_NUMBER"))
-
-def send_sms(phone, message):
-    """Envoie un SMS via Twilio. Les identifiants ne sont jamais affichés."""
-    sid = get_config("TWILIO_ACCOUNT_SID")
-    token = get_config("TWILIO_AUTH_TOKEN")
-    sender = get_config("TWILIO_FROM_NUMBER")
-    if not all((sid, token, sender)):
-        raise RuntimeError("SMS non configurés : ajoutez TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN et TWILIO_FROM_NUMBER dans les Secrets.")
-    phone = re.sub(r"[\s().-]", "", str(phone or ""))
-    if phone.startswith("00"):
-        phone = "+" + phone[2:]
-    if not phone.startswith("+") or not phone[1:].isdigit():
-        raise ValueError("Le numéro doit être au format international, par exemple +221777473170.")
-    url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json"
-    body = urllib.parse.urlencode({"To": phone, "From": sender, "Body": message[:1500]}).encode("utf-8")
-    auth = base64.b64encode(f"{sid}:{token}".encode()).decode()
-    req = urllib.request.Request(url, data=body, headers={"Authorization": f"Basic {auth}", "Content-Type": "application/x-www-form-urlencoded"}, method="POST")
+def get_saved_setting(key, default=""):
     try:
-        with urllib.request.urlopen(req, timeout=20) as response:
-            payload = response.read().decode("utf-8", errors="replace")
-            if response.status not in (200, 201):
-                raise RuntimeError(f"Le fournisseur SMS a répondu avec le code {response.status}.")
-            return payload
-    except urllib.error.HTTPError as exc:
-        # Ne pas remonter les identifiants ou la réponse brute du fournisseur.
-        raise RuntimeError(f"Échec d’envoi SMS (code fournisseur {exc.code}). Vérifiez le compte, le numéro émetteur et la destination.") from None
-    except urllib.error.URLError:
-        raise RuntimeError("Échec de connexion au service SMS. Vérifiez la connexion Internet.") from None
+        with connect() as c:
+            row = c.execute("SELECT value FROM app_settings WHERE key=?", (key,)).fetchone()
+            return str(row["value"] or default) if row else default
+    except Exception:
+        return default
+
+def save_setting(key, value):
+    with connect() as c:
+        c.execute("INSERT INTO app_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, str(value).strip()))
+
+def email_configured():
+    return all(get_config(k) for k in ("SMTP_USERNAME", "SMTP_PASSWORD")) and bool(get_recipient_email())
+
+def get_recipient_email():
+    return get_config("REMINDER_EMAIL") or get_saved_setting("reminder_email", "")
+
+def send_email(subject, body, recipient=None):
+    """Envoie un e-mail via SMTP sécurisé (Gmail ou fournisseur SMTP compatible)."""
+    host = get_config("SMTP_HOST", "smtp.gmail.com")
+    try:
+        port = int(get_config("SMTP_PORT", "587"))
+    except ValueError:
+        port = 587
+    username = get_config("SMTP_USERNAME")
+    password = get_config("SMTP_PASSWORD")
+    recipient = (recipient or get_recipient_email()).strip()
+    if not username or not password:
+        raise RuntimeError("E-mail non configuré : ajoute SMTP_USERNAME et SMTP_PASSWORD dans les Secrets Streamlit.")
+    if not recipient or not re.match(r"^[^\s@]+@[^\s@]+\.[^\s@]+$", recipient):
+        raise RuntimeError("Adresse de réception absente ou invalide. Renseigne ton adresse dans l’onglet Rappels automatiques.")
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = username
+    msg["To"] = recipient
+    msg.set_content(body)
+    try:
+        if port == 465:
+            with smtplib.SMTP_SSL(host, port, timeout=20) as server:
+                server.login(username, password)
+                server.send_message(msg)
+        else:
+            with smtplib.SMTP(host, port, timeout=20) as server:
+                server.ehlo()
+                server.starttls()
+                server.ehlo()
+                server.login(username, password)
+                server.send_message(msg)
+    except smtplib.SMTPAuthenticationError:
+        raise RuntimeError("Connexion e-mail refusée. Pour Gmail, utilise un mot de passe d’application, pas ton mot de passe habituel.") from None
+    except (smtplib.SMTPException, OSError) as exc:
+        raise RuntimeError(f"Échec d’envoi e-mail ({type(exc).__name__}). Vérifie les paramètres SMTP et la connexion Internet.") from None
+    return True
 
 def process_due_reminders():
-    """Envoie une seule fois chaque rappel arrivé à échéance, puis programme la récurrence."""
-    if not twilio_configured():
+    """Envoie par e-mail chaque rappel arrivé à échéance, puis programme la récurrence."""
+    if not email_configured():
         return
     now = datetime.now().replace(microsecond=0)
     now_text = now.strftime("%Y-%m-%d %H:%M:%S")
@@ -148,14 +174,13 @@ def process_due_reminders():
     except Exception:
         return
     for r in due.itertuples():
-        # Réserve le rappel avant l'envoi pour réduire le risque de doublon entre deux vérifications.
         try:
             with connect() as c:
                 cur = c.execute("UPDATE reminders SET status='Envoi en cours' WHERE id=? AND status='En attente' AND enabled=1", (int(r.id),))
                 if cur.rowcount != 1:
                     continue
-            message = f"RAPPEL — {r.title}" + (f"\n{r.details}" if r.details else "") + f"\nPrévu le {r.remind_at}. — Secrétaire Issa"
-            send_sms(r.phone, message)
+            body = f"Bonjour,\n\nVoici ton rappel : {r.title}\n\n" + (f"Détails :\n{r.details}\n\n" if r.details else "") + f"Échéance prévue : {r.remind_at}.\n\n— Secrétaire Issa"
+            send_email(f"🔔 Rappel Secrétaire Issa : {r.title}", body)
             sent_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             if r.repeat_rule == "Quotidien":
                 next_at = (datetime.strptime(r.remind_at, "%Y-%m-%d %H:%M:%S") + timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
@@ -316,7 +341,7 @@ PAGES=["Vue d’ensemble","Maquettes & matières","Emploi du temps","Programmes 
 PAGE_SHORT={
     "Vue d’ensemble":"🏠 Accueil XXL", "Maquettes & matières":"🎓 Académie", "Emploi du temps":"🗓️ Planning",
     "Programmes de révision":"🎯 Révisions", "Suivi & progression":"📈 Progression",
-    "Assistant de vie":"👤 Vie personnelle", "Rappels automatiques":"🔔 Rappels SMS", "Compétences & Carrière":"🚀 Carrière",
+    "Assistant de vie":"👤 Vie personnelle", "Rappels automatiques":"📧 Rappels e-mail", "Compétences & Carrière":"🚀 Carrière",
     "Paramètres & sauvegarde":"⚙️ Paramètres"
 }
 PAGE_ROLE={
@@ -326,7 +351,7 @@ PAGE_ROLE={
     "Programmes de révision":"Secrétaire chargé de l’organisation des révisions",
     "Suivi & progression":"Secrétaire chargé du suivi des résultats et de la progression",
     "Assistant de vie":"Secrétaire chargé de l’organisation personnelle et des démarches",
-    "Rappels automatiques":"Secrétaire chargé des rappels et échéances par SMS",
+    "Rappels automatiques":"Secrétaire chargé des rappels et échéances par e-mail",
     "Compétences & Carrière":"Secrétaire chargé du développement des compétences et de l’insertion professionnelle",
     "Paramètres & sauvegarde":"Secrétaire chargé des paramètres, des exports et de la sauvegarde des données"
 }
@@ -754,34 +779,47 @@ elif page=="Assistant de vie":
 
 # ---------- Rappels automatiques issus des rubriques enregistrées ----------
 elif page=="Rappels automatiques":
-    header('SECRÉTARIAT PERSONNEL','Rappels automatiques 🔔','Les rappels sont générés à partir de ce que tu enregistres déjà dans les onglets : agenda, tâches, objectifs, habitudes, formations et opportunités. Tu n’as pas à ressaisir les mêmes informations ici.')
+    header('SECRÉTARIAT PERSONNEL','Rappels automatiques par e-mail 📧','Les rappels sont générés à partir de ce que tu enregistres déjà dans les onglets : agenda, tâches, objectifs, habitudes, formations et opportunités. Tu n’as pas à ressaisir les mêmes informations ici.')
     sync_existing_entries_to_reminders()
-    st.info('📲 Numéro de rappel par défaut : **+221 77 747 31 70**. Les échéances enregistrées dans les autres rubriques alimentent automatiquement cette liste.')
-    if twilio_configured():
-        st.success('Service SMS configuré. Les échéances automatiques peuvent être envoyées par SMS lorsque l’application reste active.')
+    current_email = get_recipient_email()
+    with st.container(border=True):
+        st.markdown('#### 📬 Adresse qui recevra les rappels')
+        with st.form('recipient_email_form'):
+            recipient_input = st.text_input('Ton adresse e-mail', value=current_email, placeholder='exemple@gmail.com', help='Cette adresse est enregistrée dans la base locale de l’application.')
+            save_email = st.form_submit_button('Enregistrer mon adresse e-mail', type='primary')
+        if save_email:
+            if not re.match(r'^[^\s@]+@[^\s@]+\.[^\s@]+$', recipient_input.strip()):
+                st.error('Entre une adresse e-mail valide.')
+            else:
+                save_setting('reminder_email', recipient_input.strip())
+                st.success('Adresse de réception enregistrée.')
+                st.rerun()
+    if email_configured():
+        st.success(f"Envoi e-mail configuré. Les rappels seront envoyés à **{get_recipient_email()}** lorsque l’application fonctionne.")
     else:
-        st.warning('Les rappels se créent automatiquement dans l’application. Pour recevoir réellement les SMS, il faut configurer le fournisseur SMS dans les Secrets Streamlit.')
-    with st.expander('⚙️ Configuration SMS (une seule fois)', expanded=not twilio_configured()):
-        st.markdown('Ajoute les identifiants de ton compte Twilio dans les Secrets de Streamlit. Ne les partage pas et ne les écris pas directement dans le code :')
-        st.code('TWILIO_ACCOUNT_SID = "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"\nTWILIO_AUTH_TOKEN = "ton_token_secret"\nTWILIO_FROM_NUMBER = "+1xxxxxxxxxx"', language='toml')
-        st.caption('Vérifie que le compte et le numéro expéditeur peuvent envoyer des SMS vers le Sénégal. Des frais peuvent s’appliquer.')
-    if st.button('🧪 Envoyer un SMS de test à mon numéro', disabled=not twilio_configured()):
+        st.warning('Les rappels sont préparés automatiquement, mais l’envoi par e-mail nécessite de configurer les identifiants SMTP dans les Secrets Streamlit.')
+    with st.expander('⚙️ Configuration e-mail (à faire une seule fois)', expanded=not bool(get_config('SMTP_USERNAME') and get_config('SMTP_PASSWORD'))):
+        st.markdown('Pour Gmail, active la validation en deux étapes puis crée un **mot de passe d’application**. Ne mets jamais ton mot de passe Gmail habituel dans le code.')
+        st.code('SMTP_HOST = \"smtp.gmail.com\"\nSMTP_PORT = \"587\"\nSMTP_USERNAME = \"tonadresse@gmail.com\"\nSMTP_PASSWORD = \"mot_de_passe_application_gmail\"', language='toml')
+        st.caption('Dans Streamlit Cloud : Manage app → Settings → Secrets. Pour un autre fournisseur, remplace SMTP_HOST et SMTP_PORT par les paramètres SMTP officiels de ce fournisseur.')
+    if st.button('🧪 Envoyer un e-mail de test', disabled=not (get_config('SMTP_USERNAME') and get_config('SMTP_PASSWORD') and get_recipient_email())):
         try:
-            send_sms(DEFAULT_REMINDER_PHONE, 'Test Secrétaire Issa : les SMS de rappel sont correctement configurés.')
-            st.success('Demande de SMS de test transmise au fournisseur.')
-        except Exception as exc: st.error(str(exc))
+            send_email('Test — Secrétaire Issa', 'Bonjour,\n\nCeci est un e-mail de test. Si tu le reçois, les rappels e-mail de Secrétaire Issa sont correctement configurés.')
+            st.success(f"E-mail de test transmis à {get_recipient_email()}.")
+        except Exception as exc:
+            st.error(str(exc))
     reminders=read_df("SELECT id,title,details,remind_at,phone,repeat_rule,status,enabled,last_sent_at,last_error,source_type,source_id FROM reminders ORDER BY remind_at")
     if reminders.empty:
-        st.info('Aucune échéance future détectée. Ajoute par exemple une tâche avec une date limite, un cours dans l’agenda, un objectif daté ou une opportunité avec date limite : le rappel sera créé automatiquement.')
+        st.info('Aucune échéance détectée. Ajoute une tâche avec une date limite, un cours dans l’agenda, un objectif daté ou une opportunité : le rappel sera créé automatiquement.')
     else:
         pending=reminders[(reminders.enabled==1)&(reminders.status=='En attente')]
         overdue=pending[pending.remind_at.astype(str)<=datetime.now().strftime('%Y-%m-%d %H:%M:%S')]
         c1,c2,c3=st.columns(3)
         with c1: card('Rappels en attente',len(pending),'Échéances à venir ou à traiter')
         with c2: card('À traiter maintenant',len(overdue),'Date/heure du rappel atteinte')
-        with c3: card('SMS envoyés',int((reminders.status=='Envoyé').sum()),'Rappels ponctuels déjà transmis')
-        display=reminders.rename(columns={'title':'Rappel automatique','details':'Détails / rubrique','remind_at':'Date et heure','phone':'Numéro','repeat_rule':'Répétition','status':'État SMS','enabled':'Actif','last_sent_at':'Dernier SMS','last_error':'Erreur éventuelle','source_type':'Rubrique source','source_id':'N° entrée'})
-        st.dataframe(display[['Rappel automatique','Détails / rubrique','Date et heure','Rubrique source','État SMS','Actif','Dernier SMS','Erreur éventuelle']],use_container_width=True,hide_index=True)
+        with c3: card('E-mails envoyés',int((reminders.status=='Envoyé').sum()),'Rappels ponctuels déjà transmis')
+        display=reminders.rename(columns={'title':'Rappel automatique','details':'Détails / rubrique','remind_at':'Date et heure','repeat_rule':'Répétition','status':'État e-mail','enabled':'Actif','last_sent_at':'Dernier e-mail','last_error':'Erreur éventuelle','source_type':'Rubrique source','source_id':'N° entrée'})
+        st.dataframe(display[['Rappel automatique','Détails / rubrique','Date et heure','Rubrique source','État e-mail','Actif','Dernier e-mail','Erreur éventuelle']],use_container_width=True,hide_index=True)
         choices={f"#{int(r.id)} — {r.title} — {r.remind_at}":int(r.id) for r in reminders.itertuples()}
         selected=st.selectbox('Gérer un rappel automatique',list(choices),key='auto_reminder_manage_pick')
         rid=choices[selected]; a,b=st.columns(2)
@@ -791,16 +829,16 @@ elif page=="Rappels automatiques":
                 enabled=0 if int(cur.iloc[0]['enabled']) else 1
                 run("UPDATE reminders SET enabled=?,status=? WHERE id=?",(enabled,'En attente' if enabled else 'Désactivé',rid))
                 st.rerun()
-        if b.button('Envoyer ce rappel maintenant par SMS',key='auto_reminder_send_now',disabled=not twilio_configured()):
+        if b.button('Envoyer ce rappel maintenant par e-mail',key='auto_reminder_send_now',disabled=not email_configured()):
             row=read_df('SELECT * FROM reminders WHERE id=?',(rid,))
             if not row.empty:
                 r=row.iloc[0]
                 try:
-                    send_sms(r['phone'],f"RAPPEL — {r['title']}"+(f"\n{r['details']}" if r['details'] else ''))
+                    send_email(f"🔔 Rappel Secrétaire Issa : {r['title']}",f"Rappel : {r['title']}\n\n{r['details']}\n\nDate prévue : {r['remind_at']}\n— Secrétaire Issa")
                     run("UPDATE reminders SET last_sent_at=?,last_error='' WHERE id=?",(datetime.now().strftime('%Y-%m-%d %H:%M:%S'),rid))
-                    st.success('SMS transmis au fournisseur.')
+                    st.success('E-mail transmis au serveur de messagerie.')
                 except Exception as exc: st.error(str(exc))
-    st.caption('Synchronisation automatique : agenda (1 h avant), tâches et objectifs (veille à 08 h ou immédiatement si déjà en retard), formations (veille du début et de la fin), stages/concours/bourses (veille de la date limite), notes de catégorie « Rappel » (date/heure choisies) et habitudes actives (quotidiennement). Les SMS nécessitent un compte Twilio configuré et l’application doit rester active pour garantir les envois.')
+    st.caption('Synchronisation automatique : agenda (1 h avant), tâches et objectifs (veille à 08 h ou immédiatement si déjà en retard), formations (veille du début et de la fin), stages/concours/bourses (veille de la date limite), notes de catégorie « Rappel » (date/heure choisies) et habitudes actives (quotidiennement). Les e-mails nécessitent les paramètres SMTP et l’application doit rester active pour garantir les envois.')
 
 # ---------- Compétences & Carrière ----------
 elif page=="Compétences & Carrière":
@@ -913,7 +951,7 @@ elif page=="Compétences & Carrière":
 elif page=="Paramètres & sauvegarde":
     header('PARAMÈTRES & DONNÉES','Paramètres & sauvegarde','Télécharge tes données pour garder une copie. Fais régulièrement une sauvegarde du fichier SQLite.')
     st.warning(f'Base active : {DB_PATH}. Cette application utilise une base distincte ; ne la remplace pas par la base d’une autre application.')
-    tables={'Matières':'subjects','Emploi du temps':'events','Tâches':'tasks','Ressources archivées (ancien espace)':'documents','Journal d’étude':'study_logs','Objectifs':'goals','Habitudes':'habits','Historique habitudes':'habit_logs','Budget':'budgets','Notes personnelles':'life_notes','Contacts':'contacts','Compétences':'career_skills','Formations':'career_training','Opportunités professionnelles':'career_opportunities','Rappels SMS':'reminders'}
+    tables={'Matières':'subjects','Emploi du temps':'events','Tâches':'tasks','Ressources archivées (ancien espace)':'documents','Journal d’étude':'study_logs','Objectifs':'goals','Habitudes':'habits','Historique habitudes':'habit_logs','Budget':'budgets','Notes personnelles':'life_notes','Contacts':'contacts','Compétences':'career_skills','Formations':'career_training','Opportunités professionnelles':'career_opportunities','Rappels e-mail':'reminders'}
     for label,table in tables.items():
         df=read_df(f'SELECT * FROM {table}')
         with st.expander(f'{label} — {len(df)} enregistrement(s)'):
