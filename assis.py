@@ -118,6 +118,10 @@ def init_db():
         );
         CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY, value TEXT DEFAULT '');
         CREATE TABLE IF NOT EXISTS assistant_docs(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,content TEXT NOT NULL,uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS quick_capture(id INTEGER PRIMARY KEY AUTOINCREMENT,content TEXT NOT NULL,category TEXT DEFAULT 'Idée',captured_at TEXT DEFAULT CURRENT_TIMESTAMP,converted INTEGER DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS projects(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,category TEXT DEFAULT 'Études',status TEXT DEFAULT 'À démarrer',priority TEXT DEFAULT 'Normale',start_date TEXT DEFAULT '',due_date TEXT DEFAULT '',progress INTEGER DEFAULT 0,description TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS flashcards(id INTEGER PRIMARY KEY AUTOINCREMENT,subject_id INTEGER,question TEXT NOT NULL,answer TEXT NOT NULL,tags TEXT DEFAULT '',confidence INTEGER DEFAULT 0,last_reviewed TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE SET NULL);
+        CREATE TABLE IF NOT EXISTS daily_journal(id INTEGER PRIMARY KEY AUTOINCREMENT,journal_date TEXT NOT NULL UNIQUE,mood TEXT DEFAULT 'Correcte',energy INTEGER DEFAULT 3,highlights TEXT DEFAULT '',improvements TEXT DEFAULT '',tomorrow TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP,updated_at TEXT DEFAULT CURRENT_TIMESTAMP);
         """)
 init_db()
 with connect() as _conn:
@@ -480,15 +484,16 @@ def subject_choices():
     for r in df.itertuples(): opts[f"{r.title} · {r.semester} · {r.ue}"]=int(r.id)
     return df,opts
 
-PAGES=["Vue d’ensemble","Maquettes & matières","Emploi du temps","Programmes de révision","Suivi & progression","Assistant de vie","Rappels automatiques","Assistant e-mail & documents","Compétences & Carrière","Paramètres & sauvegarde"]
+PAGES=["Vue d’ensemble","Centre XXL","Maquettes & matières","Emploi du temps","Programmes de révision","Suivi & progression","Assistant de vie","Rappels automatiques","Assistant e-mail & documents","Compétences & Carrière","Paramètres & sauvegarde"]
 PAGE_SHORT={
-    "Vue d’ensemble":"🏠 Accueil XXL", "Maquettes & matières":"🎓 Académie", "Emploi du temps":"🗓️ Planning",
+    "Vue d’ensemble":"🏠 Accueil XXL", "Centre XXL":"⚡ Centre XXL", "Maquettes & matières":"🎓 Académie", "Emploi du temps":"🗓️ Planning",
     "Programmes de révision":"🎯 Révisions", "Suivi & progression":"📈 Progression",
     "Assistant de vie":"👤 Vie personnelle", "Rappels automatiques":"📧 Rappels e-mail", "Assistant e-mail & documents":"✉️ Assistant complet", "Compétences & Carrière":"🚀 Carrière",
     "Paramètres & sauvegarde":"⚙️ Paramètres"
 }
 PAGE_ROLE={
     "Vue d’ensemble":"Secrétaire chargé de la coordination générale",
+    "Centre XXL":"Centre de productivité : capture rapide, projets, fiches de mémorisation et journal quotidien",
     "Maquettes & matières":"Secrétaire chargé du suivi pédagogique et des maquettes",
     "Emploi du temps":"Secrétaire chargé de la planification et de l’emploi du temps",
     "Programmes de révision":"Secrétaire chargé de l’organisation des révisions",
@@ -1203,11 +1208,197 @@ elif page=="Compétences & Carrière":
         st.markdown('#### Conseils de départ')
         st.markdown('- Choisis 3 compétences prioritaires à développer ce mois-ci.\n- Ajoute les formations réellement commencées ou envisagées.\n- Enregistre les liens officiels des stages et opportunités pour retrouver facilement les annonces.')
 
+# ---------- Centre de productivité XXL : nouveautés complémentaires ----------
+elif page=="Centre XXL":
+    header("CENTRE DE PRODUCTIVITÉ XXL", "Ton cockpit personnel ⚡", "Capture tes idées, pilote tes projets, mémorise tes cours et fais le bilan de tes journées. Ces modules s’ajoutent aux fonctionnalités existantes sans remplacer tes données.")
+    # Indicateurs consolidés
+    _cap_n = int(read_df("SELECT COUNT(*) n FROM quick_capture WHERE converted=0").iloc[0]["n"])
+    _proj_df = read_df("SELECT * FROM projects")
+    _fc_n = int(read_df("SELECT COUNT(*) n FROM flashcards").iloc[0]["n"])
+    _journal_n = int(read_df("SELECT COUNT(*) n FROM daily_journal").iloc[0]["n"])
+    _m = st.columns(4)
+    with _m[0]: card("Idées à traiter", _cap_n, "Capture rapide")
+    with _m[1]: card("Projets", len(_proj_df), "Tous statuts")
+    with _m[2]: card("Fiches mémoire", _fc_n, "Révisions actives")
+    with _m[3]: card("Bilans quotidiens", _journal_n, "Journal personnel")
+    tab_search, tab_capture, tab_projects, tab_cards, tab_journal = st.tabs(["🔎 Recherche globale", "⚡ Capture rapide", "🚀 Projets", "🧠 Mémorisation", "📔 Journal quotidien"])
+
+    with tab_search:
+        st.markdown("#### Retrouver rapidement une information")
+        _q = st.text_input("Recherche dans tes matières, séances, tâches, notes, documents et opportunités", placeholder="Ex. pédologie, stage, examen, date limite…", key="xxl_global_search")
+        if _q.strip():
+            _like = "%" + _q.strip() + "%"
+            _search_defs = [
+                ("Matières", "SELECT title AS Titre, semester AS Période, ue AS Détail FROM subjects WHERE title LIKE ? OR code LIKE ? OR ue LIKE ? OR notes LIKE ?", 4),
+                ("Emploi du temps", "SELECT title AS Titre, event_date AS Date, kind AS Type FROM events WHERE title LIKE ? OR kind LIKE ? OR location LIKE ? OR notes LIKE ?", 4),
+                ("Tâches", "SELECT title AS Titre, due_date AS Échéance, status AS Statut FROM tasks WHERE title LIKE ? OR category LIKE ? OR notes LIKE ? OR status LIKE ?", 4),
+                ("Notes personnelles", "SELECT title AS Titre, category AS Catégorie, content AS Contenu FROM life_notes WHERE title LIKE ? OR category LIKE ? OR content LIKE ? OR content LIKE ?", 4),
+                ("Documents", "SELECT title AS Titre, substr(content,1,240) AS Extrait, uploaded_at AS Import FROM assistant_docs WHERE title LIKE ? OR content LIKE ? OR content LIKE ? OR content LIKE ?", 4),
+                ("Opportunités", "SELECT title AS Titre, organization AS Organisation, deadline AS Échéance FROM career_opportunities WHERE title LIKE ? OR organization LIKE ? OR kind LIKE ? OR notes LIKE ?", 4),
+                ("Projets", "SELECT title AS Titre, status AS Statut, due_date AS Échéance FROM projects WHERE title LIKE ? OR description LIKE ? OR category LIKE ? OR status LIKE ?", 4),
+            ]
+            _found_any = False
+            for _label, _sql, _n in _search_defs:
+                try:
+                    _res = read_df(_sql, tuple([_like] * _n))
+                    if not _res.empty:
+                        _found_any = True
+                        st.markdown(f"**{_label} · {_len if (_len := len(_res)) else 0} résultat(s)**")
+                        st.dataframe(_res.head(30), use_container_width=True, hide_index=True)
+                except Exception:
+                    continue
+            if not _found_any: st.info("Aucun résultat trouvé. Essaie un mot plus court ou une autre orthographe.")
+        else:
+            st.caption("La recherche s’effectue dans les données déjà enregistrées localement. Elle ne lance pas de recherche Internet.")
+
+    with tab_capture:
+        st.markdown("#### Boîte de réception des idées")
+        with st.form("xxl_capture_form", clear_on_submit=True):
+            _capture_text = st.text_area("Note, idée, chose à faire ou information à ne pas oublier *", height=100)
+            _capture_cat = st.selectbox("Classer cette capture", ["Idée", "Tâche", "Cours", "Projet", "Personnel", "À vérifier"])
+            _capture_submit = st.form_submit_button("⚡ Capturer", type="primary")
+        if _capture_submit:
+            if _capture_text.strip():
+                run("INSERT INTO quick_capture(content,category) VALUES(?,?)", (_capture_text.strip(), _capture_cat))
+                st.success("Capture enregistrée."); st.rerun()
+            else: st.warning("Écris une information avant de l’enregistrer.")
+        _captures = read_df("SELECT * FROM quick_capture WHERE converted=0 ORDER BY id DESC")
+        if _captures.empty: st.info("Ta boîte de capture est vide.")
+        else:
+            for _r in _captures.itertuples():
+                with st.container(border=True):
+                    st.markdown(f"**{_r.category} · {_r.captured_at}**")
+                    st.write(_r.content)
+                    _ca, _cb = st.columns([3, 1])
+                    with _ca:
+                        if st.button("Convertir en tâche", key=f"capture_task_{_r.id}"):
+                            run("INSERT INTO tasks(title,due_date,priority,status,category,notes) VALUES(?,?,?,?,?,?)", (_r.content[:180], "", "Normale", "À faire", "Travail personnel", f"Créée depuis la capture #{_r.id}"))
+                            run("UPDATE quick_capture SET converted=1 WHERE id=?", (int(_r.id),))
+                            st.success("Tâche créée."); st.rerun()
+                    with _cb:
+                        if st.button("Archiver", key=f"capture_archive_{_r.id}"):
+                            run("UPDATE quick_capture SET converted=1 WHERE id=?", (int(_r.id),)); st.rerun()
+        _arch = read_df("SELECT id,category,content,captured_at FROM quick_capture WHERE converted=1 ORDER BY id DESC LIMIT 20")
+        with st.expander("Captures archivées / converties"):
+            if _arch.empty: st.caption("Aucune capture archivée.")
+            else: st.dataframe(_arch, use_container_width=True, hide_index=True)
+
+    with tab_projects:
+        st.markdown("#### Gestion de projets personnels, universitaires ou professionnels")
+        with st.form("xxl_project_form", clear_on_submit=True):
+            _ptitle = st.text_input("Nom du projet *")
+            _pcols = st.columns(3)
+            _pcat = _pcols[0].selectbox("Domaine", ["Études", "Agronomie", "Professionnel", "Entreprise", "Personnel", "Recherche", "Autre"])
+            _pstatus = _pcols[1].selectbox("Statut", ["À démarrer", "En cours", "En attente", "Terminé", "Abandonné"])
+            _ppriority = _pcols[2].selectbox("Priorité", ["Basse", "Normale", "Haute", "Urgente"])
+            _pdates = st.columns(2)
+            _pstart = _pdates[0].date_input("Date de début", value=date.today())
+            _pdue_on = _pdates[1].checkbox("Définir une échéance", value=True)
+            _pdue = _pdates[1].date_input("Échéance", value=date.today()+timedelta(days=14), disabled=not _pdue_on)
+            _pprog = st.slider("Progression initiale (%)", 0, 100, 0)
+            _pdesc = st.text_area("Objectif, étapes et notes", height=90)
+            _psubmit = st.form_submit_button("Créer le projet", type="primary")
+        if _psubmit:
+            if not _ptitle.strip(): st.error("Le nom du projet est obligatoire.")
+            elif _pdue_on and _pdue < _pstart: st.error("L’échéance doit être égale ou postérieure au début.")
+            else:
+                run("INSERT INTO projects(title,category,status,priority,start_date,due_date,progress,description) VALUES(?,?,?,?,?,?,?,?)", (_ptitle.strip(), _pcat, _pstatus, _ppriority, _pstart.isoformat(), _pdue.isoformat() if _pdue_on else "", int(_pprog), _pdesc.strip()))
+                st.success("Projet créé."); st.rerun()
+        _projects = read_df("SELECT * FROM projects ORDER BY CASE priority WHEN 'Urgente' THEN 1 WHEN 'Haute' THEN 2 WHEN 'Normale' THEN 3 ELSE 4 END, due_date")
+        if _projects.empty: st.info("Aucun projet enregistré pour le moment.")
+        else:
+            for _r in _projects.itertuples():
+                with st.container(border=True):
+                    _head = st.columns([4, 1, 1])
+                    _head[0].markdown(f"### {_r.title}")
+                    _head[1].metric("Progression", f"{int(_r.progress)}%")
+                    _head[2].caption(f"Priorité : {_r.priority}")
+                    st.progress(max(0, min(100, int(_r.progress))) / 100)
+                    st.caption(f"{_r.category} · {_r.status} · Début : {_r.start_date or '—'} · Échéance : {_r.due_date or '—'}")
+                    if _r.description: st.write(_r.description)
+                    _ec1, _ec2, _ec3, _ec4 = st.columns([2, 2, 1, 1])
+                    _new_progress = _ec1.slider("Progression", 0, 100, int(_r.progress), key=f"proj_progress_{_r.id}")
+                    _new_status = _ec2.selectbox("Statut", ["À démarrer", "En cours", "En attente", "Terminé", "Abandonné"], index=["À démarrer", "En cours", "En attente", "Terminé", "Abandonné"].index(_r.status) if _r.status in ["À démarrer", "En cours", "En attente", "Terminé", "Abandonné"] else 0, key=f"proj_status_{_r.id}")
+                    if _ec3.button("Mettre à jour", key=f"proj_update_{_r.id}"):
+                        if _new_status == "Terminé": _new_progress = 100
+                        run("UPDATE projects SET progress=?,status=? WHERE id=?", (int(_new_progress), _new_status, int(_r.id))); st.rerun()
+                    if _ec4.button("Supprimer", key=f"proj_delete_{_r.id}"):
+                        run("DELETE FROM projects WHERE id=?", (int(_r.id),)); st.rerun()
+            export_csv(_projects, "les projets", "projets_xxl")
+
+    with tab_cards:
+        st.markdown("#### Fiches de mémorisation — question au recto, réponse au verso")
+        _sub_df, _sub_opts = subject_choices()
+        with st.form("xxl_flashcard_form", clear_on_submit=True):
+            _fquestion = st.text_area("Question / notion à retenir *", height=75)
+            _fanswer = st.text_area("Réponse / explication *", height=100)
+            _fsubject = st.selectbox("Matière associée", list(_sub_opts.keys()))
+            _ftags = st.text_input("Mots-clés")
+            _fsubmit = st.form_submit_button("Ajouter la fiche", type="primary")
+        if _fsubmit:
+            if not _fquestion.strip() or not _fanswer.strip(): st.error("La question et la réponse sont obligatoires.")
+            else:
+                run("INSERT INTO flashcards(subject_id,question,answer,tags) VALUES(?,?,?,?)", (_sub_opts[_fsubject], _fquestion.strip(), _fanswer.strip(), _ftags.strip()))
+                st.success("Fiche ajoutée."); st.rerun()
+        _fdf = read_df("SELECT f.*,s.title AS subject_title FROM flashcards f LEFT JOIN subjects s ON s.id=f.subject_id ORDER BY f.last_reviewed ASC,f.id DESC")
+        if _fdf.empty: st.info("Crée tes premières fiches à partir de tes cours, définitions, formules ou notions agronomiques.")
+        else:
+            _filter_subjects = ["Toutes les matières"] + sorted([str(x) for x in _fdf.subject_title.dropna().unique() if str(x).strip()])
+            _filter = st.selectbox("Filtrer les fiches", _filter_subjects, key="xxl_flash_filter")
+            _deck = _fdf if _filter == "Toutes les matières" else _fdf[_fdf.subject_title == _filter]
+            if not _deck.empty:
+                _idx = st.selectbox("Choisir une fiche", list(range(len(_deck))), format_func=lambda i: f"{i+1}/{len(_deck)} · {str(_deck.iloc[i]['question'])[:100]}", key="xxl_flash_pick")
+                _fc = _deck.iloc[_idx]
+                st.markdown("<div class='cc-card'>", unsafe_allow_html=True)
+                st.markdown("**QUESTION**")
+                st.markdown(str(_fc["question"]))
+                if _fc["tags"]: st.caption("Mots-clés : " + str(_fc["tags"]))
+                if st.button("👁️ Révéler la réponse", key=f"reveal_flash_{int(_fc['id'])}"):
+                    st.session_state[f"flash_revealed_{int(_fc['id'])}"] = True
+                if st.session_state.get(f"flash_revealed_{int(_fc['id'])}"):
+                    st.markdown("**RÉPONSE**")
+                    st.write(str(_fc["answer"]))
+                    _rating = st.radio("Comment as-tu maîtrisé cette fiche ?", ["À revoir", "Moyennement", "Bien maîtrisée"], horizontal=True, key=f"flash_rating_{int(_fc['id'])}")
+                    if st.button("Enregistrer mon niveau", key=f"flash_save_rating_{int(_fc['id'])}"):
+                        _conf = {"À revoir":1, "Moyennement":2, "Bien maîtrisée":3}[_rating]
+                        run("UPDATE flashcards SET confidence=?,last_reviewed=? WHERE id=?", (_conf, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), int(_fc["id"])))
+                        st.session_state[f"flash_revealed_{int(_fc['id'])}"] = False
+                        st.success("Progression de mémorisation enregistrée."); st.rerun()
+                st.markdown("</div>", unsafe_allow_html=True)
+                if st.button("Supprimer cette fiche", key=f"delete_flash_{int(_fc['id'])}"):
+                    run("DELETE FROM flashcards WHERE id=?", (int(_fc["id"]),)); st.rerun()
+            _stats = _fdf.confidence.value_counts().to_dict()
+            st.caption(f"À revoir : {_stats.get(1,0)} · Moyennement maîtrisées : {_stats.get(2,0)} · Bien maîtrisées : {_stats.get(3,0)}")
+            export_csv(_fdf, "les fiches mémoire", "fiches_memoire")
+
+    with tab_journal:
+        st.markdown("#### Bilan quotidien pour suivre ton énergie et tes progrès")
+        _jdate = st.date_input("Date du bilan", value=date.today(), key="xxl_journal_date")
+        _existing_j = read_df("SELECT * FROM daily_journal WHERE journal_date=?", (_jdate.isoformat(),))
+        _jrow = _existing_j.iloc[0] if not _existing_j.empty else None
+        with st.form("xxl_journal_form"):
+            _jmood_opts = ["Excellente", "Bonne", "Correcte", "Fatiguée", "Stressée"]
+            _jmood_default = _jmood_opts.index(_jrow["mood"]) if _jrow is not None and _jrow["mood"] in _jmood_opts else 2
+            _jmood = st.selectbox("Humeur générale", _jmood_opts, index=_jmood_default)
+            _jenergy = st.slider("Énergie (1 = très basse, 5 = très élevée)", 1, 5, int(_jrow["energy"]) if _jrow is not None else 3)
+            _jhigh = st.text_area("Mes réussites / ce que j’ai appris", value=str(_jrow["highlights"]) if _jrow is not None else "")
+            _jbetter = st.text_area("Ce que je peux améliorer", value=str(_jrow["improvements"]) if _jrow is not None else "")
+            _jtomo = st.text_area("Mes trois priorités pour demain", value=str(_jrow["tomorrow"]) if _jrow is not None else "")
+            _jsave = st.form_submit_button("Enregistrer le bilan", type="primary")
+        if _jsave:
+            run("INSERT INTO daily_journal(journal_date,mood,energy,highlights,improvements,tomorrow,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(journal_date) DO UPDATE SET mood=excluded.mood,energy=excluded.energy,highlights=excluded.highlights,improvements=excluded.improvements,tomorrow=excluded.tomorrow,updated_at=excluded.updated_at", (_jdate.isoformat(), _jmood, int(_jenergy), _jhigh.strip(), _jbetter.strip(), _jtomo.strip(), datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+            st.success("Bilan enregistré."); st.rerun()
+        _jhistory = read_df("SELECT journal_date AS Date,mood AS Humeur,energy AS Energie,highlights AS Reussites,tomorrow AS Priorites_demain FROM daily_journal ORDER BY journal_date DESC LIMIT 30")
+        if not _jhistory.empty:
+            st.markdown("#### Historique récent")
+            st.dataframe(_jhistory, use_container_width=True, hide_index=True)
+            export_csv(_jhistory, "le journal quotidien", "journal_quotidien")
+
 # ---------- Sauvegarde ----------
 elif page=="Paramètres & sauvegarde":
     header('PARAMÈTRES & DONNÉES','Paramètres & sauvegarde','Télécharge tes données pour garder une copie. Fais régulièrement une sauvegarde du fichier SQLite.')
     st.warning(f'Base active : {DB_PATH}. Cette application utilise une base distincte ; ne la remplace pas par la base d’une autre application.')
-    tables={'Matières':'subjects','Emploi du temps':'events','Tâches':'tasks','Ressources archivées (ancien espace)':'documents','Journal d’étude':'study_logs','Objectifs':'goals','Habitudes':'habits','Historique habitudes':'habit_logs','Budget':'budgets','Notes personnelles':'life_notes','Contacts':'contacts','Compétences':'career_skills','Formations':'career_training','Opportunités professionnelles':'career_opportunities','Rappels e-mail':'reminders'}
+    tables={'Matières':'subjects','Emploi du temps':'events','Tâches':'tasks','Ressources archivées (ancien espace)':'documents','Journal d’étude':'study_logs','Objectifs':'goals','Habitudes':'habits','Historique habitudes':'habit_logs','Budget':'budgets','Notes personnelles':'life_notes','Contacts':'contacts','Compétences':'career_skills','Formations':'career_training','Opportunités professionnelles':'career_opportunities','Rappels e-mail':'reminders','Captures rapides':'quick_capture','Projets XXL':'projects','Fiches mémoire':'flashcards','Journal quotidien':'daily_journal','Bibliothèque de documents':'assistant_docs'}
     for label,table in tables.items():
         df=read_df(f'SELECT * FROM {table}')
         with st.expander(f'{label} — {len(df)} enregistrement(s)'):
@@ -1222,7 +1413,7 @@ elif page=="Paramètres & sauvegarde":
 
 st.markdown('<div class="issa-footer"><strong>🗂️ Secrétaire Issa</strong><br><small>Un espace personnel de secrétariat, de suivi et d’organisation · Données stockées localement dans SQLite.</small></div>',unsafe_allow_html=True)
 role_icons={
-    "Vue d’ensemble":"🏠", "Maquettes & matières":"🎓", "Emploi du temps":"🗓️",
+    "Vue d’ensemble":"🏠", "Centre XXL":"⚡", "Maquettes & matières":"🎓", "Emploi du temps":"🗓️",
     "Programmes de révision":"🎯", "Suivi & progression":"📈", "Assistant de vie":"👤", "Rappels automatiques":"🔔", "Assistant e-mail & documents":"✉️",
     "Compétences & Carrière":"🚀", "Paramètres & sauvegarde":"⚙️"
 }
