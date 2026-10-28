@@ -275,7 +275,7 @@ def transcribe_audio(uploaded_audio):
             audio_data = recognizer.record(source)
         return recognizer.recognize_google(audio_data, language="fr-FR")
     except ImportError:
-        raise RuntimeError("La saisie vocale nécessite SpeechRecognition. Ajoute speechrecognition à requirements.txt puis redéploie.")
+        raise RuntimeError("Module SpeechRecognition absent. Vérifie que requirements.txt est à la racine du dépôt GitHub et contient speechrecognition>=3.10.0, puis fais un commit et attends le redéploiement complet de Streamlit Cloud. Si le module reste absent, consulte Manage app → Logs pour vérifier l’installation des dépendances.")
     except Exception as exc:
         raise RuntimeError(f"Transcription vocale impossible ({type(exc).__name__}). Vérifie la qualité audio et la connexion Internet.") from None
 
