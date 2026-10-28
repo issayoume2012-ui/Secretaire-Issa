@@ -337,6 +337,28 @@ st.radio('Navigation principale',PAGES,format_func=lambda x:PAGE_SHORT[x],horizo
 page=st.session_state['top_nav']
 st.markdown(f'<div class="cc-card" style="padding:12px 16px;margin:10px 0 16px"><div class="cc-eyebrow">Votre secrétaire spécialisé</div><div style="font-size:1.05rem;font-weight:800;color:#17345c;margin-top:4px">🧭 {PAGE_ROLE[page]}</div></div>',unsafe_allow_html=True)
 
+# RAPPELS TRANSVERSAUX : visibles depuis TOUS les onglets, sans ressaisie.
+try:
+    _now = datetime.now().replace(microsecond=0)
+    _horizon = (_now + timedelta(hours=24)).strftime('%Y-%m-%d %H:%M:%S')
+    _now_text = _now.strftime('%Y-%m-%d %H:%M:%S')
+    _alerts = read_df("SELECT title,details,remind_at,status FROM reminders WHERE enabled=1 AND status='En attente' AND remind_at<=? ORDER BY remind_at LIMIT 8", (_horizon,))
+    if not _alerts.empty:
+        _late = _alerts[_alerts['remind_at'].astype(str) <= _now_text]
+        if not _late.empty:
+            st.error(f"🔔 **RAPPEL À FAIRE : {len(_late)} tâche(s) ou échéance(s) sont arrivées à échéance.** Ouvre l’onglet « Rappels automatiques » pour les consulter.")
+        _soon = _alerts[_alerts['remind_at'].astype(str) > _now_text]
+        if not _soon.empty:
+            st.warning(f"⏰ **À venir dans les prochaines 24 heures : {len(_soon)} rappel(s).** Consulte l’onglet « Rappels automatiques » pour voir les dates et les détails.")
+        with st.expander('Voir les rappels à faire ou à venir', expanded=not _late.empty):
+            for _item in _alerts.itertuples():
+                st.markdown(f"**{_item.remind_at} — {_item.title}**")
+                if _item.details:
+                    st.caption(str(_item.details))
+except Exception:
+    # Ne pas bloquer l’application principale si une base ancienne est en cours de migration.
+    pass
+
 # ---------- Tableau de bord ----------
 if page=="Vue d’ensemble":
     header("ESPACE CENTRAL","Ton tableau de bord 👋","Une vue simple de tes cours, de tes révisions et de tes objectifs. Les indicateurs reposent sur tes saisies réelles.")
