@@ -1,11 +1,12 @@
-"""CampusClair XXL — espace étudiant et assistant personnel autonome.
+"""Secrétaire Issa — assistant personnel avec rappels automatiques par Gmail.
 Lancement : python -m streamlit run CampusClair_XXL.py
 Base SQLite locale séparée : campus_clair.db
 Dépendances : streamlit, pandas, openpyxl (facultatif pour Excel), PyMuPDF (facultatif pour PDF).
 """
 from pathlib import Path
 from datetime import date, datetime, time, timedelta
-import sqlite3, re, unicodedata, io, math, os, threading, time as time_module, json, urllib.request, urllib.error
+import sqlite3, re, unicodedata, io, math, os, threading, time as time_module, smtplib, ssl
+from email.message import EmailMessage
 import pandas as pd
 import streamlit as st
 
@@ -120,54 +121,62 @@ def save_setting(key, value):
         c.execute("INSERT INTO app_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, str(value).strip()))
 
 def email_configured():
-    """Vérifie les secrets Brevo et l'adresse de réception."""
-    return all(get_config(k) for k in ("BREVO_API_KEY", "BREVO_SENDER_EMAIL")) and bool(get_recipient_email())
+    """Vérifie les paramètres Gmail SMTP et l'adresse de réception."""
+    return all(get_config(k) for k in ("SMTP_USERNAME", "SMTP_PASSWORD")) and bool(get_recipient_email())
 
 def get_recipient_email():
     return get_config("REMINDER_EMAIL") or get_saved_setting("reminder_email", "")
 
 def send_email(subject, body, recipient=None):
-    """Envoie un e-mail transactionnel via l'API HTTPS de Brevo (pas de SMTP)."""
-    api_key = get_config("BREVO_API_KEY")
-    sender_email = get_config("BREVO_SENDER_EMAIL")
-    sender_name = get_config("BREVO_SENDER_NAME", "Secrétaire Issa") or "Secrétaire Issa"
+    """Envoie un e-mail par Gmail SMTP, avec STARTTLS (587) puis SSL (465) en secours."""
+    host = get_config("SMTP_HOST", "smtp.gmail.com") or "smtp.gmail.com"
+    username = get_config("SMTP_USERNAME")
+    password = get_config("SMTP_PASSWORD").replace(" ", "")
+    sender_name = get_config("SMTP_SENDER_NAME", "Secrétaire Issa") or "Secrétaire Issa"
     recipient = (recipient or get_recipient_email()).strip()
-    if not api_key or not sender_email:
-        raise RuntimeError("Configuration Brevo incomplète : ajoute BREVO_API_KEY et BREVO_SENDER_EMAIL dans les Secrets Streamlit.")
+    if not username or not password:
+        raise RuntimeError("Configuration Gmail incomplète : ajoute SMTP_USERNAME et SMTP_PASSWORD dans les Secrets Streamlit. Utilise le mot de passe d'application Google, pas ton mot de passe Gmail habituel.")
     if not recipient or not re.match(r"^[^\s@]+@[^\s@]+\.[^\s@]+$", recipient):
         raise RuntimeError("Adresse de réception absente ou invalide. Renseigne ton adresse dans l’onglet Rappels automatiques.")
-    payload = {
-        "sender": {"name": sender_name, "email": sender_email},
-        "to": [{"email": recipient}],
-        "subject": subject,
-        "textContent": body,
-    }
-    request = urllib.request.Request(
-        "https://api.brevo.com/v3/smtp/email",
-        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        headers={"accept": "application/json", "api-key": api_key, "content-type": "application/json"},
-        method="POST",
-    )
     try:
-        with urllib.request.urlopen(request, timeout=25) as response:
-            if response.status not in (200, 201, 202):
-                raise RuntimeError(f"Brevo a répondu avec le statut HTTP {response.status}.")
-            return True
-    except urllib.error.HTTPError as exc:
+        port = int(get_config("SMTP_PORT", "587") or "587")
+    except ValueError:
+        raise RuntimeError("SMTP_PORT doit être 587 ou 465.") from None
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = f"{sender_name} <{username}>"
+    message["To"] = recipient
+    message.set_content(body)
+    context = ssl.create_default_context()
+    errors = []
+    # Essai selon le port configuré, puis bascule vers l'autre mode Gmail.
+    modes = [("ssl", 465), ("starttls", 587)] if port == 465 else [("starttls", 587), ("ssl", 465)]
+    for mode, candidate_port in modes:
+        server = None
         try:
-            detail = exc.read().decode("utf-8", errors="replace")[:700]
-        except Exception:
-            detail = "Aucun détail fourni par le serveur."
-        if exc.code in (401, 403):
-            raise RuntimeError("Brevo a refusé la clé API (HTTP %s). Vérifie BREVO_API_KEY dans les Secrets Streamlit. Détail : %s" % (exc.code, detail)) from None
-        if exc.code == 400:
-            raise RuntimeError("Brevo a refusé les paramètres de l'e-mail (HTTP 400). Vérifie que BREVO_SENDER_EMAIL est validée dans Brevo. Détail : %s" % detail) from None
-        raise RuntimeError("Erreur API Brevo HTTP %s : %s" % (exc.code, detail)) from None
-    except urllib.error.URLError as exc:
-        reason = getattr(exc, "reason", exc)
-        raise RuntimeError(f"Connexion HTTPS à l’API Brevo impossible : {reason}") from None
-    except TimeoutError:
-        raise RuntimeError("L’API Brevo n’a pas répondu dans les délais. Réessaie dans quelques instants.") from None
+            if mode == "ssl":
+                server = smtplib.SMTP_SSL(host, candidate_port, timeout=20, context=context)
+            else:
+                server = smtplib.SMTP(host, candidate_port, timeout=20)
+                server.ehlo()
+                server.starttls(context=context)
+                server.ehlo()
+            server.login(username, password)
+            server.send_message(message)
+            server.quit()
+            return True
+        except smtplib.SMTPAuthenticationError:
+            if server:
+                try: server.quit()
+                except Exception: pass
+            raise RuntimeError("Gmail a refusé l'authentification. Vérifie SMTP_USERNAME et utilise le mot de passe d'application Google à 16 caractères. Ne mets pas ton mot de passe Gmail habituel.") from None
+        except Exception as exc:
+            errors.append(f"port {candidate_port} ({mode}) : {type(exc).__name__}: {exc}")
+            if server:
+                try: server.quit()
+                except Exception: pass
+    detail = " ; ".join(errors)
+    raise RuntimeError("Impossible de se connecter à Gmail SMTP après deux tentatives. Vérifie SMTP_HOST=smtp.gmail.com, le port 587/465, l'adresse Gmail et le mot de passe d'application. Détails : " + detail)
 
 def process_due_reminders():
     """Envoie par e-mail chaque rappel arrivé à échéance, puis programme la récurrence."""
@@ -260,7 +269,7 @@ def sync_existing_entries_to_reminders():
             c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type IN ('training_début','training_fin') AND source_id IN (SELECT id FROM career_training WHERE status IN ('Terminée','Abandonnée')) AND status IN ('En attente','Erreur')")
             c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type='habit' AND source_id IN (SELECT id FROM habits WHERE active=0) AND status IN ('En attente','Erreur')")
             c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type='note' AND source_id IN (SELECT id FROM life_notes WHERE category<>'Rappel' OR reminder_date='') AND status IN ('En attente','Erreur')")
-            # Les entrées supprimées n'ont plus de raison de déclencher un SMS.
+            # Les entrées supprimées n'ont plus de raison de déclencher un e-mail.
             c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type='task' AND source_id NOT IN (SELECT id FROM tasks) AND status IN ('En attente','Erreur')")
             c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type='goal' AND source_id NOT IN (SELECT id FROM goals) AND status IN ('En attente','Erreur')")
             c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type='event' AND source_id NOT IN (SELECT id FROM events) AND status IN ('En attente','Erreur')")
@@ -803,12 +812,12 @@ elif page=="Rappels automatiques":
     if email_configured():
         st.success(f"Envoi e-mail configuré. Les rappels seront envoyés à **{get_recipient_email()}** lorsque l’application fonctionne.")
     else:
-        st.warning('Les rappels sont préparés automatiquement, mais l’envoi nécessite une clé API Brevo et une adresse d’expédition vérifiée dans les Secrets Streamlit.')
-    with st.expander('⚙️ Configuration e-mail Brevo (à faire une seule fois)', expanded=not bool(get_config('BREVO_API_KEY') and get_config('BREVO_SENDER_EMAIL'))):
-        st.markdown('Crée un compte Brevo, récupère une **clé API** et vérifie une adresse d’expédition dans ton compte. Ne partage jamais ta clé API.')
-        st.code('BREVO_API_KEY = \"ta_cle_api_brevo\"\nBREVO_SENDER_EMAIL = \"adresse-expedition-verifiee@exemple.com\"\nBREVO_SENDER_NAME = \"Secrétaire Issa\"', language='toml')
-        st.caption('Dans Streamlit Cloud : Manage app → Settings → Secrets. L’adresse BREVO_SENDER_EMAIL doit être une adresse d’expédition vérifiée chez Brevo ; REMINDER_EMAIL reste l’adresse qui reçoit les rappels.')
-    if st.button('🧪 Envoyer un e-mail de test', disabled=not (get_config('BREVO_API_KEY') and get_config('BREVO_SENDER_EMAIL') and get_recipient_email())):
+        st.warning('Les rappels sont préparés automatiquement, mais l’envoi nécessite les identifiants Gmail SMTP dans les Secrets Streamlit.')
+    with st.expander('⚙️ Configuration Gmail gratuite (à faire une seule fois)', expanded=not bool(get_config('SMTP_USERNAME') and get_config('SMTP_PASSWORD'))):
+        st.markdown('Utilise ton adresse Gmail et un **mot de passe d’application Google de 16 caractères**. Ne mets jamais ton mot de passe Gmail habituel et ne partage pas ce secret.')
+        st.code('SMTP_HOST = \"smtp.gmail.com\"\nSMTP_PORT = \"587\"\nSMTP_USERNAME = \"tonadresse@gmail.com\"\nSMTP_PASSWORD = \"mot_de_passe_application_16_caracteres\"\nSMTP_SENDER_NAME = \"Secrétaire Issa\"', language='toml')
+        st.caption('Dans Streamlit Cloud : Manage app → Settings → Secrets. L’adresse de réception se règle ci-dessus. Le code essaie STARTTLS sur le port 587 puis SSL sur le port 465 si nécessaire.')
+    if st.button('🧪 Envoyer un e-mail de test', disabled=not (get_config('SMTP_USERNAME') and get_config('SMTP_PASSWORD') and get_recipient_email())):
         try:
             send_email('Test — Secrétaire Issa', 'Bonjour,\n\nCeci est un e-mail de test. Si tu le reçois, les rappels e-mail de Secrétaire Issa sont correctement configurés.')
             st.success(f"E-mail de test transmis à {get_recipient_email()}.")
@@ -844,7 +853,7 @@ elif page=="Rappels automatiques":
                     run("UPDATE reminders SET last_sent_at=?,last_error='' WHERE id=?",(datetime.now().strftime('%Y-%m-%d %H:%M:%S'),rid))
                     st.success('E-mail transmis au serveur de messagerie.')
                 except Exception as exc: st.error(str(exc))
-    st.caption('Synchronisation automatique : agenda (1 h avant), tâches et objectifs (veille à 08 h ou immédiatement si déjà en retard), formations (veille du début et de la fin), stages/concours/bourses (veille de la date limite), notes de catégorie « Rappel » (date/heure choisies) et habitudes actives (quotidiennement). Les e-mails utilisent l’API HTTPS Brevo ; l’application doit rester active pour vérifier les rappels, et l’adresse d’expédition doit être validée chez Brevo.')
+    st.caption('Synchronisation automatique : agenda (1 h avant), tâches et objectifs (veille à 08 h ou immédiatement si déjà en retard), formations (veille du début et de la fin), stages/concours/bourses (veille de la date limite), notes de catégorie « Rappel » (date/heure choisies) et habitudes actives (quotidiennement). Les e-mails utilisent Gmail SMTP (port 587 STARTTLS, avec tentative de secours sur 465 SSL) ; l’application doit rester active pour vérifier les rappels.')
 
 # ---------- Compétences & Carrière ----------
 elif page=="Compétences & Carrière":
