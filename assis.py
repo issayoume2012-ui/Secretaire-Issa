@@ -344,7 +344,13 @@ def card(label,value,note=''):
 def export_csv(df,name,key):
     if not df.empty: st.download_button(f"Exporter {name} en CSV",df.to_csv(index=False).encode('utf-8-sig'),file_name=f"campusclair_{key}.csv",mime='text/csv',key=f"csv_{key}")
 REMINDER_WORKER = start_reminder_worker()
+# Synchronise les entrées puis traite immédiatement les échéances lors de chaque exécution
+# du script Streamlit. Cela évite de dépendre uniquement du thread en arrière-plan :
+# si Streamlit Cloud suspend le thread, le prochain chargement de l'application rattrape
+# les rappels arrivés à échéance. Pour un envoi garanti même quand l'application dort,
+# un planificateur externe et une base persistante restent nécessaires.
 sync_existing_entries_to_reminders()
+process_due_reminders()
 
 def subject_choices():
     df=read_df('SELECT id,title,semester,ue FROM subjects ORDER BY title')
@@ -853,7 +859,7 @@ elif page=="Rappels automatiques":
                     run("UPDATE reminders SET last_sent_at=?,last_error='' WHERE id=?",(datetime.now().strftime('%Y-%m-%d %H:%M:%S'),rid))
                     st.success('E-mail transmis au serveur de messagerie.')
                 except Exception as exc: st.error(str(exc))
-    st.caption('Synchronisation automatique : agenda (1 h avant), tâches et objectifs (veille à 08 h ou immédiatement si déjà en retard), formations (veille du début et de la fin), stages/concours/bourses (veille de la date limite), notes de catégorie « Rappel » (date/heure choisies) et habitudes actives (quotidiennement). Les e-mails utilisent Gmail SMTP (port 587 STARTTLS, avec tentative de secours sur 465 SSL) ; l’application doit rester active pour vérifier les rappels.')
+    st.caption('Vérification des rappels au démarrage de chaque exécution de l’application et contrôle en arrière-plan toutes les 30 secondes tant que le processus Streamlit reste actif. Les rappels sont issus de l’agenda (1 h avant), des tâches et objectifs (veille à 08 h ou immédiatement si déjà en retard), des formations, des stages/concours/bourses, des notes « Rappel » et des habitudes actives. Gmail utilise le port 587 STARTTLS avec secours sur 465 SSL. Streamlit Cloud peut suspendre l’application lorsqu’elle est inactive : un envoi garanti même application endormie nécessite un planificateur externe et une base de données persistante.')
 
 # ---------- Compétences & Carrière ----------
 elif page=="Compétences & Carrière":
