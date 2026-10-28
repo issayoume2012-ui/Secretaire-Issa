@@ -5,7 +5,7 @@ Dépendances : streamlit, pandas, openpyxl (facultatif pour Excel), PyMuPDF (fac
 """
 from pathlib import Path
 from datetime import date, datetime, time, timedelta
-import sqlite3, re, unicodedata, io, math
+import sqlite3, re, unicodedata, io, math, os, threading, time as time_module, base64, urllib.parse, urllib.request, urllib.error
 import pandas as pd
 import streamlit as st
 
@@ -70,8 +70,109 @@ def init_db():
         CREATE TABLE IF NOT EXISTS career_skills(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,category TEXT DEFAULT 'Technique',level TEXT DEFAULT 'Débutant',target_level TEXT DEFAULT 'Intermédiaire',status TEXT DEFAULT 'À apprendre',resource_url TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS career_training(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,provider TEXT DEFAULT '',kind TEXT DEFAULT 'Formation',start_date TEXT DEFAULT '',end_date TEXT DEFAULT '',status TEXT DEFAULT 'À envisager',url TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS career_opportunities(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,organization TEXT DEFAULT '',kind TEXT DEFAULT 'Stage',location TEXT DEFAULT '',deadline TEXT DEFAULT '',url TEXT DEFAULT '',status TEXT DEFAULT 'À examiner',contact TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS reminders(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            details TEXT DEFAULT '',
+            remind_at TEXT NOT NULL,
+            phone TEXT NOT NULL,
+            repeat_rule TEXT DEFAULT 'Aucun',
+            enabled INTEGER DEFAULT 1,
+            status TEXT DEFAULT 'En attente',
+            last_sent_at TEXT DEFAULT '',
+            last_error TEXT DEFAULT '',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
         """)
 init_db()
+
+DEFAULT_REMINDER_PHONE = "+221777473170"
+
+def get_config(name, default=""):
+    """Lit un paramètre depuis Streamlit Secrets ou les variables d’environnement."""
+    try:
+        value = st.secrets.get(name, default)
+    except Exception:
+        value = default
+    return str(os.getenv(name, value) or default).strip()
+
+def twilio_configured():
+    return all(get_config(k) for k in ("TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_FROM_NUMBER"))
+
+def send_sms(phone, message):
+    """Envoie un SMS via Twilio. Les identifiants ne sont jamais affichés."""
+    sid = get_config("TWILIO_ACCOUNT_SID")
+    token = get_config("TWILIO_AUTH_TOKEN")
+    sender = get_config("TWILIO_FROM_NUMBER")
+    if not all((sid, token, sender)):
+        raise RuntimeError("SMS non configurés : ajoutez TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN et TWILIO_FROM_NUMBER dans les Secrets.")
+    phone = re.sub(r"[\s().-]", "", str(phone or ""))
+    if phone.startswith("00"):
+        phone = "+" + phone[2:]
+    if not phone.startswith("+") or not phone[1:].isdigit():
+        raise ValueError("Le numéro doit être au format international, par exemple +221777473170.")
+    url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json"
+    body = urllib.parse.urlencode({"To": phone, "From": sender, "Body": message[:1500]}).encode("utf-8")
+    auth = base64.b64encode(f"{sid}:{token}".encode()).decode()
+    req = urllib.request.Request(url, data=body, headers={"Authorization": f"Basic {auth}", "Content-Type": "application/x-www-form-urlencoded"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=20) as response:
+            payload = response.read().decode("utf-8", errors="replace")
+            if response.status not in (200, 201):
+                raise RuntimeError(f"Le fournisseur SMS a répondu avec le code {response.status}.")
+            return payload
+    except urllib.error.HTTPError as exc:
+        # Ne pas remonter les identifiants ou la réponse brute du fournisseur.
+        raise RuntimeError(f"Échec d’envoi SMS (code fournisseur {exc.code}). Vérifiez le compte, le numéro émetteur et la destination.") from None
+    except urllib.error.URLError:
+        raise RuntimeError("Échec de connexion au service SMS. Vérifiez la connexion Internet.") from None
+
+def process_due_reminders():
+    """Envoie une seule fois chaque rappel arrivé à échéance, puis programme la récurrence."""
+    if not twilio_configured():
+        return
+    now = datetime.now().replace(microsecond=0)
+    now_text = now.strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        due = read_df("SELECT * FROM reminders WHERE enabled=1 AND status='En attente' AND remind_at<=? ORDER BY remind_at LIMIT 20", (now_text,))
+    except Exception:
+        return
+    for r in due.itertuples():
+        # Réserve le rappel avant l'envoi pour réduire le risque de doublon entre deux vérifications.
+        try:
+            with connect() as c:
+                cur = c.execute("UPDATE reminders SET status='Envoi en cours' WHERE id=? AND status='En attente' AND enabled=1", (int(r.id),))
+                if cur.rowcount != 1:
+                    continue
+            message = f"RAPPEL — {r.title}" + (f"\n{r.details}" if r.details else "") + f"\nPrévu le {r.remind_at}. — Secrétaire Issa"
+            send_sms(r.phone, message)
+            sent_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            if r.repeat_rule == "Quotidien":
+                next_at = (datetime.strptime(r.remind_at, "%Y-%m-%d %H:%M:%S") + timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+                run("UPDATE reminders SET remind_at=?,status='En attente',last_sent_at=?,last_error='' WHERE id=?", (next_at, sent_at, int(r.id)))
+            elif r.repeat_rule == "Hebdomadaire":
+                next_at = (datetime.strptime(r.remind_at, "%Y-%m-%d %H:%M:%S") + timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+                run("UPDATE reminders SET remind_at=?,status='En attente',last_sent_at=?,last_error='' WHERE id=?", (next_at, sent_at, int(r.id)))
+            else:
+                run("UPDATE reminders SET status='Envoyé',last_sent_at=?,last_error='' WHERE id=?", (sent_at, int(r.id)))
+        except Exception as exc:
+            run("UPDATE reminders SET status='Erreur',last_error=? WHERE id=?", (str(exc)[:500], int(r.id)))
+
+def _reminder_worker(stop_event):
+    while not stop_event.is_set():
+        try:
+            process_due_reminders()
+        except Exception:
+            pass
+        stop_event.wait(30)
+
+@st.cache_resource
+def start_reminder_worker():
+    """Démarre un seul vérificateur par processus Streamlit."""
+    stop_event = threading.Event()
+    thread = threading.Thread(target=_reminder_worker, args=(stop_event,), daemon=True, name="campusclair-reminders")
+    thread.start()
+    return stop_event
 
 def read_df(sql,params=()):
     with connect() as c: return pd.read_sql_query(sql,c,params=params)
@@ -85,17 +186,19 @@ def card(label,value,note=''):
     st.markdown(f'<div class="cc-card"><div class="cc-label">{label}</div><div class="cc-value">{value}</div><div class="cc-note">{note}</div></div>',unsafe_allow_html=True)
 def export_csv(df,name,key):
     if not df.empty: st.download_button(f"Exporter {name} en CSV",df.to_csv(index=False).encode('utf-8-sig'),file_name=f"campusclair_{key}.csv",mime='text/csv',key=f"csv_{key}")
+REMINDER_WORKER = start_reminder_worker()
+
 def subject_choices():
     df=read_df('SELECT id,title,semester,ue FROM subjects ORDER BY title')
     opts={'— Non associée —':None}
     for r in df.itertuples(): opts[f"{r.title} · {r.semester} · {r.ue}"]=int(r.id)
     return df,opts
 
-PAGES=["Vue d’ensemble","Maquettes & matières","Emploi du temps","Programmes de révision","Suivi & progression","Assistant de vie","Compétences & Carrière","Paramètres & sauvegarde"]
+PAGES=["Vue d’ensemble","Maquettes & matières","Emploi du temps","Programmes de révision","Suivi & progression","Assistant de vie","Rappels automatiques","Compétences & Carrière","Paramètres & sauvegarde"]
 PAGE_SHORT={
     "Vue d’ensemble":"🏠 Accueil XXL", "Maquettes & matières":"🎓 Académie", "Emploi du temps":"🗓️ Planning",
     "Programmes de révision":"🎯 Révisions", "Suivi & progression":"📈 Progression",
-    "Assistant de vie":"👤 Vie personnelle", "Compétences & Carrière":"🚀 Carrière",
+    "Assistant de vie":"👤 Vie personnelle", "Rappels automatiques":"🔔 Rappels SMS", "Compétences & Carrière":"🚀 Carrière",
     "Paramètres & sauvegarde":"⚙️ Paramètres"
 }
 PAGE_ROLE={
@@ -105,6 +208,7 @@ PAGE_ROLE={
     "Programmes de révision":"Secrétaire chargé de l’organisation des révisions",
     "Suivi & progression":"Secrétaire chargé du suivi des résultats et de la progression",
     "Assistant de vie":"Secrétaire chargé de l’organisation personnelle et des démarches",
+    "Rappels automatiques":"Secrétaire chargé des rappels et échéances par SMS",
     "Compétences & Carrière":"Secrétaire chargé du développement des compétences et de l’insertion professionnelle",
     "Paramètres & sauvegarde":"Secrétaire chargé des paramètres, des exports et de la sauvegarde des données"
 }
@@ -461,6 +565,81 @@ elif page=="Assistant de vie":
             with st.expander(label): st.write(q); st.text_area('Ma réponse',key='routine_'+norm(label))
         st.markdown('**Routine suggérée :** planifier 3 priorités, travailler en séances de 25–50 minutes, faire une courte pause, puis noter ce qui reste à revoir.')
 
+# ---------- Rappels automatiques par SMS ----------
+elif page=="Rappels automatiques":
+    header('SECRÉTARIAT PERSONNEL','Rappels automatiques par SMS 🔔','Enregistre une tâche à ne pas oublier : un SMS sera envoyé à la date et à l’heure prévues sur ton numéro.')
+    st.info(f"Numéro de destination proposé : **+221 77 747 31 70**. Tu peux le modifier pour chaque rappel.")
+    if twilio_configured():
+        st.success("Service SMS configuré. Le programme vérifie les rappels toutes les 30 secondes tant que l’application fonctionne.")
+    else:
+        st.warning("Pour activer les SMS, crée/configure un compte chez Twilio puis ajoute les trois Secrets indiqués ci-dessous. Sans ces identifiants, les rappels restent enregistrés mais aucun SMS ne peut être envoyé.")
+    with st.expander('⚙️ Configuration SMS (à faire une seule fois)', expanded=not twilio_configured()):
+        st.markdown('Dans les paramètres Secrets de ton hébergement Streamlit, ajoute les valeurs de ton compte Twilio. Ne les partage jamais dans le chat et ne les écris pas directement dans le code :')
+        st.code('TWILIO_ACCOUNT_SID = "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"\nTWILIO_AUTH_TOKEN = "ton_token_secret"\nTWILIO_FROM_NUMBER = "+1xxxxxxxxxx"', language='toml')
+        st.caption('Le numéro TWILIO_FROM_NUMBER doit être un numéro expéditeur autorisé par Twilio. Vérifie que ton compte et l’expéditeur peuvent envoyer des SMS vers le Sénégal ; des frais peuvent s’appliquer.')
+    st.markdown('### ➕ Programmer un rappel')
+    with st.form('sms_reminder_form'):
+        title = st.text_input('Que dois-je faire ? *', placeholder='Ex. Envoyer ma demande de stage à l’ISRA')
+        details = st.text_area('Détails utiles (facultatif)', placeholder='Documents à préparer, personne à contacter, adresse…')
+        c1,c2,c3 = st.columns(3)
+        day = c1.date_input('Date du rappel', value=date.today())
+        clock = c2.time_input('Heure du rappel', value=time(8,0))
+        phone = c3.text_input('Numéro destinataire', value='+221 77 747 31 70')
+        repeat_rule = st.selectbox('Répétition', ['Aucun','Quotidien','Hebdomadaire'])
+        submitted = st.form_submit_button('💾 Enregistrer le rappel', type='primary')
+    if submitted:
+        if not title.strip():
+            st.error('Saisis ce que tu dois faire.')
+        else:
+            normalized_phone = re.sub(r'[\s().-]', '', phone.strip())
+            if normalized_phone.startswith('00'):
+                normalized_phone = '+' + normalized_phone[2:]
+            if not normalized_phone.startswith('+') or not normalized_phone[1:].isdigit():
+                st.error('Le numéro doit être au format international, par exemple +221777473170.')
+            else:
+                reminder_dt = datetime.combine(day, clock).strftime('%Y-%m-%d %H:%M:%S')
+                run("INSERT INTO reminders(title,details,remind_at,phone,repeat_rule,status,enabled) VALUES(?,?,?,?,?,'En attente',1)", (title.strip(), details.strip(), reminder_dt, normalized_phone, repeat_rule))
+                st.success('Rappel enregistré. Le SMS sera envoyé à l’heure prévue si le service SMS est configuré et l’application active.')
+                st.rerun()
+    st.markdown('### 🧪 Vérifier la configuration')
+    if st.button('Envoyer un SMS de test à mon numéro', disabled=not twilio_configured()):
+        try:
+            send_sms('+221777473170', 'Test Secrétaire Issa : les SMS de rappel sont correctement configurés.')
+            st.success('Demande de SMS de test transmise au fournisseur. La réception dépend du réseau et du compte SMS.')
+        except Exception as exc:
+            st.error(str(exc))
+    st.markdown('### 📋 Mes rappels')
+    reminders = read_df("SELECT id,title,details,remind_at,phone,repeat_rule,status,enabled,last_sent_at,last_error FROM reminders ORDER BY remind_at")
+    if reminders.empty:
+        st.info('Aucun rappel enregistré pour le moment.')
+    else:
+        display = reminders.rename(columns={'id':'ID','title':'Rappel','details':'Détails','remind_at':'Date et heure','phone':'Numéro','repeat_rule':'Répétition','status':'État','enabled':'Actif','last_sent_at':'Dernier SMS','last_error':'Erreur éventuelle'})
+        st.dataframe(display, use_container_width=True, hide_index=True)
+        choices = {f"#{int(r.id)} — {r.title} — {r.remind_at}": int(r.id) for r in reminders.itertuples()}
+        selected_label = st.selectbox('Rappel à gérer', list(choices), key='reminder_manage_pick')
+        selected_id = choices[selected_label]
+        c1,c2,c3 = st.columns(3)
+        if c1.button('Désactiver / réactiver', key='reminder_toggle'):
+            current = read_df('SELECT enabled FROM reminders WHERE id=?', (selected_id,))
+            if not current.empty:
+                new_enabled = 0 if int(current.iloc[0]['enabled']) else 1
+                new_status = 'En attente' if new_enabled else 'Désactivé'
+                run('UPDATE reminders SET enabled=?,status=? WHERE id=?', (new_enabled,new_status,selected_id))
+                st.rerun()
+        if c2.button('Renvoyer maintenant', key='reminder_send_now', disabled=not twilio_configured()):
+            chosen = read_df('SELECT * FROM reminders WHERE id=?', (selected_id,))
+            if not chosen.empty:
+                r = chosen.iloc[0]
+                try:
+                    send_sms(r['phone'], f"RAPPEL — {r['title']}" + (f"\n{r['details']}" if r['details'] else ""))
+                    st.success('SMS transmis au fournisseur.')
+                    if r['repeat_rule'] == 'Aucun': run("UPDATE reminders SET status='Envoyé',last_sent_at=?,last_error='' WHERE id=?", (datetime.now().strftime('%Y-%m-%d %H:%M:%S'),selected_id))
+                except Exception as exc: st.error(str(exc))
+        if c3.button('Supprimer le rappel', key='reminder_delete'):
+            run('DELETE FROM reminders WHERE id=?', (selected_id,))
+            st.rerun()
+    st.caption('Important : le processus automatique fonctionne tant que l’application est exécutée. Sur un hébergement qui met l’application en veille ou arrête le processus, il faut un planificateur externe toujours actif pour garantir les SMS à l’heure exacte.')
+
 # ---------- Compétences & Carrière ----------
 elif page=="Compétences & Carrière":
     header('DÉVELOPPEMENT PROFESSIONNEL','Compétences & Carrière 🚀','Prépare ton avenir professionnel : compétences, formations, certifications, stages et opportunités. Les informations sont conservées dans SQLite.')
@@ -572,7 +751,7 @@ elif page=="Compétences & Carrière":
 elif page=="Paramètres & sauvegarde":
     header('PARAMÈTRES & DONNÉES','Paramètres & sauvegarde','Télécharge tes données pour garder une copie. Fais régulièrement une sauvegarde du fichier SQLite.')
     st.warning(f'Base active : {DB_PATH}. Cette application utilise une base distincte ; ne la remplace pas par la base d’une autre application.')
-    tables={'Matières':'subjects','Emploi du temps':'events','Tâches':'tasks','Ressources archivées (ancien espace)':'documents','Journal d’étude':'study_logs','Objectifs':'goals','Habitudes':'habits','Historique habitudes':'habit_logs','Budget':'budgets','Notes personnelles':'life_notes','Contacts':'contacts','Compétences':'career_skills','Formations':'career_training','Opportunités professionnelles':'career_opportunities'}
+    tables={'Matières':'subjects','Emploi du temps':'events','Tâches':'tasks','Ressources archivées (ancien espace)':'documents','Journal d’étude':'study_logs','Objectifs':'goals','Habitudes':'habits','Historique habitudes':'habit_logs','Budget':'budgets','Notes personnelles':'life_notes','Contacts':'contacts','Compétences':'career_skills','Formations':'career_training','Opportunités professionnelles':'career_opportunities','Rappels SMS':'reminders'}
     for label,table in tables.items():
         df=read_df(f'SELECT * FROM {table}')
         with st.expander(f'{label} — {len(df)} enregistrement(s)'):
@@ -588,7 +767,7 @@ elif page=="Paramètres & sauvegarde":
 st.markdown('<div class="issa-footer"><strong>🗂️ Secrétaire Issa</strong><br><small>Un espace personnel de secrétariat, de suivi et d’organisation · Données stockées localement dans SQLite.</small></div>',unsafe_allow_html=True)
 role_icons={
     "Vue d’ensemble":"🏠", "Maquettes & matières":"🎓", "Emploi du temps":"🗓️",
-    "Programmes de révision":"🎯", "Suivi & progression":"📈", "Assistant de vie":"👤",
+    "Programmes de révision":"🎯", "Suivi & progression":"📈", "Assistant de vie":"👤", "Rappels automatiques":"🔔",
     "Compétences & Carrière":"🚀", "Paramètres & sauvegarde":"⚙️"
 }
 roles_html=''.join(f'<span class="issa-role-pill">{role_icons[p]} {PAGE_ROLE[p]}</span>' for p in PAGES)
