@@ -81,10 +81,17 @@ def init_db():
             status TEXT DEFAULT 'En attente',
             last_sent_at TEXT DEFAULT '',
             last_error TEXT DEFAULT '',
+            source_type TEXT DEFAULT '',
+            source_id INTEGER,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
         """)
 init_db()
+with connect() as _conn:
+    _cols = {row['name'] for row in _conn.execute('PRAGMA table_info(reminders)').fetchall()}
+    if 'source_type' not in _cols: _conn.execute("ALTER TABLE reminders ADD COLUMN source_type TEXT DEFAULT ''")
+    if 'source_id' not in _cols: _conn.execute('ALTER TABLE reminders ADD COLUMN source_id INTEGER')
+    _conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_reminders_source ON reminders(source_type, source_id) WHERE source_type <> '' AND source_id IS NOT NULL")
 
 DEFAULT_REMINDER_PHONE = "+221777473170"
 
@@ -178,6 +185,67 @@ def read_df(sql,params=()):
     with connect() as c: return pd.read_sql_query(sql,c,params=params)
 def run(sql,params=()):
     with connect() as c: c.execute(sql,params)
+
+def upsert_auto_reminder(source_type, source_id, title, details, remind_at, repeat_rule='Aucun'):
+    """Crée ou actualise le rappel lié à une rubrique déjà enregistrée."""
+    if not remind_at:
+        return
+    try:
+        dt = datetime.strptime(str(remind_at), '%Y-%m-%d %H:%M:%S')
+    except ValueError:
+        try: dt = datetime.strptime(str(remind_at)[:16], '%Y-%m-%d %H:%M')
+        except ValueError: return
+    # Ne pas envoyer immédiatement de vieux rappels lors de la synchronisation.
+    if dt < datetime.now() - timedelta(minutes=2):
+        return
+    with connect() as c:
+        existing = c.execute('SELECT id,status FROM reminders WHERE source_type=? AND source_id=?', (source_type, int(source_id))).fetchone()
+        if existing:
+            if existing['status'] not in ('Envoyé', 'Envoi en cours'):
+                c.execute("UPDATE reminders SET title=?,details=?,remind_at=?,phone=?,repeat_rule=?,enabled=1,status='En attente',last_error='' WHERE id=?",
+                          (title, details or '', dt.strftime('%Y-%m-%d %H:%M:%S'), DEFAULT_REMINDER_PHONE, repeat_rule, int(existing['id'])))
+        else:
+            c.execute("INSERT OR IGNORE INTO reminders(title,details,remind_at,phone,repeat_rule,enabled,status,source_type,source_id) VALUES(?,?,?,?,?,1,'En attente',?,?)",
+                      (title, details or '', dt.strftime('%Y-%m-%d %H:%M:%S'), DEFAULT_REMINDER_PHONE, repeat_rule, source_type, int(source_id)))
+
+def sync_existing_entries_to_reminders():
+    """Transforme automatiquement les échéances déjà enregistrées en rappels."""
+    today = date.today()
+    # Agenda : rappel une heure avant l'heure de début.
+    for r in read_df("SELECT id,title,event_date,start_time,kind,location,notes FROM events WHERE event_date >= ?", (today.isoformat(),)).itertuples():
+        try:
+            start = datetime.strptime(f"{r.event_date} {r.start_time or '08:00'}", '%Y-%m-%d %H:%M') - timedelta(hours=1)
+            if start < datetime.now(): start = datetime.strptime(f"{r.event_date} {r.start_time or '08:00'}", '%Y-%m-%d %H:%M')
+            upsert_auto_reminder('event', r.id, f"{r.kind} : {r.title}", f"Lieu : {r.location or 'non précisé'}. {r.notes or ''}", start.strftime('%Y-%m-%d %H:%M:%S'))
+        except Exception: pass
+    # Tâches et objectifs : rappel la veille à 08 h.
+    for r in read_df("SELECT id,title,due_date,priority,status,category,notes FROM tasks WHERE due_date >= ? AND status NOT IN ('Terminée','Terminé','Rendue','Rendu')", (today.isoformat(),)).itertuples():
+        try:
+            due = datetime.strptime(str(r.due_date), '%Y-%m-%d')
+            remind = datetime.combine(due.date(), time(8,0)) if due.date() == today else datetime.combine(due.date()-timedelta(days=1), time(8,0))
+            if remind < datetime.now(): remind = datetime.combine(due.date(), time(8,0))
+            upsert_auto_reminder('task', r.id, f"Échéance : {r.title}", f"Priorité : {r.priority}. Domaine : {r.category}. {r.notes or ''}", remind.strftime('%Y-%m-%d %H:%M:%S'))
+        except Exception: pass
+    for r in read_df("SELECT id,title,target_date,category,progress,notes FROM goals WHERE target_date >= ? AND progress < 100", (today.isoformat(),)).itertuples():
+        try:
+            due=datetime.strptime(str(r.target_date), '%Y-%m-%d'); remind=datetime.combine(max(today, due.date()-timedelta(days=1)), time(8,0))
+            upsert_auto_reminder('goal', r.id, f"Objectif à suivre : {r.title}", f"Domaine : {r.category}. Progression : {r.progress} %. {r.notes or ''}", remind.strftime('%Y-%m-%d %H:%M:%S'))
+        except Exception: pass
+    for r in read_df("SELECT id,title,deadline,organization,kind,status,notes FROM career_opportunities WHERE deadline >= ? AND status NOT IN ('Refusée','Expirée','Retenue')", (today.isoformat(),)).itertuples():
+        try:
+            due=datetime.strptime(str(r.deadline), '%Y-%m-%d'); remind=datetime.combine(max(today, due.date()-timedelta(days=1)), time(8,0))
+            upsert_auto_reminder('opportunity', r.id, f"Date limite : {r.title}", f"{r.kind} · {r.organization or 'Organisation non précisée'} · Statut : {r.status}. {r.notes or ''}", remind.strftime('%Y-%m-%d %H:%M:%S'))
+        except Exception: pass
+    for r in read_df("SELECT id,title,start_date,end_date,provider,status,notes FROM career_training WHERE end_date >= ? AND status NOT IN ('Terminée','Abandonnée')", (today.isoformat(),)).itertuples():
+        try:
+            due=datetime.strptime(str(r.end_date), '%Y-%m-%d'); remind=datetime.combine(max(today, due.date()-timedelta(days=1)), time(8,0))
+            upsert_auto_reminder('training', r.id, f"Formation à suivre : {r.title}", f"Organisme : {r.provider or 'non précisé'}. État : {r.status}. {r.notes or ''}", remind.strftime('%Y-%m-%d %H:%M:%S'))
+        except Exception: pass
+    # Habitudes : rappel quotidien à 08 h, uniquement pour les habitudes actives.
+    for r in read_df("SELECT id,title,frequency,notes FROM habits WHERE active=1").itertuples():
+        remind=datetime.combine(today, time(8,0))
+        if remind < datetime.now(): remind += timedelta(days=1)
+        upsert_auto_reminder('habit', r.id, f"Habitude du jour : {r.title}", f"Fréquence : {r.frequency}. {r.notes or ''}", remind.strftime('%Y-%m-%d %H:%M:%S'), 'Quotidien')
 def norm(s):
     return re.sub(r'[^a-z0-9]+',' ',unicodedata.normalize('NFKD',str(s or '')).encode('ascii','ignore').decode().lower()).strip()
 def header(kicker,title,desc):
@@ -187,6 +255,7 @@ def card(label,value,note=''):
 def export_csv(df,name,key):
     if not df.empty: st.download_button(f"Exporter {name} en CSV",df.to_csv(index=False).encode('utf-8-sig'),file_name=f"campusclair_{key}.csv",mime='text/csv',key=f"csv_{key}")
 REMINDER_WORKER = start_reminder_worker()
+sync_existing_entries_to_reminders()
 
 def subject_choices():
     df=read_df('SELECT id,title,semester,ue FROM subjects ORDER BY title')
@@ -329,7 +398,11 @@ elif page=="Emploi du temps":
             elif end<=start: st.error('La fin doit être après le début.')
             else:
                 run('INSERT INTO events(title,event_date,start_time,end_time,kind,subject_id,location,notes) VALUES(?,?,?,?,?,?,?,?)',(title.strip(),day.isoformat(),start.strftime('%H:%M'),end.strftime('%H:%M'),kind,subopts[sl],location.strip(),notes.strip()))
-                st.success('Séance ajoutée.'); st.rerun()
+                new_id = int(read_df('SELECT id FROM events WHERE title=? AND event_date=? ORDER BY id DESC LIMIT 1', (title.strip(),day.isoformat())).iloc[0]['id'])
+                reminder_dt = datetime.combine(day, start) - timedelta(hours=1)
+                if reminder_dt < datetime.now(): reminder_dt = datetime.combine(day, start)
+                upsert_auto_reminder('event', new_id, f'{kind} : {title.strip()}', f'Lieu : {location.strip() or "non précisé"}. {notes.strip()}', reminder_dt.strftime('%Y-%m-%d %H:%M:%S'))
+                st.success('Séance ajoutée. Un rappel est automatiquement créé dans Rappels.'); st.rerun()
     with tab2:
         st.markdown('Colonnes conseillées : **title, event_date, start_time, end_time, kind, subject, location, notes**. Date au format AAAA-MM-JJ et heures HH:MM.')
         template=pd.DataFrame([{'title':'Cours de pédologie','event_date':date.today().isoformat(),'start_time':'08:00','end_time':'10:00','kind':'Cours','subject':'Pédologie','location':'Salle 2','notes':''}])
@@ -472,7 +545,13 @@ elif page=="Assistant de vie":
             a,b,c=st.columns(3); title=a.text_input('Objectif *'); category=b.selectbox('Domaine',['Études','Carrière','Finances','Famille','Personnel','Projet','Santé / équilibre']); target=c.date_input('Date cible',date.today()+timedelta(days=30))
             progress=st.slider('Progression actuelle (%)',0,100,0); notes=st.text_area('Étapes / détails'); ok=st.form_submit_button('Ajouter l’objectif',type='primary')
         if ok:
-            if title.strip(): run('INSERT INTO goals(title,category,target_date,progress,notes) VALUES(?,?,?,?,?)',(title.strip(),category,target.isoformat(),progress,notes.strip())); st.rerun()
+            if title.strip():
+                run('INSERT INTO goals(title,category,target_date,progress,notes) VALUES(?,?,?,?,?)',(title.strip(),category,target.isoformat(),progress,notes.strip()))
+                new_id=int(read_df('SELECT id FROM goals WHERE title=? ORDER BY id DESC LIMIT 1',(title.strip(),)).iloc[0]['id'])
+                remind=datetime.combine(max(date.today(),target-timedelta(days=1)),time(8,0))
+                if remind < datetime.now(): remind=datetime.combine(target,time(8,0))
+                upsert_auto_reminder('goal',new_id,f'Objectif à suivre : {title.strip()}',f'Domaine : {category}. Progression : {progress} %. {notes.strip()}',remind.strftime('%Y-%m-%d %H:%M:%S'))
+                st.rerun()
             else: st.error('Donne un titre à ton objectif.')
         goals=read_df('SELECT * FROM goals ORDER BY target_date')
         if not goals.empty:
@@ -487,7 +566,13 @@ elif page=="Assistant de vie":
         with st.form('habit_form'):
             title=st.text_input('Habitude à suivre *',placeholder='Ex. lire 20 minutes, réviser, ranger le bureau'); freq=st.selectbox('Fréquence',['Quotidienne','En semaine','Hebdomadaire']); notes=st.text_input('Pourquoi / rappel'); ok=st.form_submit_button('Créer une habitude')
         if ok:
-            if title.strip(): run('INSERT INTO habits(title,frequency,notes) VALUES(?,?,?)',(title.strip(),freq,notes.strip())); st.rerun()
+            if title.strip():
+                run('INSERT INTO habits(title,frequency,notes) VALUES(?,?,?)',(title.strip(),freq,notes.strip()))
+                new_id=int(read_df('SELECT id FROM habits WHERE title=? ORDER BY id DESC LIMIT 1',(title.strip(),)).iloc[0]['id'])
+                remind=datetime.combine(date.today(),time(8,0))
+                if remind < datetime.now(): remind += timedelta(days=1)
+                upsert_auto_reminder('habit',new_id,f'Habitude du jour : {title.strip()}',f'Fréquence : {freq}. {notes.strip()}',remind.strftime('%Y-%m-%d %H:%M:%S'),'Quotidien')
+                st.rerun()
             else: st.error('Saisis le nom de l’habitude.')
         habits=read_df('SELECT * FROM habits WHERE active=1 ORDER BY title')
         if habits.empty: st.info('Aucune habitude suivie.')
@@ -523,7 +608,13 @@ elif page=="Assistant de vie":
             a,b,c=st.columns(3); title=a.text_input('Tâche / démarche *'); due=b.date_input('Date limite',date.today()+timedelta(days=1)); priority=c.selectbox('Priorité',['Basse','Normale','Haute','Urgente'])
             category=st.selectbox('Domaine',['Administratif','Études','Famille','Finances','Projet','Personnel','Santé','Travail']); notes=st.text_area('Détails / pièces à prévoir'); ok=st.form_submit_button('Ajouter à ma liste')
         if ok:
-            if title.strip(): run('INSERT INTO tasks(title,due_date,priority,status,category,notes) VALUES(?,?,?,?,?,?)',(title.strip(),due.isoformat(),priority,'À faire',category,notes.strip())); st.rerun()
+            if title.strip():
+                run('INSERT INTO tasks(title,due_date,priority,status,category,notes) VALUES(?,?,?,?,?,?)',(title.strip(),due.isoformat(),priority,'À faire',category,notes.strip()))
+                new_id=int(read_df('SELECT id FROM tasks WHERE title=? ORDER BY id DESC LIMIT 1',(title.strip(),)).iloc[0]['id'])
+                remind=datetime.combine(max(date.today(), due-timedelta(days=1)), time(8,0))
+                if remind < datetime.now(): remind=datetime.combine(due,time(8,0))
+                upsert_auto_reminder('task',new_id,f'Échéance : {title.strip()}',f'Priorité : {priority}. Domaine : {category}. {notes.strip()}',remind.strftime('%Y-%m-%d %H:%M:%S'))
+                st.rerun()
             else: st.error('Saisis le titre de la tâche.')
         tasks=read_df('SELECT * FROM tasks ORDER BY CASE priority WHEN "Urgente" THEN 1 WHEN "Haute" THEN 2 WHEN "Normale" THEN 3 ELSE 4 END,due_date')
         if not tasks.empty:
@@ -565,80 +656,55 @@ elif page=="Assistant de vie":
             with st.expander(label): st.write(q); st.text_area('Ma réponse',key='routine_'+norm(label))
         st.markdown('**Routine suggérée :** planifier 3 priorités, travailler en séances de 25–50 minutes, faire une courte pause, puis noter ce qui reste à revoir.')
 
-# ---------- Rappels automatiques par SMS ----------
+# ---------- Rappels automatiques issus des rubriques enregistrées ----------
 elif page=="Rappels automatiques":
-    header('SECRÉTARIAT PERSONNEL','Rappels automatiques par SMS 🔔','Enregistre une tâche à ne pas oublier : un SMS sera envoyé à la date et à l’heure prévues sur ton numéro.')
-    st.info(f"Numéro de destination proposé : **+221 77 747 31 70**. Tu peux le modifier pour chaque rappel.")
+    header('SECRÉTARIAT PERSONNEL','Rappels automatiques 🔔','Les rappels sont générés à partir de ce que tu enregistres déjà dans les onglets : agenda, tâches, objectifs, habitudes, formations et opportunités. Tu n’as pas à ressaisir les mêmes informations ici.')
+    sync_existing_entries_to_reminders()
+    st.info('📲 Numéro de rappel par défaut : **+221 77 747 31 70**. Les échéances enregistrées dans les autres rubriques alimentent automatiquement cette liste.')
     if twilio_configured():
-        st.success("Service SMS configuré. Le programme vérifie les rappels toutes les 30 secondes tant que l’application fonctionne.")
+        st.success('Service SMS configuré. Les échéances automatiques peuvent être envoyées par SMS lorsque l’application reste active.')
     else:
-        st.warning("Pour activer les SMS, crée/configure un compte chez Twilio puis ajoute les trois Secrets indiqués ci-dessous. Sans ces identifiants, les rappels restent enregistrés mais aucun SMS ne peut être envoyé.")
-    with st.expander('⚙️ Configuration SMS (à faire une seule fois)', expanded=not twilio_configured()):
-        st.markdown('Dans les paramètres Secrets de ton hébergement Streamlit, ajoute les valeurs de ton compte Twilio. Ne les partage jamais dans le chat et ne les écris pas directement dans le code :')
+        st.warning('Les rappels se créent automatiquement dans l’application. Pour recevoir réellement les SMS, il faut configurer le fournisseur SMS dans les Secrets Streamlit.')
+    with st.expander('⚙️ Configuration SMS (une seule fois)', expanded=not twilio_configured()):
+        st.markdown('Ajoute les identifiants de ton compte Twilio dans les Secrets de Streamlit. Ne les partage pas et ne les écris pas directement dans le code :')
         st.code('TWILIO_ACCOUNT_SID = "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"\nTWILIO_AUTH_TOKEN = "ton_token_secret"\nTWILIO_FROM_NUMBER = "+1xxxxxxxxxx"', language='toml')
-        st.caption('Le numéro TWILIO_FROM_NUMBER doit être un numéro expéditeur autorisé par Twilio. Vérifie que ton compte et l’expéditeur peuvent envoyer des SMS vers le Sénégal ; des frais peuvent s’appliquer.')
-    st.markdown('### ➕ Programmer un rappel')
-    with st.form('sms_reminder_form'):
-        title = st.text_input('Que dois-je faire ? *', placeholder='Ex. Envoyer ma demande de stage à l’ISRA')
-        details = st.text_area('Détails utiles (facultatif)', placeholder='Documents à préparer, personne à contacter, adresse…')
-        c1,c2,c3 = st.columns(3)
-        day = c1.date_input('Date du rappel', value=date.today())
-        clock = c2.time_input('Heure du rappel', value=time(8,0))
-        phone = c3.text_input('Numéro destinataire', value='+221 77 747 31 70')
-        repeat_rule = st.selectbox('Répétition', ['Aucun','Quotidien','Hebdomadaire'])
-        submitted = st.form_submit_button('💾 Enregistrer le rappel', type='primary')
-    if submitted:
-        if not title.strip():
-            st.error('Saisis ce que tu dois faire.')
-        else:
-            normalized_phone = re.sub(r'[\s().-]', '', phone.strip())
-            if normalized_phone.startswith('00'):
-                normalized_phone = '+' + normalized_phone[2:]
-            if not normalized_phone.startswith('+') or not normalized_phone[1:].isdigit():
-                st.error('Le numéro doit être au format international, par exemple +221777473170.')
-            else:
-                reminder_dt = datetime.combine(day, clock).strftime('%Y-%m-%d %H:%M:%S')
-                run("INSERT INTO reminders(title,details,remind_at,phone,repeat_rule,status,enabled) VALUES(?,?,?,?,?,'En attente',1)", (title.strip(), details.strip(), reminder_dt, normalized_phone, repeat_rule))
-                st.success('Rappel enregistré. Le SMS sera envoyé à l’heure prévue si le service SMS est configuré et l’application active.')
-                st.rerun()
-    st.markdown('### 🧪 Vérifier la configuration')
-    if st.button('Envoyer un SMS de test à mon numéro', disabled=not twilio_configured()):
+        st.caption('Vérifie que le compte et le numéro expéditeur peuvent envoyer des SMS vers le Sénégal. Des frais peuvent s’appliquer.')
+    if st.button('🧪 Envoyer un SMS de test à mon numéro', disabled=not twilio_configured()):
         try:
-            send_sms('+221777473170', 'Test Secrétaire Issa : les SMS de rappel sont correctement configurés.')
-            st.success('Demande de SMS de test transmise au fournisseur. La réception dépend du réseau et du compte SMS.')
-        except Exception as exc:
-            st.error(str(exc))
-    st.markdown('### 📋 Mes rappels')
-    reminders = read_df("SELECT id,title,details,remind_at,phone,repeat_rule,status,enabled,last_sent_at,last_error FROM reminders ORDER BY remind_at")
+            send_sms(DEFAULT_REMINDER_PHONE, 'Test Secrétaire Issa : les SMS de rappel sont correctement configurés.')
+            st.success('Demande de SMS de test transmise au fournisseur.')
+        except Exception as exc: st.error(str(exc))
+    reminders=read_df("SELECT id,title,details,remind_at,phone,repeat_rule,status,enabled,last_sent_at,last_error,source_type,source_id FROM reminders ORDER BY remind_at")
     if reminders.empty:
-        st.info('Aucun rappel enregistré pour le moment.')
+        st.info('Aucune échéance future détectée. Ajoute par exemple une tâche avec une date limite, un cours dans l’agenda, un objectif daté ou une opportunité avec date limite : le rappel sera créé automatiquement.')
     else:
-        display = reminders.rename(columns={'id':'ID','title':'Rappel','details':'Détails','remind_at':'Date et heure','phone':'Numéro','repeat_rule':'Répétition','status':'État','enabled':'Actif','last_sent_at':'Dernier SMS','last_error':'Erreur éventuelle'})
-        st.dataframe(display, use_container_width=True, hide_index=True)
-        choices = {f"#{int(r.id)} — {r.title} — {r.remind_at}": int(r.id) for r in reminders.itertuples()}
-        selected_label = st.selectbox('Rappel à gérer', list(choices), key='reminder_manage_pick')
-        selected_id = choices[selected_label]
-        c1,c2,c3 = st.columns(3)
-        if c1.button('Désactiver / réactiver', key='reminder_toggle'):
-            current = read_df('SELECT enabled FROM reminders WHERE id=?', (selected_id,))
-            if not current.empty:
-                new_enabled = 0 if int(current.iloc[0]['enabled']) else 1
-                new_status = 'En attente' if new_enabled else 'Désactivé'
-                run('UPDATE reminders SET enabled=?,status=? WHERE id=?', (new_enabled,new_status,selected_id))
+        pending=reminders[(reminders.enabled==1)&(reminders.status=='En attente')]
+        overdue=pending[pending.remind_at.astype(str)<=datetime.now().strftime('%Y-%m-%d %H:%M:%S')]
+        c1,c2,c3=st.columns(3)
+        with c1: card('Rappels en attente',len(pending),'Échéances à venir ou à traiter')
+        with c2: card('À traiter maintenant',len(overdue),'Date/heure du rappel atteinte')
+        with c3: card('SMS envoyés',int((reminders.status=='Envoyé').sum()),'Rappels ponctuels déjà transmis')
+        display=reminders.rename(columns={'title':'Rappel automatique','details':'Détails / rubrique','remind_at':'Date et heure','phone':'Numéro','repeat_rule':'Répétition','status':'État SMS','enabled':'Actif','last_sent_at':'Dernier SMS','last_error':'Erreur éventuelle','source_type':'Rubrique source','source_id':'N° entrée'})
+        st.dataframe(display[['Rappel automatique','Détails / rubrique','Date et heure','Rubrique source','État SMS','Actif','Dernier SMS','Erreur éventuelle']],use_container_width=True,hide_index=True)
+        choices={f"#{int(r.id)} — {r.title} — {r.remind_at}":int(r.id) for r in reminders.itertuples()}
+        selected=st.selectbox('Gérer un rappel automatique',list(choices),key='auto_reminder_manage_pick')
+        rid=choices[selected]; a,b=st.columns(2)
+        if a.button('Désactiver / réactiver ce rappel',key='auto_reminder_toggle'):
+            cur=read_df('SELECT enabled FROM reminders WHERE id=?',(rid,))
+            if not cur.empty:
+                enabled=0 if int(cur.iloc[0]['enabled']) else 1
+                run("UPDATE reminders SET enabled=?,status=? WHERE id=?",(enabled,'En attente' if enabled else 'Désactivé',rid))
                 st.rerun()
-        if c2.button('Renvoyer maintenant', key='reminder_send_now', disabled=not twilio_configured()):
-            chosen = read_df('SELECT * FROM reminders WHERE id=?', (selected_id,))
-            if not chosen.empty:
-                r = chosen.iloc[0]
+        if b.button('Envoyer ce rappel maintenant par SMS',key='auto_reminder_send_now',disabled=not twilio_configured()):
+            row=read_df('SELECT * FROM reminders WHERE id=?',(rid,))
+            if not row.empty:
+                r=row.iloc[0]
                 try:
-                    send_sms(r['phone'], f"RAPPEL — {r['title']}" + (f"\n{r['details']}" if r['details'] else ""))
+                    send_sms(r['phone'],f"RAPPEL — {r['title']}"+(f"\n{r['details']}" if r['details'] else ''))
+                    run("UPDATE reminders SET last_sent_at=?,last_error='' WHERE id=?",(datetime.now().strftime('%Y-%m-%d %H:%M:%S'),rid))
                     st.success('SMS transmis au fournisseur.')
-                    if r['repeat_rule'] == 'Aucun': run("UPDATE reminders SET status='Envoyé',last_sent_at=?,last_error='' WHERE id=?", (datetime.now().strftime('%Y-%m-%d %H:%M:%S'),selected_id))
                 except Exception as exc: st.error(str(exc))
-        if c3.button('Supprimer le rappel', key='reminder_delete'):
-            run('DELETE FROM reminders WHERE id=?', (selected_id,))
-            st.rerun()
-    st.caption('Important : le processus automatique fonctionne tant que l’application est exécutée. Sur un hébergement qui met l’application en veille ou arrête le processus, il faut un planificateur externe toujours actif pour garantir les SMS à l’heure exacte.')
+    st.caption('Les rappels d’agenda sont prévus une heure avant l’événement. Les tâches, objectifs, formations et opportunités sont rappelés la veille à 08 h. Les habitudes actives sont rappelées chaque jour à 08 h. Les SMS dépendent de la configuration et du fonctionnement continu de l’application.')
 
 # ---------- Compétences & Carrière ----------
 elif page=="Compétences & Carrière":
