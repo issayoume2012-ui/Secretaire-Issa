@@ -1,11 +1,11 @@
 """Secrétaire Issa — assistant personnel avec rappels automatiques par Gmail.
 Lancement : python -m streamlit run CampusClair_XXL.py
 Base SQLite locale séparée : campus_clair.db
-Dépendances : streamlit, pandas, openpyxl (facultatif pour Excel), PyMuPDF (facultatif pour PDF).
+Dépendances : streamlit, pandas, speechrecognition, openpyxl (facultatif), PyMuPDF (PDF), python-docx (DOCX).
 """
 from pathlib import Path
 from datetime import date, datetime, time, timedelta
-import sqlite3, re, unicodedata, io, math, os, threading, time as time_module, smtplib, ssl
+import sqlite3, re, unicodedata, io, math, os, threading, time as time_module, smtplib, ssl, imaplib, email, email.policy, hashlib, hmac
 from email.message import EmailMessage
 import pandas as pd
 import streamlit as st
@@ -47,6 +47,36 @@ div[role="radiogroup"] label:has(input:checked){background:#eaf2ff;border-color:
 @media(max-width:700px){.issa-brand{padding:20px;border-radius:18px}.cc-hero{padding:18px}.block-container{padding-left:1rem;padding-right:1rem}div[role="radiogroup"] label{padding:6px 8px!important;font-size:.8rem}}
 </style>""", unsafe_allow_html=True)
 
+# ---------- Verrouillage par identifiants stockés dans Streamlit Secrets ----------
+# Secrets à renseigner : APP_USERNAME et APP_PASSWORD. Aucun identifiant n'est codé en dur.
+def secret_value(name, default=""):
+    try:
+        return str(st.secrets.get(name, default) or default).strip()
+    except Exception:
+        return str(os.getenv(name, default) or default).strip()
+
+_AUTH_USER = secret_value("APP_USERNAME")
+_AUTH_PASS = secret_value("APP_PASSWORD")
+if not _AUTH_USER or not _AUTH_PASS:
+    st.error("🔐 Accès non configuré. Dans Streamlit Cloud, ouvre Manage app → Settings → Secrets et ajoute APP_USERNAME et APP_PASSWORD. L'application reste verrouillée tant que ces deux secrets ne sont pas définis.")
+    st.code('APP_USERNAME = "ton_identifiant_prive"\nAPP_PASSWORD = "un_mot_de_passe_long_et_unique"', language="toml")
+    st.stop()
+if "issa_authenticated" not in st.session_state:
+    st.session_state["issa_authenticated"] = False
+if not st.session_state["issa_authenticated"]:
+    st.markdown('<div class="issa-brand"><span class="issa-badge">Accès privé sécurisé</span><h1>🗂️ Secrétaire Issa</h1><p>Connecte-toi pour accéder à ton secrétariat personnel.</p></div>', unsafe_allow_html=True)
+    with st.form("issa_login_form"):
+        username_input = st.text_input("Identifiant", autocomplete="username")
+        password_input = st.text_input("Mot de passe", type="password", autocomplete="current-password")
+        login_clicked = st.form_submit_button("🔐 Se connecter", type="primary", use_container_width=True)
+    if login_clicked:
+        if hmac.compare_digest(username_input.strip(), _AUTH_USER) and hmac.compare_digest(password_input, _AUTH_PASS):
+            st.session_state["issa_authenticated"] = True
+            st.rerun()
+        else:
+            st.error("Identifiant ou mot de passe incorrect.")
+    st.stop()
+
 # ---------- Données : tables créées automatiquement, base strictement locale ----------
 def connect():
     c=sqlite3.connect(DB_PATH, timeout=20)
@@ -87,6 +117,7 @@ def init_db():
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY, value TEXT DEFAULT '');
+        CREATE TABLE IF NOT EXISTS assistant_docs(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,content TEXT NOT NULL,uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP);
         """)
 init_db()
 with connect() as _conn:
@@ -120,9 +151,11 @@ def save_setting(key, value):
     with connect() as c:
         c.execute("INSERT INTO app_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, str(value).strip()))
 
+FIXED_SENDER_EMAIL = "issayoume1801@gmail.com"
+
 def email_configured():
     """Vérifie les paramètres Gmail SMTP et l'adresse de réception."""
-    return all(get_config(k) for k in ("SMTP_USERNAME", "SMTP_PASSWORD")) and bool(get_recipient_email())
+    return bool(get_config("SMTP_PASSWORD")) and bool(get_recipient_email())
 
 def get_recipient_email():
     return get_config("REMINDER_EMAIL") or get_saved_setting("reminder_email", "")
@@ -130,12 +163,12 @@ def get_recipient_email():
 def send_email(subject, body, recipient=None):
     """Envoie un e-mail par Gmail SMTP, avec STARTTLS (587) puis SSL (465) en secours."""
     host = get_config("SMTP_HOST", "smtp.gmail.com") or "smtp.gmail.com"
-    username = get_config("SMTP_USERNAME")
+    username = FIXED_SENDER_EMAIL  # adresse d’expédition fixe demandée
     password = get_config("SMTP_PASSWORD").replace(" ", "")
     sender_name = get_config("SMTP_SENDER_NAME", "Secrétaire Issa") or "Secrétaire Issa"
     recipient = (recipient or get_recipient_email()).strip()
     if not username or not password:
-        raise RuntimeError("Configuration Gmail incomplète : ajoute SMTP_USERNAME et SMTP_PASSWORD dans les Secrets Streamlit. Utilise le mot de passe d'application Google, pas ton mot de passe Gmail habituel.")
+        raise RuntimeError("Configuration Gmail incomplète : ajoute SMTP_PASSWORD dans les Secrets Streamlit. Utilise le mot de passe d'application Google, pas ton mot de passe Gmail habituel.")
     if not recipient or not re.match(r"^[^\s@]+@[^\s@]+\.[^\s@]+$", recipient):
         raise RuntimeError("Adresse de réception absente ou invalide. Renseigne ton adresse dans l’onglet Rappels automatiques.")
     try:
@@ -177,6 +210,95 @@ def send_email(subject, body, recipient=None):
                 except Exception: pass
     detail = " ; ".join(errors)
     raise RuntimeError("Impossible de se connecter à Gmail SMTP après deux tentatives. Vérifie SMTP_HOST=smtp.gmail.com, le port 587/465, l'adresse Gmail et le mot de passe d'application. Détails : " + detail)
+
+def _decode_mime(value):
+    if not value:
+        return ""
+    parts = email.header.decode_header(value)
+    out = []
+    for piece, enc in parts:
+        if isinstance(piece, bytes):
+            try: out.append(piece.decode(enc or "utf-8", errors="replace"))
+            except Exception: out.append(piece.decode("utf-8", errors="replace"))
+        else: out.append(str(piece))
+    return "".join(out)
+
+def _email_body(msg):
+    chunks = []
+    parts = msg.walk() if msg.is_multipart() else [msg]
+    for part in parts:
+        if part.get_content_disposition() == "attachment":
+            continue
+        ctype = part.get_content_type()
+        if ctype in ("text/plain", "text/html"):
+            try:
+                data = part.get_payload(decode=True)
+                charset = part.get_content_charset() or "utf-8"
+                text = data.decode(charset, errors="replace") if data else str(part.get_payload() or "")
+                if ctype == "text/html":
+                    text = re.sub(r"(?is)<(script|style).*?>.*?</\1>", " ", text)
+                    text = re.sub(r"(?s)<[^>]+>", " ", text)
+                    text = re.sub(r"\s+", " ", text)
+                if text.strip(): chunks.append(text.strip())
+                if ctype == "text/plain" and text.strip(): break
+            except Exception:
+                pass
+    return "\n\n".join(chunks).strip()
+
+def fetch_recent_emails(limit=15):
+    """Lit les messages récents de la boîte Gmail par IMAP avec le mot de passe d’application."""
+    password = get_config("SMTP_PASSWORD").replace(" ", "")
+    if not password:
+        raise RuntimeError("Ajoute SMTP_PASSWORD dans les Secrets Streamlit.")
+    items = []
+    with imaplib.IMAP4_SSL("imap.gmail.com", 993, timeout=25) as mail:
+        mail.login(FIXED_SENDER_EMAIL, password)
+        status, _ = mail.select("INBOX", readonly=True)
+        if status != "OK": raise RuntimeError("Impossible d’ouvrir la boîte de réception Gmail.")
+        status, data = mail.search(None, "ALL")
+        if status != "OK": raise RuntimeError("Gmail n’a pas retourné la liste des messages.")
+        ids = (data[0].split() if data and data[0] else [])[-int(limit):]
+        for msg_id in reversed(ids):
+            status, raw = mail.fetch(msg_id, "(RFC822)")
+            if status != "OK" or not raw or not isinstance(raw[0], tuple): continue
+            msg = email.message_from_bytes(raw[0][1], policy=email.policy.default)
+            items.append({"id": msg_id.decode("ascii", errors="ignore"), "subject": _decode_mime(msg.get("Subject", "(sans objet)")), "from": _decode_mime(msg.get("From", "")), "date": _decode_mime(msg.get("Date", "")), "body": _email_body(msg)})
+    return items
+
+def transcribe_audio(uploaded_audio):
+    """Transcrit un enregistrement vocal en français ; nécessite SpeechRecognition et Internet."""
+    if uploaded_audio is None: return ""
+    try:
+        import speech_recognition as sr
+        recognizer = sr.Recognizer()
+        with sr.AudioFile(io.BytesIO(uploaded_audio.getvalue())) as source:
+            audio_data = recognizer.record(source)
+        return recognizer.recognize_google(audio_data, language="fr-FR")
+    except ImportError:
+        raise RuntimeError("La saisie vocale nécessite SpeechRecognition. Ajoute speechrecognition à requirements.txt puis redéploie.")
+    except Exception as exc:
+        raise RuntimeError(f"Transcription vocale impossible ({type(exc).__name__}). Vérifie la qualité audio et la connexion Internet.") from None
+
+def extract_document_text(uploaded_file):
+    name = uploaded_file.name.lower()
+    raw = uploaded_file.getvalue()
+    if name.endswith((".txt", ".md", ".csv")):
+        return raw.decode("utf-8", errors="replace")
+    if name.endswith(".pdf"):
+        try:
+            import fitz
+            doc = fitz.open(stream=raw, filetype="pdf")
+            return "\n\n".join(page.get_text() for page in doc)
+        except ImportError:
+            raise RuntimeError("Lecture PDF indisponible : ajoute pymupdf à requirements.txt.")
+    if name.endswith(".docx"):
+        try:
+            from docx import Document
+            doc = Document(io.BytesIO(raw))
+            return "\n".join(p.text for p in doc.paragraphs)
+        except ImportError:
+            raise RuntimeError("Lecture DOCX indisponible : ajoute python-docx à requirements.txt.")
+    raise RuntimeError("Format non pris en charge. Utilise PDF, DOCX, TXT, MD ou CSV.")
 
 def process_due_reminders():
     """Envoie par e-mail chaque rappel arrivé à échéance, puis programme la récurrence."""
@@ -358,11 +480,11 @@ def subject_choices():
     for r in df.itertuples(): opts[f"{r.title} · {r.semester} · {r.ue}"]=int(r.id)
     return df,opts
 
-PAGES=["Vue d’ensemble","Maquettes & matières","Emploi du temps","Programmes de révision","Suivi & progression","Assistant de vie","Rappels automatiques","Compétences & Carrière","Paramètres & sauvegarde"]
+PAGES=["Vue d’ensemble","Maquettes & matières","Emploi du temps","Programmes de révision","Suivi & progression","Assistant de vie","Rappels automatiques","Assistant e-mail & documents","Compétences & Carrière","Paramètres & sauvegarde"]
 PAGE_SHORT={
     "Vue d’ensemble":"🏠 Accueil XXL", "Maquettes & matières":"🎓 Académie", "Emploi du temps":"🗓️ Planning",
     "Programmes de révision":"🎯 Révisions", "Suivi & progression":"📈 Progression",
-    "Assistant de vie":"👤 Vie personnelle", "Rappels automatiques":"📧 Rappels e-mail", "Compétences & Carrière":"🚀 Carrière",
+    "Assistant de vie":"👤 Vie personnelle", "Rappels automatiques":"📧 Rappels e-mail", "Assistant e-mail & documents":"✉️ Assistant complet", "Compétences & Carrière":"🚀 Carrière",
     "Paramètres & sauvegarde":"⚙️ Paramètres"
 }
 PAGE_ROLE={
@@ -373,6 +495,7 @@ PAGE_ROLE={
     "Suivi & progression":"Secrétaire chargé du suivi des résultats et de la progression",
     "Assistant de vie":"Secrétaire chargé de l’organisation personnelle et des démarches",
     "Rappels automatiques":"Secrétaire chargé des rappels et échéances par e-mail",
+    "Assistant e-mail & documents":"Assistant de rédaction, messagerie, voix et consultation documentaire",
     "Compétences & Carrière":"Secrétaire chargé du développement des compétences et de l’insertion professionnelle",
     "Paramètres & sauvegarde":"Secrétaire chargé des paramètres, des exports et de la sauvegarde des données"
 }
@@ -381,6 +504,10 @@ st.markdown('<div class="issa-nav-title">Menu principal · Choisissez le secrét
 if 'top_nav' not in st.session_state: st.session_state['top_nav']=PAGES[0]
 st.radio('Navigation principale',PAGES,format_func=lambda x:PAGE_SHORT[x],horizontal=True,label_visibility='collapsed',key='top_nav')
 page=st.session_state['top_nav']
+_logout_col, _empty_col = st.columns([1, 8])
+if _logout_col.button('🔒 Déconnexion', key='issa_logout'):
+    st.session_state['issa_authenticated'] = False
+    st.rerun()
 st.markdown(f'<div class="cc-card" style="padding:12px 16px;margin:10px 0 16px"><div class="cc-eyebrow">Votre secrétaire spécialisé</div><div style="font-size:1.05rem;font-weight:800;color:#17345c;margin-top:4px">🧭 {PAGE_ROLE[page]}</div></div>',unsafe_allow_html=True)
 
 # RAPPELS TRANSVERSAUX : visibles depuis TOUS les onglets, sans ressaisie.
@@ -819,11 +946,11 @@ elif page=="Rappels automatiques":
         st.success(f"Envoi e-mail configuré. Les rappels seront envoyés à **{get_recipient_email()}** lorsque l’application fonctionne.")
     else:
         st.warning('Les rappels sont préparés automatiquement, mais l’envoi nécessite les identifiants Gmail SMTP dans les Secrets Streamlit.')
-    with st.expander('⚙️ Configuration Gmail gratuite (à faire une seule fois)', expanded=not bool(get_config('SMTP_USERNAME') and get_config('SMTP_PASSWORD'))):
+    with st.expander('⚙️ Configuration Gmail gratuite (à faire une seule fois)', expanded=not bool(get_config('SMTP_PASSWORD'))):
         st.markdown('Utilise ton adresse Gmail et un **mot de passe d’application Google de 16 caractères**. Ne mets jamais ton mot de passe Gmail habituel et ne partage pas ce secret.')
-        st.code('SMTP_HOST = \"smtp.gmail.com\"\nSMTP_PORT = \"587\"\nSMTP_USERNAME = \"tonadresse@gmail.com\"\nSMTP_PASSWORD = \"mot_de_passe_application_16_caracteres\"\nSMTP_SENDER_NAME = \"Secrétaire Issa\"', language='toml')
-        st.caption('Dans Streamlit Cloud : Manage app → Settings → Secrets. L’adresse de réception se règle ci-dessus. Le code essaie STARTTLS sur le port 587 puis SSL sur le port 465 si nécessaire.')
-    if st.button('🧪 Envoyer un e-mail de test', disabled=not (get_config('SMTP_USERNAME') and get_config('SMTP_PASSWORD') and get_recipient_email())):
+        st.code('SMTP_HOST = \"smtp.gmail.com\"\nSMTP_PORT = \"587\"\nSMTP_PASSWORD = \"mot_de_passe_application_16_caracteres\"\nSMTP_SENDER_NAME = \"Secrétaire Issa\"', language='toml')
+        st.caption('Dans Streamlit Cloud : Manage app → Settings → Secrets. L’adresse de réception des rappels se règle ci-dessus. L’adresse d’expédition est fixée à issayoume1801@gmail.com. Le code essaie STARTTLS sur le port 587 puis SSL sur le port 465 si nécessaire.')
+    if st.button('🧪 Envoyer un e-mail de test', disabled=not (get_config('SMTP_PASSWORD') and get_recipient_email())):
         try:
             send_email('Test — Secrétaire Issa', 'Bonjour,\n\nCeci est un e-mail de test. Si tu le reçois, les rappels e-mail de Secrétaire Issa sont correctement configurés.')
             st.success(f"E-mail de test transmis à {get_recipient_email()}.")
@@ -860,6 +987,114 @@ elif page=="Rappels automatiques":
                     st.success('E-mail transmis au serveur de messagerie.')
                 except Exception as exc: st.error(str(exc))
     st.caption('Vérification des rappels au démarrage de chaque exécution de l’application et contrôle en arrière-plan toutes les 30 secondes tant que le processus Streamlit reste actif. Les rappels sont issus de l’agenda (1 h avant), des tâches et objectifs (veille à 08 h ou immédiatement si déjà en retard), des formations, des stages/concours/bourses, des notes « Rappel » et des habitudes actives. Gmail utilise le port 587 STARTTLS avec secours sur 465 SSL. Streamlit Cloud peut suspendre l’application lorsqu’elle est inactive : un envoi garanti même application endormie nécessite un planificateur externe et une base de données persistante.')
+
+# ---------- Assistant e-mail, voix et documents ----------
+elif page=="Assistant e-mail & documents":
+    header("ASSISTANT PERSONNEL", "E-mails, voix et documents ✉️", "Prépare tes messages, dicte-les à la voix, envoie-les depuis Gmail, consulte ta boîte de réception et interroge tes documents importés.")
+    st.info(f"Adresse d’expédition fixe : **{FIXED_SENDER_EMAIL}**. La lecture de la boîte utilise IMAP Gmail et le même mot de passe d’application.")
+    mail_tab, docs_tab = st.tabs(["✉️ Messagerie", "📚 Documents & questions"])
+    with mail_tab:
+        compose_tab, inbox_tab = st.tabs(["📝 Préparer / envoyer", "📥 Ouvrir les e-mails reçus"])
+        with compose_tab:
+            # Les réponses préremplies sont injectées avant la création des widgets Streamlit.
+            if st.session_state.pop("issa_pending_reply", False):
+                st.session_state["assistant_mail_recipient"] = st.session_state.pop("issa_reply_to", "")
+                st.session_state["assistant_mail_subject"] = st.session_state.pop("issa_reply_subject", "Re: votre message")
+                st.session_state["assistant_mail_body"] = "Bonjour,\n\nMerci pour votre message.\n\nCordialement,\nIssa"
+            st.markdown("#### Préparer un message")
+            voice = st.audio_input("🎙️ Dicter le message en français", key="assistant_mail_voice")
+            if st.button("🗣️ Transcrire la voix dans le brouillon", key="assistant_transcribe_mail", disabled=voice is None):
+                try:
+                    spoken = transcribe_audio(voice)
+                    previous = st.session_state.get("assistant_mail_body", "")
+                    st.session_state["assistant_mail_body"] = (previous.strip() + ("\n\n" if previous.strip() else "") + spoken).strip()
+                    st.success("Transcription ajoutée au brouillon. Relis-la avant l’envoi.")
+                    st.rerun()
+                except Exception as exc: st.error(str(exc))
+            with st.form("assistant_compose_mail"):
+                recipient = st.text_input("Destinataire *", key="assistant_mail_recipient", placeholder="destinataire@exemple.com")
+                subject = st.text_input("Objet *", key="assistant_mail_subject", placeholder="Objet du message")
+                body = st.text_area("Message", key="assistant_mail_body", height=220, placeholder="Écris ici ou utilise la dictée vocale ci-dessus…")
+                send_clicked = st.form_submit_button("📨 Envoyer le message", type="primary")
+            if send_clicked:
+                if not re.match(r"^[^\s@]+@[^\s@]+\.[^\s@]+$", recipient.strip()): st.error("Saisis une adresse e-mail destinataire valide.")
+                elif not subject.strip(): st.error("L’objet du message est obligatoire.")
+                elif not body.strip(): st.error("Le message est vide.")
+                else:
+                    try:
+                        send_email(subject.strip(), body.strip(), recipient.strip())
+                        st.success(f"Message transmis à Gmail pour envoi vers {recipient.strip()}.")
+                    except Exception as exc: st.error(f"Échec d’envoi : {exc}")
+            st.caption("Conseil : vérifie le destinataire, l’objet et le texte avant chaque envoi. L’application n’envoie rien sans cliquer sur le bouton.")
+        with inbox_tab:
+            st.markdown("#### Boîte de réception Gmail")
+            limit = st.selectbox("Nombre de messages récents à charger", [10, 15, 25, 50], index=1)
+            if st.button("🔄 Charger mes e-mails", type="primary", key="assistant_load_inbox"):
+                try:
+                    st.session_state["issa_inbox_cache"] = fetch_recent_emails(limit)
+                    st.success(f"{len(st.session_state['issa_inbox_cache'])} message(s) chargé(s).")
+                except Exception as exc: st.error(f"Lecture Gmail impossible : {exc}")
+            inbox = st.session_state.get("issa_inbox_cache", [])
+            if inbox:
+                labels = [f"{m['date']} · {_decode_mime(m['from'])} · {m['subject']}" for m in inbox]
+                chosen_idx = st.selectbox("Choisir un message à ouvrir", range(len(inbox)), format_func=lambda i: labels[i], key="issa_open_mail_index")
+                chosen = inbox[chosen_idx]
+                st.markdown(f"**Objet :** {chosen['subject']}  \n**De :** {chosen['from']}  \n**Date :** {chosen['date']}")
+                st.text_area("Contenu du message", chosen['body'] or "Aucun texte exploitable dans ce message.", height=280, key=f"issa_mail_content_{chosen['id']}")
+                if st.button("↩️ Préparer une réponse à cet expéditeur", key="issa_prepare_reply"):
+                    match = re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", chosen['from'], re.I)
+                    if match:
+                        st.session_state["issa_reply_to"] = match.group(0)
+                        st.session_state["issa_reply_subject"] = "Re: " + chosen['subject']
+                        st.session_state["issa_pending_reply"] = True
+                        st.success("Réponse préparée dans l’onglet de rédaction. Relis-la avant de l’envoyer.")
+                        st.rerun()
+                    else: st.warning("Impossible d’extraire une adresse e-mail depuis l’expéditeur affiché.")
+            else:
+                st.caption("Clique sur « Charger mes e-mails » pour consulter les messages récents. La lecture ne marque pas les messages comme lus.")
+    with docs_tab:
+        st.markdown("#### Importer et conserver un document à consulter")
+        upload = st.file_uploader("Importer un document", type=["pdf", "docx", "txt", "md", "csv"], key="assistant_document_upload")
+        if upload is not None and st.button("💾 Enregistrer le document dans ma bibliothèque", key="assistant_save_doc"):
+            try:
+                extracted = extract_document_text(upload)
+                if not extracted.strip(): st.warning("Aucun texte n’a été extrait. Pour un PDF scanné, il faut un OCR.")
+                else:
+                    run("INSERT INTO assistant_docs(title,content) VALUES(?,?)", (upload.name, extracted))
+                    st.success(f"Document « {upload.name} » enregistré. Texte extrait : {len(extracted)} caractères.")
+                    st.rerun()
+            except Exception as exc: st.error(str(exc))
+        docs = read_df("SELECT id,title,uploaded_at,content FROM assistant_docs ORDER BY id DESC")
+        if docs.empty:
+            st.info("Aucun document enregistré. Importe un PDF, DOCX, TXT, MD ou CSV pour pouvoir le retrouver et poser des questions dessus.")
+        else:
+            doc_choices = {f"{r.title} · importé le {r.uploaded_at}": int(r.id) for r in docs.itertuples()}
+            selected_doc_label = st.selectbox("Document à consulter", list(doc_choices), key="assistant_doc_select")
+            selected_doc = docs[docs.id == doc_choices[selected_doc_label]].iloc[0]
+            with st.expander("📖 Lire le document", expanded=False):
+                st.text_area("Texte extrait", str(selected_doc["content"]), height=300, key=f"assistant_doc_text_{int(selected_doc['id'])}")
+            qvoice = st.audio_input("🎙️ Dicter une question", key="assistant_doc_voice")
+            if st.button("🗣️ Transcrire la question", key="assistant_transcribe_question", disabled=qvoice is None):
+                try:
+                    st.session_state["assistant_doc_question"] = transcribe_audio(qvoice)
+                    st.rerun()
+                except Exception as exc: st.error(str(exc))
+            question = st.text_input("Ta question sur ce document", placeholder="Ex. Quelles sont les dates limites mentionnées ?", key="assistant_doc_question")
+            if st.button("🔎 Rechercher dans ce document", type="primary", key="assistant_search_doc"):
+                if not question.strip(): st.warning("Saisis ou dicte une question.")
+                else:
+                    content = str(selected_doc["content"])
+                    terms = [w for w in norm(question).split() if len(w) > 2]
+                    paragraphs = [p.strip() for p in re.split(r"\n\s*\n|(?<=[.!?])\s+", content) if p.strip()]
+                    scored = sorted(((sum(1 for term in terms if term in norm(par)), par) for par in paragraphs), key=lambda x:x[0], reverse=True)
+                    hits = [par for score, par in scored if score > 0][:8]
+                    if hits:
+                        st.markdown("#### Extraits pertinents du document")
+                        for idx, excerpt in enumerate(hits, 1): st.markdown(f"**Extrait {idx}**\n\n{excerpt[:2500]}")
+                        st.caption("Résultat fondé sur les mots présents dans le document importé ; vérifie le contexte complet avant de prendre une décision.")
+                    else: st.warning("Aucun passage ne correspond clairement aux mots de la question. Essaie avec des termes plus précis ou lis le document complet.")
+            if st.button("🗑️ Supprimer ce document", key="assistant_delete_doc"):
+                run("DELETE FROM assistant_docs WHERE id=?", (int(selected_doc["id"]),)); st.rerun()
 
 # ---------- Compétences & Carrière ----------
 elif page=="Compétences & Carrière":
@@ -988,7 +1223,7 @@ elif page=="Paramètres & sauvegarde":
 st.markdown('<div class="issa-footer"><strong>🗂️ Secrétaire Issa</strong><br><small>Un espace personnel de secrétariat, de suivi et d’organisation · Données stockées localement dans SQLite.</small></div>',unsafe_allow_html=True)
 role_icons={
     "Vue d’ensemble":"🏠", "Maquettes & matières":"🎓", "Emploi du temps":"🗓️",
-    "Programmes de révision":"🎯", "Suivi & progression":"📈", "Assistant de vie":"👤", "Rappels automatiques":"🔔",
+    "Programmes de révision":"🎯", "Suivi & progression":"📈", "Assistant de vie":"👤", "Rappels automatiques":"🔔", "Assistant e-mail & documents":"✉️",
     "Compétences & Carrière":"🚀", "Paramètres & sauvegarde":"⚙️"
 }
 roles_html=''.join(f'<span class="issa-role-pill">{role_icons[p]} {PAGE_ROLE[p]}</span>' for p in PAGES)
