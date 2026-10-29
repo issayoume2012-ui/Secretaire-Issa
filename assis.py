@@ -5,7 +5,7 @@ Dépendances : streamlit, pandas, speechrecognition, openpyxl (facultatif), PyMu
 """
 from pathlib import Path
 from datetime import date, datetime, time, timedelta
-import sqlite3, re, unicodedata, io, math, os, threading, time as time_module, smtplib, ssl, imaplib, email, email.policy, hashlib, hmac, base64
+import sqlite3, re, unicodedata, io, math, os, threading, time as time_module, smtplib, ssl, imaplib, email, email.policy, hashlib, hmac, base64, json
 from email.message import EmailMessage
 import pandas as pd
 import streamlit as st
@@ -58,19 +58,35 @@ div[role="radiogroup"] label:has(input:checked){{background:#eaf2ff;border-color
 @media(max-width:700px){{.issa-brand{{padding:20px;border-radius:18px}}.cc-hero{{padding:18px}}.block-container{{padding-left:1rem;padding-right:1rem}}div[role="radiogroup"] label{{padding:6px 8px!important;font-size:.8rem}}}}
 </style>""", unsafe_allow_html=True)
 
-# ---------- Verrouillage par identifiants stockés dans Streamlit Secrets ----------
-# Secrets à renseigner : APP_USERNAME et APP_PASSWORD. Aucun identifiant n'est codé en dur.
+# ---------- Secrets : connexion Supabase PostgreSQL et authentification ----------
 def secret_value(name, default=""):
     try:
-        return str(st.secrets.get(name, default) or default).strip()
+        value = st.secrets.get(name, default)
     except Exception:
-        return str(os.getenv(name, default) or default).strip()
+        value = os.getenv(name, default)
+    return str(value or default).strip()
 
-_AUTH_USER = secret_value("APP_USERNAME")
-_AUTH_PASS = secret_value("APP_PASSWORD")
+# Les noms YOUAGRONOME_* sont conservés tels que fournis ; les anciens APP_* restent acceptés.
+_AUTH_USER = secret_value("YOUAGRONOME_OWNER_EMAIL") or secret_value("APP_USERNAME")
+_AUTH_PASS = secret_value("YOUAGRONOME_OWNER_PASS") or secret_value("APP_PASSWORD")
+_SUPABASE_DB_HOST = secret_value("SUPABASE_DB_HOST")
+_SUPABASE_DB_PORT = secret_value("SUPABASE_DB_PORT", "5432")
+_SUPABASE_DB_NAME = secret_value("SUPABASE_DB_NAME", "postgres")
+_SUPABASE_DB_USER = secret_value("SUPABASE_DB_USER")
+_SUPABASE_DB_PASSWORD = secret_value("SUPABASE_DB_PASSWORD")
+_USE_SUPABASE = all((_SUPABASE_DB_HOST, _SUPABASE_DB_PORT, _SUPABASE_DB_NAME, _SUPABASE_DB_USER, _SUPABASE_DB_PASSWORD))
 if not _AUTH_USER or not _AUTH_PASS:
-    st.error("🔐 Accès non configuré. Dans Streamlit Cloud, ouvre Manage app → Settings → Secrets et ajoute APP_USERNAME et APP_PASSWORD. L'application reste verrouillée tant que ces deux secrets ne sont pas définis.")
-    st.code('APP_USERNAME = "ton_identifiant_prive"\nAPP_PASSWORD = "un_mot_de_passe_long_et_unique"', language="toml")
+    st.error("🔐 Accès non configuré. Ajoute YOUAGRONOME_OWNER_EMAIL et YOUAGRONOME_OWNER_PASS (ou APP_USERNAME et APP_PASSWORD) dans Streamlit → Settings → Secrets.")
+    st.code('YOUAGRONOME_OWNER_EMAIL = "identifiant_prive"\nYOUAGRONOME_OWNER_PASS = "mot_de_passe_long_et_unique"', language="toml")
+    st.stop()
+if not _USE_SUPABASE:
+    st.error("La connexion Supabase n'est pas configurée. Ajoute les cinq secrets SUPABASE_DB_HOST, SUPABASE_DB_PORT, SUPABASE_DB_NAME, SUPABASE_DB_USER et SUPABASE_DB_PASSWORD. Pour éviter de stocker les données uniquement localement, cette version exige Supabase PostgreSQL.")
+    st.stop()
+try:
+    import psycopg2
+    import psycopg2.extras
+except ImportError:
+    st.error("Dépendance manquante : ajoute psycopg2-binary à requirements.txt puis redéploie l'application.")
     st.stop()
 if "issa_authenticated" not in st.session_state:
     st.session_state["issa_authenticated"] = False
@@ -88,12 +104,68 @@ if not st.session_state["issa_authenticated"]:
             st.error("Identifiant ou mot de passe incorrect.")
     st.stop()
 
-# ---------- Données : tables créées automatiquement, base strictement locale ----------
+# ---------- Base Supabase PostgreSQL : connexion et création automatique des tables ----------
+DB_PATH = APP_DIR / "campus_clair.db"  # conservé uniquement pour compatibilité d'affichage/anciennes sauvegardes
+
+class _PgCursor:
+    def __init__(self, cursor=None, rows=None, rowcount=-1):
+        self._cursor, self._rows, self.rowcount = cursor, rows, rowcount
+    @property
+    def description(self):
+        return self._cursor.description if self._cursor is not None else None
+    def fetchall(self):
+        return self._rows if self._rows is not None else self._cursor.fetchall()
+    def fetchone(self):
+        if self._rows is not None:
+            return self._rows.pop(0) if self._rows else None
+        return self._cursor.fetchone()
+    def __iter__(self):
+        return iter(self._rows if self._rows is not None else self._cursor)
+
+class _PgConnection:
+    def __init__(self):
+        self.raw = psycopg2.connect(host=_SUPABASE_DB_HOST, port=int(_SUPABASE_DB_PORT), dbname=_SUPABASE_DB_NAME, user=_SUPABASE_DB_USER, password=_SUPABASE_DB_PASSWORD, sslmode="require", connect_timeout=15, cursor_factory=psycopg2.extras.RealDictCursor)
+    def __enter__(self): return self
+    def __exit__(self, typ, value, tb):
+        if typ is None: self.raw.commit()
+        else: self.raw.rollback()
+        self.raw.close()
+        return False
+    def execute(self, sql, params=()):
+        sql = sql.strip()
+        # Compatibilité ciblée avec quelques commandes SQLite encore utilisées par l'application.
+        if sql.upper() == "PRAGMA FOREIGN_KEYS=ON": return _PgCursor(rows=[])
+        m = re.match(r"PRAGMA table_info\((\w+)\)", sql, re.I)
+        if m:
+            with self.raw.cursor() as cur:
+                cur.execute("SELECT ordinal_position-1 AS cid, column_name AS name, data_type AS type, (is_nullable='NO') AS notnull, column_default AS dflt_value, (CASE WHEN column_name='id' THEN 1 ELSE 0 END) AS pk FROM information_schema.columns WHERE table_schema='public' AND table_name=%s ORDER BY ordinal_position", (m.group(1).lower(),))
+                return _PgCursor(rows=cur.fetchall())
+        ignore = bool(re.search(r"INSERT\s+OR\s+IGNORE\s+INTO", sql, re.I))
+        sql = re.sub(r"INSERT\s+OR\s+IGNORE\s+INTO", "INSERT INTO", sql, flags=re.I)
+        # Le remplacement est géré séparément car il est utilisé pour les pointages d'habitudes.
+        replace = bool(re.search(r"INSERT\s+OR\s+REPLACE\s+INTO\s+habit_logs", sql, re.I))
+        sql = re.sub(r"INSERT\s+OR\s+REPLACE\s+INTO", "INSERT INTO", sql, flags=re.I)
+        sql = sql.replace("?", "%s")
+        if replace:
+            sql += " ON CONFLICT (habit_id, log_date) DO UPDATE SET done=EXCLUDED.done"
+        elif ignore:
+            sql += " ON CONFLICT DO NOTHING"
+        cur = self.raw.cursor()
+        cur.execute(sql, params or ())
+        return _PgCursor(cur, rowcount=cur.rowcount)
+    def executescript(self, script):
+        # Convertit le DDL de départ SQLite en DDL PostgreSQL puis crée chaque table si absente.
+        script = re.sub(r"INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT", "BIGSERIAL PRIMARY KEY", script, flags=re.I)
+        script = re.sub(r"REAL\b", "DOUBLE PRECISION", script, flags=re.I)
+        script = re.sub(r"INTEGER\b", "INTEGER", script, flags=re.I)
+        for statement in script.split(';'):
+            statement = statement.strip()
+            if statement:
+                self.execute(statement)
+
+
 def connect():
-    c=sqlite3.connect(DB_PATH, timeout=20)
-    c.row_factory=sqlite3.Row
-    c.execute("PRAGMA foreign_keys=ON")
-    return c
+    return _PgConnection()
 
 def init_db():
     with connect() as c:
@@ -102,31 +174,17 @@ def init_db():
         CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,event_date TEXT NOT NULL,start_time TEXT DEFAULT '',end_time TEXT DEFAULT '',kind TEXT DEFAULT 'Cours',subject_id INTEGER,location TEXT DEFAULT '',notes TEXT DEFAULT '',source TEXT DEFAULT 'Saisie manuelle',created_at TEXT DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE SET NULL);
         CREATE TABLE IF NOT EXISTS tasks(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,due_date TEXT DEFAULT '',priority TEXT DEFAULT 'Normale',status TEXT DEFAULT 'À faire',category TEXT DEFAULT 'Travail personnel',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS documents(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,category TEXT DEFAULT 'Autre',url TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
-        CREATE TABLE IF NOT EXISTS study_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,subject_id INTEGER,study_date TEXT NOT NULL,hours REAL NOT NULL,method TEXT DEFAULT 'Révision active',confidence INTEGER DEFAULT 3,notes TEXT DEFAULT '',FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE SET NULL);
+        CREATE TABLE IF NOT EXISTS study_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,subject_id INTEGER,study_date TEXT NOT NULL,hours DOUBLE PRECISION NOT NULL,method TEXT DEFAULT 'Révision active',confidence INTEGER DEFAULT 3,notes TEXT DEFAULT '',FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE SET NULL);
         CREATE TABLE IF NOT EXISTS goals(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,category TEXT DEFAULT 'Études',target_date TEXT DEFAULT '',progress INTEGER DEFAULT 0,notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS habits(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,frequency TEXT DEFAULT 'Quotidienne',notes TEXT DEFAULT '',active INTEGER DEFAULT 1,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS habit_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,habit_id INTEGER NOT NULL,log_date TEXT NOT NULL,done INTEGER DEFAULT 1,UNIQUE(habit_id,log_date),FOREIGN KEY(habit_id) REFERENCES habits(id) ON DELETE CASCADE);
-        CREATE TABLE IF NOT EXISTS budgets(id INTEGER PRIMARY KEY AUTOINCREMENT,entry_date TEXT NOT NULL,kind TEXT NOT NULL,category TEXT DEFAULT 'Autre',amount REAL NOT NULL,description TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS budgets(id INTEGER PRIMARY KEY AUTOINCREMENT,entry_date TEXT NOT NULL,kind TEXT NOT NULL,category TEXT DEFAULT 'Autre',amount DOUBLE PRECISION NOT NULL,description TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS life_notes(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,category TEXT DEFAULT 'Personnel',content TEXT DEFAULT '',reminder_date TEXT DEFAULT '',reminder_time TEXT DEFAULT '08:00',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS contacts(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,role TEXT DEFAULT '',phone TEXT DEFAULT '',email TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS career_skills(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,category TEXT DEFAULT 'Technique',level TEXT DEFAULT 'Débutant',target_level TEXT DEFAULT 'Intermédiaire',status TEXT DEFAULT 'À apprendre',resource_url TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS career_training(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,provider TEXT DEFAULT '',kind TEXT DEFAULT 'Formation',start_date TEXT DEFAULT '',end_date TEXT DEFAULT '',status TEXT DEFAULT 'À envisager',url TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS career_opportunities(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,organization TEXT DEFAULT '',kind TEXT DEFAULT 'Stage',location TEXT DEFAULT '',deadline TEXT DEFAULT '',url TEXT DEFAULT '',status TEXT DEFAULT 'À examiner',contact TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
-        CREATE TABLE IF NOT EXISTS reminders(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            details TEXT DEFAULT '',
-            remind_at TEXT NOT NULL,
-            phone TEXT NOT NULL DEFAULT '',
-            repeat_rule TEXT DEFAULT 'Aucun',
-            enabled INTEGER DEFAULT 1,
-            status TEXT DEFAULT 'En attente',
-            last_sent_at TEXT DEFAULT '',
-            last_error TEXT DEFAULT '',
-            source_type TEXT DEFAULT '',
-            source_id INTEGER,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
+        CREATE TABLE IF NOT EXISTS reminders(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,details TEXT DEFAULT '',remind_at TEXT NOT NULL,phone TEXT NOT NULL DEFAULT '',repeat_rule TEXT DEFAULT 'Aucun',enabled INTEGER DEFAULT 1,status TEXT DEFAULT 'En attente',last_sent_at TEXT DEFAULT '',last_error TEXT DEFAULT '',source_type TEXT DEFAULT '',source_id INTEGER,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY, value TEXT DEFAULT '');
         CREATE TABLE IF NOT EXISTS assistant_docs(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,content TEXT NOT NULL,uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS productivity_projects(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,domain TEXT DEFAULT 'Personnel',status TEXT DEFAULT 'À faire',progress INTEGER DEFAULT 0,start_date TEXT DEFAULT '',due_date TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
@@ -136,15 +194,19 @@ def init_db():
         CREATE TABLE IF NOT EXISTS meeting_minutes(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,meeting_date TEXT DEFAULT '',participants TEXT DEFAULT '',summary TEXT DEFAULT '',decisions TEXT DEFAULT '',actions TEXT DEFAULT '',status TEXT DEFAULT 'À suivre',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS life_organizer(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,kind TEXT DEFAULT 'Rendez-vous',event_date TEXT DEFAULT '',event_time TEXT DEFAULT '',priority TEXT DEFAULT 'Normale',status TEXT DEFAULT 'À faire',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         """)
-init_db()
-with connect() as _conn:
-    _cols = {row['name'] for row in _conn.execute('PRAGMA table_info(reminders)').fetchall()}
-    if 'source_type' not in _cols: _conn.execute("ALTER TABLE reminders ADD COLUMN source_type TEXT DEFAULT ''")
-    if 'source_id' not in _cols: _conn.execute('ALTER TABLE reminders ADD COLUMN source_id INTEGER')
-    _conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_reminders_source ON reminders(source_type, source_id) WHERE source_type <> '' AND source_id IS NOT NULL")
-    _note_cols = {row['name'] for row in _conn.execute('PRAGMA table_info(life_notes)').fetchall()}
-    if 'reminder_date' not in _note_cols: _conn.execute("ALTER TABLE life_notes ADD COLUMN reminder_date TEXT DEFAULT ''")
-    if 'reminder_time' not in _note_cols: _conn.execute("ALTER TABLE life_notes ADD COLUMN reminder_time TEXT DEFAULT '08:00'")
+        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_reminders_source ON reminders(source_type, source_id) WHERE source_type <> '' AND source_id IS NOT NULL")
+
+with st.spinner("Connexion à Supabase et vérification automatique des tables…"):
+    try:
+        init_db()
+        # Ajouts de colonnes automatiques pour les bases déjà initialisées.
+        with connect() as _conn:
+            for table, column, definition in [("reminders","source_type","TEXT DEFAULT ''"),("reminders","source_id","INTEGER"),("life_notes","reminder_date","TEXT DEFAULT ''"),("life_notes","reminder_time","TEXT DEFAULT '08:00'")]:
+                cols = {row['name'] for row in _conn.execute(f"PRAGMA table_info({table})").fetchall()}
+                if column not in cols: _conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+    except Exception as exc:
+        st.error("Connexion ou initialisation Supabase impossible. Vérifie les paramètres PostgreSQL et les droits du compte. Détail technique : " + str(exc)[:500])
+        st.stop()
 
 DEFAULT_REMINDER_PHONE = "+221777473170"  # conservé pour compatibilité avec les anciennes bases
 
@@ -168,7 +230,7 @@ def save_setting(key, value):
     with connect() as c:
         c.execute("INSERT INTO app_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, str(value).strip()))
 
-FIXED_SENDER_EMAIL = "issayoume1801@gmail.com"
+DEFAULT_SMTP_USERNAME = "issayoume1801@gmail.com"
 
 def email_configured():
     """Vérifie les paramètres Gmail SMTP et l'adresse de réception."""
@@ -180,7 +242,7 @@ def get_recipient_email():
 def send_email(subject, body, recipient=None):
     """Envoie un e-mail par Gmail SMTP, avec STARTTLS (587) puis SSL (465) en secours."""
     host = get_config("SMTP_HOST", "smtp.gmail.com") or "smtp.gmail.com"
-    username = FIXED_SENDER_EMAIL  # adresse d’expédition fixe demandée
+    username = get_config("SMTP_USERNAME", DEFAULT_SMTP_USERNAME) or DEFAULT_SMTP_USERNAME
     password = get_config("SMTP_PASSWORD").replace(" ", "")
     sender_name = get_config("SMTP_SENDER_NAME", "Secrétaire Issa") or "Secrétaire Issa"
     recipient = (recipient or get_recipient_email()).strip()
@@ -387,7 +449,11 @@ def start_reminder_worker():
     return stop_event
 
 def read_df(sql,params=()):
-    with connect() as c: return pd.read_sql_query(sql,c,params=params)
+    with connect() as c:
+        cur = c.execute(sql, params)
+        columns = [d.name for d in cur.description] if cur.description else []
+        rows = cur.fetchall()
+        return pd.DataFrame([dict(r) for r in rows], columns=columns)
 def run(sql,params=()):
     with connect() as c: c.execute(sql,params)
 
@@ -1043,8 +1109,8 @@ elif page=="Rappels automatiques":
         st.warning('Les rappels sont préparés automatiquement, mais l’envoi nécessite les identifiants Gmail SMTP dans les Secrets Streamlit.')
     with st.expander('⚙️ Configuration Gmail gratuite (à faire une seule fois)', expanded=not bool(get_config('SMTP_PASSWORD'))):
         st.markdown('Utilise ton adresse Gmail et un **mot de passe d’application Google de 16 caractères**. Ne mets jamais ton mot de passe Gmail habituel et ne partage pas ce secret.')
-        st.code('SMTP_HOST = \"smtp.gmail.com\"\nSMTP_PORT = \"587\"\nSMTP_PASSWORD = \"mot_de_passe_application_16_caracteres\"\nSMTP_SENDER_NAME = \"Secrétaire Issa\"', language='toml')
-        st.caption('Dans Streamlit Cloud : Manage app → Settings → Secrets. L’adresse de réception des rappels se règle ci-dessus. L’adresse d’expédition est fixée à issayoume1801@gmail.com. Le code essaie STARTTLS sur le port 587 puis SSL sur le port 465 si nécessaire.')
+        st.code('SMTP_HOST = \"smtp.gmail.com\"\nSMTP_PORT = \"587\"\nSMTP_USERNAME = \"ton_adresse_gmail@gmail.com\"\nSMTP_PASSWORD = \"mot_de_passe_application_google\"\nSMTP_SENDER_NAME = \"Secrétaire Issa\"\nAPP_USERNAME = \"identifiant_de_connexion\"\nAPP_PASSWORD = \"mot_de_passe_de_connexion\"\n\nSUPABASE_DB_HOST = \"aws-1-eu-west-1.pooler.supabase.com\"\nSUPABASE_DB_PORT = \"5432\"\nSUPABASE_DB_NAME = \"postgres\"\nSUPABASE_DB_USER = \"postgres.votre_reference\"\nSUPABASE_DB_PASSWORD = \"mot_de_passe_supabase\"\n\nYOUAGRONOME_OWNER_EMAIL = \"identifiant_proprietaire\"\nYOUAGRONOME_OWNER_PASS = \"mot_de_passe_proprietaire\"', language='toml')
+        st.caption('Dans Streamlit Cloud : Manage app → Settings → Secrets. L’adresse d’expédition est lue depuis SMTP_USERNAME. L’adresse de réception des rappels se règle ci-dessus. Le code essaie STARTTLS sur le port 587 puis SSL sur le port 465 si nécessaire.')
     if st.button('🧪 Envoyer un e-mail de test', disabled=not (get_config('SMTP_PASSWORD') and get_recipient_email())):
         try:
             send_email('Test — Secrétaire Issa', 'Bonjour,\n\nCeci est un e-mail de test. Si tu le reçois, les rappels e-mail de Secrétaire Issa sont correctement configurés.')
@@ -1512,22 +1578,19 @@ elif page=="Centre de productivité XXL":
         else: st.info('Aucun rendez-vous ou démarche enregistré.')
 
 elif page=="Paramètres & sauvegarde":
-    header('PARAMÈTRES & DONNÉES','Paramètres & sauvegarde','Télécharge tes données pour garder une copie. Fais régulièrement une sauvegarde du fichier SQLite.')
-    st.warning(f'Base active : {DB_PATH}. Cette application utilise une base distincte ; ne la remplace pas par la base d’une autre application.')
+    header('PARAMÈTRES & DONNÉES','Paramètres & sauvegarde','Les données sont enregistrées dans Supabase PostgreSQL ; les tables sont vérifiées et créées automatiquement.')
+    st.success(f'Base active : Supabase PostgreSQL · { _SUPABASE_DB_HOST } · base { _SUPABASE_DB_NAME }. Les tables de l’application sont créées automatiquement au démarrage.')
     tables={'Matières':'subjects','Emploi du temps':'events','Tâches':'tasks','Ressources archivées (ancien espace)':'documents','Journal d’étude':'study_logs','Objectifs':'goals','Habitudes':'habits','Historique habitudes':'habit_logs','Budget':'budgets','Notes personnelles':'life_notes','Contacts':'contacts','Compétences':'career_skills','Formations':'career_training','Opportunités professionnelles':'career_opportunities','Rappels e-mail':'reminders','Projets du Central':'productivity_projects','Flashcards':'flashcards','Séances de concentration':'focus_sessions','Journal quotidien':'daily_journal','Comptes rendus':'meeting_minutes','Organisateur de vie':'life_organizer'}
     for label,table in tables.items():
         df=read_df(f'SELECT * FROM {table}')
         with st.expander(f'{label} — {len(df)} enregistrement(s)'):
             export_csv(df,label,table)
-    if st.button('Préparer une sauvegarde complète SQLite',type='primary'):
-        st.session_state['db_backup']=DB_PATH.read_bytes()
-    if st.session_state.get('db_backup'):
-        st.download_button('Télécharger la base complète (.db)',st.session_state['db_backup'],file_name=f'campusclair_sauvegarde_{date.today().isoformat()}.db',mime='application/octet-stream')
+    st.info('Pour une sauvegarde complète de Supabase, utilise le tableau de bord Supabase ou exporte les tables depuis les options CSV ci-dessus. Les exports CSV restent disponibles pour chaque module.')
     st.markdown('### Dépendances facultatives')
-    st.code('streamlit\npandas\nopenpyxl\nPyMuPDF',language='text')
+    st.code('streamlit\npandas\npsycopg2-binary>=2.9.9\nSpeechRecognition>=3.10.0\nstreamlit-mic-recorder>=0.0.8\nopenpyxl\nPyMuPDF\npython-docx',language='text')
     st.caption('openpyxl permet les imports Excel. PyMuPDF permet de lire le texte des PDF. L’application reste utilisable sans ces deux dépendances si tu utilises CSV et la saisie manuelle.')
 
-st.markdown('<div class="issa-footer"><strong>🗂️ Secrétaire Issa</strong><br><small>Un espace personnel de secrétariat, de suivi et d’organisation · Données stockées localement dans SQLite.</small></div>',unsafe_allow_html=True)
+st.markdown('<div class="issa-footer"><strong>🗂️ Secrétaire Issa</strong><br><small>Un espace personnel de secrétariat, de suivi et d’organisation · Données stockées dans Supabase PostgreSQL.</small></div>',unsafe_allow_html=True)
 role_icons={
     "Vue d’ensemble":"🏠", "Maquettes & matières":"🎓", "Emploi du temps":"🗓️",
     "Programmes de révision":"🎯", "Suivi & progression":"📈", "Assistant de vie":"👤", "Rappels automatiques":"🔔", "Assistant e-mail & documents":"✉️",
@@ -1535,4 +1598,4 @@ role_icons={
 }
 roles_html=''.join(f'<span class="issa-role-pill">{role_icons[p]} {PAGE_ROLE[p]}</span>' for p in PAGES)
 st.markdown(f'<div class="issa-roles"><div class="issa-roles-title">Les rôles de vos secrétaires spécialisés</div><div class="issa-role-pills">{roles_html}</div></div>',unsafe_allow_html=True)
-st.caption('Navigation disponible dans le menu supérieur · Base locale : '+DB_PATH.name)
+st.caption('Navigation disponible dans le menu supérieur · Base de données : Supabase PostgreSQL · tables créées automatiquement')
