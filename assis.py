@@ -122,47 +122,62 @@ class _PgCursor:
     def __iter__(self):
         return iter(self._rows if self._rows is not None else self._cursor)
 
+@st.cache_resource(show_spinner=False)
+def _get_pg_pool():
+    """Réutilise les connexions PostgreSQL pour réduire le temps de chargement."""
+    from psycopg2.pool import ThreadedConnectionPool
+    return ThreadedConnectionPool(
+        minconn=1, maxconn=8, host=_SUPABASE_DB_HOST,
+        port=int(_SUPABASE_DB_PORT), dbname=_SUPABASE_DB_NAME,
+        user=_SUPABASE_DB_USER, password=_SUPABASE_DB_PASSWORD,
+        sslmode="require", connect_timeout=8, application_name="SecretaireIssa"
+    )
+
 class _PgConnection:
     def __init__(self):
-        self.raw = psycopg2.connect(host=_SUPABASE_DB_HOST, port=int(_SUPABASE_DB_PORT), dbname=_SUPABASE_DB_NAME, user=_SUPABASE_DB_USER, password=_SUPABASE_DB_PASSWORD, sslmode="require", connect_timeout=15, cursor_factory=psycopg2.extras.RealDictCursor)
+        self.pool = _get_pg_pool()
+        self.raw = self.pool.getconn()
+        self._returned = False
+        try:
+            with self.raw.cursor() as cur:
+                cur.execute("SET search_path TO public")
+        except Exception:
+            self.pool.putconn(self.raw, close=True)
+            self._returned = True
+            raise
     def __enter__(self): return self
     def __exit__(self, typ, value, tb):
-        if typ is None: self.raw.commit()
-        else: self.raw.rollback()
-        self.raw.close()
+        try:
+            self.raw.commit() if typ is None else self.raw.rollback()
+        finally:
+            if not self._returned:
+                self.pool.putconn(self.raw)
+                self._returned = True
         return False
     def execute(self, sql, params=()):
         sql = sql.strip()
-        # Compatibilité ciblée avec quelques commandes SQLite encore utilisées par l'application.
         if sql.upper() == "PRAGMA FOREIGN_KEYS=ON": return _PgCursor(rows=[])
         m = re.match(r"PRAGMA table_info\((\w+)\)", sql, re.I)
         if m:
-            with self.raw.cursor() as cur:
+            with self.raw.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute("SELECT ordinal_position-1 AS cid, column_name AS name, data_type AS type, (is_nullable='NO') AS notnull, column_default AS dflt_value, (CASE WHEN column_name='id' THEN 1 ELSE 0 END) AS pk FROM information_schema.columns WHERE table_schema='public' AND table_name=%s ORDER BY ordinal_position", (m.group(1).lower(),))
                 return _PgCursor(rows=cur.fetchall())
         ignore = bool(re.search(r"INSERT\s+OR\s+IGNORE\s+INTO", sql, re.I))
         sql = re.sub(r"INSERT\s+OR\s+IGNORE\s+INTO", "INSERT INTO", sql, flags=re.I)
-        # Le remplacement est géré séparément car il est utilisé pour les pointages d'habitudes.
         replace = bool(re.search(r"INSERT\s+OR\s+REPLACE\s+INTO\s+habit_logs", sql, re.I))
         sql = re.sub(r"INSERT\s+OR\s+REPLACE\s+INTO", "INSERT INTO", sql, flags=re.I)
         sql = sql.replace("?", "%s")
-        if replace:
-            sql += " ON CONFLICT (habit_id, log_date) DO UPDATE SET done=EXCLUDED.done"
-        elif ignore:
-            sql += " ON CONFLICT DO NOTHING"
-        cur = self.raw.cursor()
+        if replace: sql += " ON CONFLICT (habit_id, log_date) DO UPDATE SET done=EXCLUDED.done"
+        elif ignore: sql += " ON CONFLICT DO NOTHING"
+        cur = self.raw.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute(sql, params or ())
         return _PgCursor(cur, rowcount=cur.rowcount)
     def executescript(self, script):
-        # Convertit le DDL de départ SQLite en DDL PostgreSQL puis crée chaque table si absente.
         script = re.sub(r"INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT", "BIGSERIAL PRIMARY KEY", script, flags=re.I)
         script = re.sub(r"REAL\b", "DOUBLE PRECISION", script, flags=re.I)
-        script = re.sub(r"INTEGER\b", "INTEGER", script, flags=re.I)
         for statement in script.split(';'):
             statement = statement.strip()
-            if statement:
-                self.execute(statement)
-
+            if statement: self.execute(statement)
 
 def connect():
     return _PgConnection()
@@ -196,16 +211,60 @@ def init_db():
         """)
         c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_reminders_source ON reminders(source_type, source_id) WHERE source_type <> '' AND source_id IS NOT NULL")
 
-with st.spinner("Connexion à Supabase et vérification automatique des tables…"):
+_APP_SCHEMA_DDL = "\n        CREATE TABLE IF NOT EXISTS subjects(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,code TEXT DEFAULT '',semester TEXT DEFAULT '',ue TEXT DEFAULT '',ue_code TEXT DEFAULT '',credits REAL DEFAULT 0,cm REAL DEFAULT 0,td REAL DEFAULT 0,tp REAL DEFAULT 0,tpe REAL DEFAULT 0,vht REAL DEFAULT 0,teacher TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,event_date TEXT NOT NULL,start_time TEXT DEFAULT '',end_time TEXT DEFAULT '',kind TEXT DEFAULT 'Cours',subject_id INTEGER,location TEXT DEFAULT '',notes TEXT DEFAULT '',source TEXT DEFAULT 'Saisie manuelle',created_at TEXT DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE SET NULL);\n        CREATE TABLE IF NOT EXISTS tasks(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,due_date TEXT DEFAULT '',priority TEXT DEFAULT 'Normale',status TEXT DEFAULT 'À faire',category TEXT DEFAULT 'Travail personnel',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS documents(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,category TEXT DEFAULT 'Autre',url TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS study_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,subject_id INTEGER,study_date TEXT NOT NULL,hours DOUBLE PRECISION NOT NULL,method TEXT DEFAULT 'Révision active',confidence INTEGER DEFAULT 3,notes TEXT DEFAULT '',FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE SET NULL);\n        CREATE TABLE IF NOT EXISTS goals(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,category TEXT DEFAULT 'Études',target_date TEXT DEFAULT '',progress INTEGER DEFAULT 0,notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS habits(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,frequency TEXT DEFAULT 'Quotidienne',notes TEXT DEFAULT '',active INTEGER DEFAULT 1,created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS habit_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,habit_id INTEGER NOT NULL,log_date TEXT NOT NULL,done INTEGER DEFAULT 1,UNIQUE(habit_id,log_date),FOREIGN KEY(habit_id) REFERENCES habits(id) ON DELETE CASCADE);\n        CREATE TABLE IF NOT EXISTS budgets(id INTEGER PRIMARY KEY AUTOINCREMENT,entry_date TEXT NOT NULL,kind TEXT NOT NULL,category TEXT DEFAULT 'Autre',amount DOUBLE PRECISION NOT NULL,description TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS life_notes(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,category TEXT DEFAULT 'Personnel',content TEXT DEFAULT '',reminder_date TEXT DEFAULT '',reminder_time TEXT DEFAULT '08:00',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS contacts(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,role TEXT DEFAULT '',phone TEXT DEFAULT '',email TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS career_skills(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,category TEXT DEFAULT 'Technique',level TEXT DEFAULT 'Débutant',target_level TEXT DEFAULT 'Intermédiaire',status TEXT DEFAULT 'À apprendre',resource_url TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS career_training(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,provider TEXT DEFAULT '',kind TEXT DEFAULT 'Formation',start_date TEXT DEFAULT '',end_date TEXT DEFAULT '',status TEXT DEFAULT 'À envisager',url TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS career_opportunities(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,organization TEXT DEFAULT '',kind TEXT DEFAULT 'Stage',location TEXT DEFAULT '',deadline TEXT DEFAULT '',url TEXT DEFAULT '',status TEXT DEFAULT 'À examiner',contact TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS reminders(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,details TEXT DEFAULT '',remind_at TEXT NOT NULL,phone TEXT NOT NULL DEFAULT '',repeat_rule TEXT DEFAULT 'Aucun',enabled INTEGER DEFAULT 1,status TEXT DEFAULT 'En attente',last_sent_at TEXT DEFAULT '',last_error TEXT DEFAULT '',source_type TEXT DEFAULT '',source_id INTEGER,created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY, value TEXT DEFAULT '');\n        CREATE TABLE IF NOT EXISTS assistant_docs(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,content TEXT NOT NULL,uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS productivity_projects(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,domain TEXT DEFAULT 'Personnel',status TEXT DEFAULT 'À faire',progress INTEGER DEFAULT 0,start_date TEXT DEFAULT '',due_date TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS flashcards(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,front TEXT NOT NULL,back TEXT NOT NULL,category TEXT DEFAULT 'Études',mastery INTEGER DEFAULT 0,created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS focus_sessions(id INTEGER PRIMARY KEY AUTOINCREMENT,session_date TEXT NOT NULL,duration_minutes INTEGER NOT NULL,activity TEXT DEFAULT 'Étude',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS daily_journal(id INTEGER PRIMARY KEY AUTOINCREMENT,entry_date TEXT NOT NULL UNIQUE,mood TEXT DEFAULT '',energy INTEGER DEFAULT 3,successes TEXT DEFAULT '',improvements TEXT DEFAULT '',tomorrow_priorities TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS meeting_minutes(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,meeting_date TEXT DEFAULT '',participants TEXT DEFAULT '',summary TEXT DEFAULT '',decisions TEXT DEFAULT '',actions TEXT DEFAULT '',status TEXT DEFAULT 'À suivre',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS life_organizer(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,kind TEXT DEFAULT 'Rendez-vous',event_date TEXT DEFAULT '',event_time TEXT DEFAULT '',priority TEXT DEFAULT 'Normale',status TEXT DEFAULT 'À faire',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        "
+
+def _split_schema_columns(body):
+    parts, start, depth, quoted = [], 0, 0, False
+    for i, ch in enumerate(body):
+        if ch == "'": quoted = not quoted
+        elif not quoted and ch == "(": depth += 1
+        elif not quoted and ch == ")": depth -= 1
+        elif not quoted and depth == 0 and ch == ",":
+            parts.append(body[start:i].strip()); start = i + 1
+    tail = body[start:].strip()
+    if tail: parts.append(tail)
+    return parts
+
+def _ensure_app_schema():
+    """Crée toutes les tables requises et ajoute les colonnes manquantes sans effacer de données."""
+    # init_db a déjà lancé les CREATE TABLE IF NOT EXISTS. On compare ensuite chaque table à son DDL.
+    definitions = {}
+    for statement in _APP_SCHEMA_DDL.split(";"):
+        match = re.search(r"CREATE TABLE IF NOT EXISTS\s+(\w+)\s*\((.*)\)\s*$", statement.strip(), re.I | re.S)
+        if not match: continue
+        table, body = match.group(1), match.group(2)
+        columns = []
+        for part in _split_schema_columns(body):
+            tokens = part.split(None, 1)
+            if not tokens: continue
+            name = tokens[0].strip('"')
+            if name.upper() in {"PRIMARY", "FOREIGN", "UNIQUE", "CONSTRAINT", "CHECK"}: continue
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name): continue
+            definition = re.sub(r"INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT", "BIGSERIAL PRIMARY KEY", part, flags=re.I)
+            definition = re.sub(r"REAL\b", "DOUBLE PRECISION", definition, flags=re.I)
+            columns.append((name, definition))
+        definitions[table] = columns
+    with connect() as c:
+        for table, columns in definitions.items():
+            present = {row["name"] for row in c.execute(f"PRAGMA table_info({table})").fetchall()}
+            for column, definition in columns:
+                if column not in present:
+                    # La table existe déjà : on ajoute seulement la colonne absente, sans toucher aux lignes.
+                    safe_definition = re.sub(r"\s+PRIMARY\s+KEY", "", definition, flags=re.I)
+                    c.execute(f"ALTER TABLE {table} ADD COLUMN {safe_definition}")
+        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_reminders_source ON reminders(source_type, source_id) WHERE source_type <> '' AND source_id IS NOT NULL")
+    expected = set(definitions)
+    with connect() as c:
+        found = {r["name"] for r in c.execute("SELECT table_name AS name FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'").fetchall()}
+    missing = sorted(expected - found)
+    if missing: raise RuntimeError("Tables absentes après initialisation : " + ", ".join(missing))
+
+with st.spinner("Initialisation et vérification de la base Supabase…"):
     try:
         init_db()
-        # Ajouts de colonnes automatiques pour les bases déjà initialisées.
-        with connect() as _conn:
-            for table, column, definition in [("reminders","source_type","TEXT DEFAULT ''"),("reminders","source_id","INTEGER"),("life_notes","reminder_date","TEXT DEFAULT ''"),("life_notes","reminder_time","TEXT DEFAULT '08:00'")]:
-                cols = {row['name'] for row in _conn.execute(f"PRAGMA table_info({table})").fetchall()}
-                if column not in cols: _conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+        _ensure_app_schema()
     except Exception as exc:
-        st.error("Connexion ou initialisation Supabase impossible. Vérifie les paramètres PostgreSQL et les droits du compte. Détail technique : " + str(exc)[:500])
+        st.error("Initialisation Supabase impossible. Aucune table existante n'a été supprimée. Vérifie les Secrets et les droits de création/modification des tables. Détail technique : " + str(exc)[:700])
         st.stop()
 
 DEFAULT_REMINDER_PHONE = "+221777473170"  # conservé pour compatibilité avec les anciennes bases
