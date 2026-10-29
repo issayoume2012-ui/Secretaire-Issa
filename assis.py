@@ -1,6 +1,6 @@
 """Secrétaire Issa — assistant personnel avec rappels automatiques par Gmail.
 Lancement : python -m streamlit run CampusClair_XXL.py
-Base principale : SQLite locale (campus_clair.db), avec création automatique des tables.
+Base SQLite locale séparée : campus_clair.db
 Dépendances : streamlit, pandas, speechrecognition, openpyxl (facultatif), PyMuPDF (PDF), python-docx (DOCX).
 """
 from pathlib import Path
@@ -58,7 +58,7 @@ div[role="radiogroup"] label:has(input:checked){{background:#eaf2ff;border-color
 @media(max-width:700px){{.issa-brand{{padding:20px;border-radius:18px}}.cc-hero{{padding:18px}}.block-container{{padding-left:1rem;padding-right:1rem}}div[role="radiogroup"] label{{padding:6px 8px!important;font-size:.8rem}}}}
 </style>""", unsafe_allow_html=True)
 
-# ---------- Configuration et authentification ----------
+# ---------- Secrets : connexion Supabase PostgreSQL et authentification ----------
 def secret_value(name, default=""):
     try:
         value = st.secrets.get(name, default)
@@ -69,10 +69,27 @@ def secret_value(name, default=""):
 # Les noms YOUAGRONOME_* sont conservés tels que fournis ; les anciens APP_* restent acceptés.
 _AUTH_USER = secret_value("YOUAGRONOME_OWNER_EMAIL") or secret_value("APP_USERNAME")
 _AUTH_PASS = secret_value("YOUAGRONOME_OWNER_PASS") or secret_value("APP_PASSWORD")
-# La base est entièrement locale : aucune configuration Supabase/PostgreSQL n’est nécessaire.
+# Le projet Supabase fourni est prérempli pour éviter les erreurs de référence.
+# Le mot de passe reste dans Streamlit Secrets / variable d’environnement, jamais dans le code.
+_SUPABASE_DB_HOST = secret_value("SUPABASE_DB_HOST", "aws-0-eu-west-1.pooler.supabase.com")
+_SUPABASE_DB_PORT = secret_value("SUPABASE_DB_PORT", "5432")
+_SUPABASE_DB_NAME = secret_value("SUPABASE_DB_NAME", "postgres")
+_SUPABASE_DB_USER = secret_value("SUPABASE_DB_USER", "postgres.sruhwwoaasctnzeckrct")
+_SUPABASE_DB_PASSWORD = secret_value("SUPABASE_DB_PASSWORD")
+_USE_SUPABASE = all((_SUPABASE_DB_HOST, _SUPABASE_DB_PORT, _SUPABASE_DB_NAME, _SUPABASE_DB_USER, _SUPABASE_DB_PASSWORD))
 if not _AUTH_USER or not _AUTH_PASS:
     st.error("🔐 Accès non configuré. Ajoute YOUAGRONOME_OWNER_EMAIL et YOUAGRONOME_OWNER_PASS (ou APP_USERNAME et APP_PASSWORD) dans Streamlit → Settings → Secrets.")
     st.code('YOUAGRONOME_OWNER_EMAIL = "identifiant_prive"\nYOUAGRONOME_OWNER_PASS = "mot_de_passe_long_et_unique"', language="toml")
+    st.stop()
+if not _USE_SUPABASE:
+    st.error("Le projet Supabase est préconfiguré (hôte, port, base et utilisateur), mais le mot de passe PostgreSQL manque. Dans Streamlit Cloud → Manage app → Settings → Secrets, ajoute uniquement SUPABASE_DB_PASSWORD avec le mot de passe PostgreSQL de ce projet, puis redémarre l’application. Le mot de passe n’est volontairement pas écrit en clair dans le fichier Python.")
+    st.code('SUPABASE_DB_PASSWORD = "COLLE_ICI_LE_MOT_DE_PASSE_POSTGRESQL"', language="toml")
+    st.stop()
+try:
+    import psycopg2
+    import psycopg2.extras
+except ImportError:
+    st.error("Dépendance manquante : ajoute psycopg2-binary à requirements.txt puis redéploie l'application.")
     st.stop()
 if "issa_authenticated" not in st.session_state:
     st.session_state["issa_authenticated"] = False
@@ -91,97 +108,113 @@ if not st.session_state["issa_authenticated"]:
     st.stop()
 
 # ---------- Base Supabase PostgreSQL : connexion et création automatique des tables ----------
-# Les identifiants doivent être définis dans Streamlit Cloud > Settings > Secrets.
-# Ne jamais inscrire le mot de passe directement dans ce fichier.
-import psycopg2
-from psycopg2.extras import RealDictCursor
+DB_PATH = APP_DIR / "campus_clair.db"  # conservé uniquement pour compatibilité d'affichage/anciennes sauvegardes
 
-DB_PATH = APP_DIR / "campus_clair.db"  # ancienne base SQLite, source facultative de migration
-
-class _PGCursor:
-    def __init__(self, cursor): self._cursor = cursor
+class _PgCursor:
+    def __init__(self, cursor=None, rows=None, rowcount=-1):
+        self._cursor, self._rows, self.rowcount = cursor, rows, rowcount
     @property
-    def description(self): return self._cursor.description
-    @property
-    def rowcount(self): return self._cursor.rowcount
-    def fetchall(self): return self._cursor.fetchall()
-    def fetchone(self): return self._cursor.fetchone()
+    def description(self):
+        return self._cursor.description if self._cursor is not None else None
+    def fetchall(self):
+        return self._rows if self._rows is not None else self._cursor.fetchall()
+    def fetchone(self):
+        if self._rows is not None:
+            return self._rows.pop(0) if self._rows else None
+        return self._cursor.fetchone()
+    def __iter__(self):
+        return iter(self._rows if self._rows is not None else self._cursor)
 
-class _PGConnection:
-    """Adaptateur conservant la plupart des appels SQLite de l'application."""
+@st.cache_resource(show_spinner=False)
+def _get_pg_pool():
+    """Réutilise les connexions PostgreSQL pour réduire le temps de chargement."""
+    from psycopg2.pool import ThreadedConnectionPool
+    return ThreadedConnectionPool(
+        minconn=1, maxconn=8, host=_SUPABASE_DB_HOST,
+        port=int(_SUPABASE_DB_PORT), dbname=_SUPABASE_DB_NAME,
+        user=_SUPABASE_DB_USER, password=_SUPABASE_DB_PASSWORD,
+        sslmode="require", connect_timeout=8, application_name="SecretaireIssa"
+    )
+
+class _PgConnection:
     def __init__(self):
-        host = secret_value("SUPABASE_DB_HOST")
-        port = secret_value("SUPABASE_DB_PORT", "5432")
-        dbname = secret_value("SUPABASE_DB_NAME", "postgres")
-        user = secret_value("SUPABASE_DB_USER")
-        password = secret_value("SUPABASE_DB_PASSWORD")
-        if not all((host, port, dbname, user, password)):
-            raise RuntimeError("Configuration Supabase incomplète : définis SUPABASE_DB_HOST, SUPABASE_DB_PORT, SUPABASE_DB_NAME, SUPABASE_DB_USER et SUPABASE_DB_PASSWORD dans Streamlit Secrets.")
-        self.raw = psycopg2.connect(host=host, port=int(port), dbname=dbname, user=user, password=password,
-                                    connect_timeout=15, sslmode="require", cursor_factory=RealDictCursor,
-                                    application_name="secretaire-issa")
-        self.raw.autocommit = False
-    def _sql(self, sql):
-        sql = sql.strip()
-        ignore_insert = bool(re.match(r"^INSERT\s+OR\s+IGNORE\s+INTO", sql, re.I))
-        if ignore_insert:
-            sql = re.sub(r"^INSERT\s+OR\s+IGNORE\s+INTO", "INSERT INTO", sql, flags=re.I)
-            sql += " ON CONFLICT DO NOTHING"
-        # SQLite REPLACE utilisé uniquement pour la clé unique (habit_id, log_date).
-        if re.match(r"^INSERT\s+OR\s+REPLACE\s+INTO\s+habit_logs", sql, re.I):
-            sql = re.sub(r"^INSERT\s+OR\s+REPLACE\s+INTO", "INSERT INTO", sql, flags=re.I)
-            sql += " ON CONFLICT (habit_id, log_date) DO UPDATE SET done=EXCLUDED.done"
-        sql = sql.replace("?", "%s")
-        return sql
-    def execute(self, sql, params=()):
-        cur = self.raw.cursor()
-        cur.execute(self._sql(sql), params or ())
-        return _PGCursor(cur)
-    def executescript(self, script):
-        cur = self.raw.cursor()
-        for statement in script.split(";"):
-            statement = statement.strip()
-            if statement: cur.execute(self._sql(statement))
-        return _PGCursor(cur)
-    def __enter__(self): return self
-    def __exit__(self, exc_type, exc, tb):
+        self.pool = _get_pg_pool()
+        self.raw = self.pool.getconn()
+        self._returned = False
         try:
-            if exc_type is None: self.raw.commit()
-            else: self.raw.rollback()
-        finally: self.raw.close()
+            with self.raw.cursor() as cur:
+                cur.execute("SET search_path TO public")
+        except Exception:
+            self.pool.putconn(self.raw, close=True)
+            self._returned = True
+            raise
+    def __enter__(self): return self
+    def __exit__(self, typ, value, tb):
+        try:
+            self.raw.commit() if typ is None else self.raw.rollback()
+        finally:
+            if not self._returned:
+                self.pool.putconn(self.raw)
+                self._returned = True
         return False
+    def execute(self, sql, params=()):
+        sql = sql.strip()
+        if sql.upper() == "PRAGMA FOREIGN_KEYS=ON": return _PgCursor(rows=[])
+        m = re.match(r"PRAGMA table_info\((\w+)\)", sql, re.I)
+        if m:
+            with self.raw.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("SELECT ordinal_position-1 AS cid, column_name AS name, data_type AS type, (is_nullable='NO') AS notnull, column_default AS dflt_value, (CASE WHEN column_name='id' THEN 1 ELSE 0 END) AS pk FROM information_schema.columns WHERE table_schema='public' AND table_name=%s ORDER BY ordinal_position", (m.group(1).lower(),))
+                return _PgCursor(rows=cur.fetchall())
+        ignore = bool(re.search(r"INSERT\s+OR\s+IGNORE\s+INTO", sql, re.I))
+        sql = re.sub(r"INSERT\s+OR\s+IGNORE\s+INTO", "INSERT INTO", sql, flags=re.I)
+        replace = bool(re.search(r"INSERT\s+OR\s+REPLACE\s+INTO\s+habit_logs", sql, re.I))
+        sql = re.sub(r"INSERT\s+OR\s+REPLACE\s+INTO", "INSERT INTO", sql, flags=re.I)
+        sql = sql.replace("?", "%s")
+        if replace: sql += " ON CONFLICT (habit_id, log_date) DO UPDATE SET done=EXCLUDED.done"
+        elif ignore: sql += " ON CONFLICT DO NOTHING"
+        cur = self.raw.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(sql, params or ())
+        return _PgCursor(cur, rowcount=cur.rowcount)
+    def executescript(self, script):
+        script = re.sub(r"INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT", "BIGSERIAL PRIMARY KEY", script, flags=re.I)
+        script = re.sub(r"REAL\b", "DOUBLE PRECISION", script, flags=re.I)
+        for statement in script.split(';'):
+            statement = statement.strip()
+            if statement: self.execute(statement)
 
 def connect():
-    """Ouvre une connexion PostgreSQL Supabase avec des lignes accessibles par nom."""
-    return _PGConnection()
-
-def _pg_ddl(statement):
-    """Convertit le DDL historique SQLite vers PostgreSQL."""
-    statement = re.sub(r"INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT", "BIGSERIAL PRIMARY KEY", statement, flags=re.I)
-    statement = re.sub(r"\bREAL\b", "DOUBLE PRECISION", statement, flags=re.I)
-    statement = re.sub(r"\bINSERT\s+OR\s+IGNORE\b", "INSERT", statement, flags=re.I)
-    return statement
-
-_APP_SCHEMA_DDL = "\n        CREATE TABLE IF NOT EXISTS subjects(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,code TEXT DEFAULT '',semester TEXT DEFAULT '',ue TEXT DEFAULT '',ue_code TEXT DEFAULT '',credits REAL DEFAULT 0,cm REAL DEFAULT 0,td REAL DEFAULT 0,tp REAL DEFAULT 0,tpe REAL DEFAULT 0,vht REAL DEFAULT 0,teacher TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,event_date TEXT NOT NULL,start_time TEXT DEFAULT '',end_time TEXT DEFAULT '',kind TEXT DEFAULT 'Cours',subject_id INTEGER,location TEXT DEFAULT '',notes TEXT DEFAULT '',source TEXT DEFAULT 'Saisie manuelle',created_at TEXT DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE SET NULL);\n        CREATE TABLE IF NOT EXISTS tasks(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,due_date TEXT DEFAULT '',priority TEXT DEFAULT 'Normale',status TEXT DEFAULT 'À faire',category TEXT DEFAULT 'Travail personnel',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS documents(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,category TEXT DEFAULT 'Autre',url TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS study_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,subject_id INTEGER,study_date TEXT NOT NULL,hours REAL NOT NULL,method TEXT DEFAULT 'Révision active',confidence INTEGER DEFAULT 3,notes TEXT DEFAULT '',FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE SET NULL);\n        CREATE TABLE IF NOT EXISTS goals(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,category TEXT DEFAULT 'Études',target_date TEXT DEFAULT '',progress INTEGER DEFAULT 0,notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS habits(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,frequency TEXT DEFAULT 'Quotidienne',notes TEXT DEFAULT '',active INTEGER DEFAULT 1,created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS habit_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,habit_id INTEGER NOT NULL,log_date TEXT NOT NULL,done INTEGER DEFAULT 1,UNIQUE(habit_id,log_date),FOREIGN KEY(habit_id) REFERENCES habits(id) ON DELETE CASCADE);\n        CREATE TABLE IF NOT EXISTS budgets(id INTEGER PRIMARY KEY AUTOINCREMENT,entry_date TEXT NOT NULL,kind TEXT NOT NULL,category TEXT DEFAULT 'Autre',amount REAL NOT NULL,description TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS life_notes(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,category TEXT DEFAULT 'Personnel',content TEXT DEFAULT '',reminder_date TEXT DEFAULT '',reminder_time TEXT DEFAULT '08:00',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS contacts(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,role TEXT DEFAULT '',phone TEXT DEFAULT '',email TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS career_skills(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,category TEXT DEFAULT 'Technique',level TEXT DEFAULT 'Débutant',target_level TEXT DEFAULT 'Intermédiaire',status TEXT DEFAULT 'À apprendre',resource_url TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS career_training(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,provider TEXT DEFAULT '',kind TEXT DEFAULT 'Formation',start_date TEXT DEFAULT '',end_date TEXT DEFAULT '',status TEXT DEFAULT 'À envisager',url TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS career_opportunities(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,organization TEXT DEFAULT '',kind TEXT DEFAULT 'Stage',location TEXT DEFAULT '',deadline TEXT DEFAULT '',url TEXT DEFAULT '',status TEXT DEFAULT 'À examiner',contact TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS reminders(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,details TEXT DEFAULT '',remind_at TEXT NOT NULL,phone TEXT NOT NULL DEFAULT '',repeat_rule TEXT DEFAULT 'Aucun',enabled INTEGER DEFAULT 1,status TEXT DEFAULT 'En attente',last_sent_at TEXT DEFAULT '',last_error TEXT DEFAULT '',source_type TEXT DEFAULT '',source_id INTEGER,created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY, value TEXT DEFAULT '');\n        CREATE TABLE IF NOT EXISTS assistant_docs(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,content TEXT NOT NULL,uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS productivity_projects(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,domain TEXT DEFAULT 'Personnel',status TEXT DEFAULT 'À faire',progress INTEGER DEFAULT 0,start_date TEXT DEFAULT '',due_date TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS flashcards(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,front TEXT NOT NULL,back TEXT NOT NULL,category TEXT DEFAULT 'Études',mastery INTEGER DEFAULT 0,created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS focus_sessions(id INTEGER PRIMARY KEY AUTOINCREMENT,session_date TEXT NOT NULL,duration_minutes INTEGER NOT NULL,activity TEXT DEFAULT 'Étude',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS daily_journal(id INTEGER PRIMARY KEY AUTOINCREMENT,entry_date TEXT NOT NULL UNIQUE,mood TEXT DEFAULT '',energy INTEGER DEFAULT 3,successes TEXT DEFAULT '',improvements TEXT DEFAULT '',tomorrow_priorities TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS meeting_minutes(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,meeting_date TEXT DEFAULT '',participants TEXT DEFAULT '',summary TEXT DEFAULT '',decisions TEXT DEFAULT '',actions TEXT DEFAULT '',status TEXT DEFAULT 'À suivre',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS life_organizer(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,kind TEXT DEFAULT 'Rendez-vous',event_date TEXT DEFAULT '',event_time TEXT DEFAULT '',priority TEXT DEFAULT 'Normale',status TEXT DEFAULT 'À faire',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        "
+    return _PgConnection()
 
 def init_db():
-    # Le schéma est extrait du DDL unique pour créer toutes les tables automatiquement.
     with connect() as c:
-        for statement in _APP_SCHEMA_DDL.split(";"):
-            statement = statement.strip()
-            if statement:
-                c.execute(_pg_ddl(statement))
+        c.executescript("""
+        CREATE TABLE IF NOT EXISTS subjects(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,code TEXT DEFAULT '',semester TEXT DEFAULT '',ue TEXT DEFAULT '',ue_code TEXT DEFAULT '',credits REAL DEFAULT 0,cm REAL DEFAULT 0,td REAL DEFAULT 0,tp REAL DEFAULT 0,tpe REAL DEFAULT 0,vht REAL DEFAULT 0,teacher TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,event_date TEXT NOT NULL,start_time TEXT DEFAULT '',end_time TEXT DEFAULT '',kind TEXT DEFAULT 'Cours',subject_id INTEGER,location TEXT DEFAULT '',notes TEXT DEFAULT '',source TEXT DEFAULT 'Saisie manuelle',created_at TEXT DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE SET NULL);
+        CREATE TABLE IF NOT EXISTS tasks(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,due_date TEXT DEFAULT '',priority TEXT DEFAULT 'Normale',status TEXT DEFAULT 'À faire',category TEXT DEFAULT 'Travail personnel',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS documents(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,category TEXT DEFAULT 'Autre',url TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS study_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,subject_id INTEGER,study_date TEXT NOT NULL,hours DOUBLE PRECISION NOT NULL,method TEXT DEFAULT 'Révision active',confidence INTEGER DEFAULT 3,notes TEXT DEFAULT '',FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE SET NULL);
+        CREATE TABLE IF NOT EXISTS goals(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,category TEXT DEFAULT 'Études',target_date TEXT DEFAULT '',progress INTEGER DEFAULT 0,notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS habits(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,frequency TEXT DEFAULT 'Quotidienne',notes TEXT DEFAULT '',active INTEGER DEFAULT 1,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS habit_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,habit_id INTEGER NOT NULL,log_date TEXT NOT NULL,done INTEGER DEFAULT 1,UNIQUE(habit_id,log_date),FOREIGN KEY(habit_id) REFERENCES habits(id) ON DELETE CASCADE);
+        CREATE TABLE IF NOT EXISTS budgets(id INTEGER PRIMARY KEY AUTOINCREMENT,entry_date TEXT NOT NULL,kind TEXT NOT NULL,category TEXT DEFAULT 'Autre',amount DOUBLE PRECISION NOT NULL,description TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS life_notes(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,category TEXT DEFAULT 'Personnel',content TEXT DEFAULT '',reminder_date TEXT DEFAULT '',reminder_time TEXT DEFAULT '08:00',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS contacts(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,role TEXT DEFAULT '',phone TEXT DEFAULT '',email TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS career_skills(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,category TEXT DEFAULT 'Technique',level TEXT DEFAULT 'Débutant',target_level TEXT DEFAULT 'Intermédiaire',status TEXT DEFAULT 'À apprendre',resource_url TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS career_training(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,provider TEXT DEFAULT '',kind TEXT DEFAULT 'Formation',start_date TEXT DEFAULT '',end_date TEXT DEFAULT '',status TEXT DEFAULT 'À envisager',url TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS career_opportunities(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,organization TEXT DEFAULT '',kind TEXT DEFAULT 'Stage',location TEXT DEFAULT '',deadline TEXT DEFAULT '',url TEXT DEFAULT '',status TEXT DEFAULT 'À examiner',contact TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS reminders(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,details TEXT DEFAULT '',remind_at TEXT NOT NULL,phone TEXT NOT NULL DEFAULT '',repeat_rule TEXT DEFAULT 'Aucun',enabled INTEGER DEFAULT 1,status TEXT DEFAULT 'En attente',last_sent_at TEXT DEFAULT '',last_error TEXT DEFAULT '',source_type TEXT DEFAULT '',source_id INTEGER,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY, value TEXT DEFAULT '');
+        CREATE TABLE IF NOT EXISTS assistant_docs(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,content TEXT NOT NULL,uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS productivity_projects(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,domain TEXT DEFAULT 'Personnel',status TEXT DEFAULT 'À faire',progress INTEGER DEFAULT 0,start_date TEXT DEFAULT '',due_date TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS flashcards(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,front TEXT NOT NULL,back TEXT NOT NULL,category TEXT DEFAULT 'Études',mastery INTEGER DEFAULT 0,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS focus_sessions(id INTEGER PRIMARY KEY AUTOINCREMENT,session_date TEXT NOT NULL,duration_minutes INTEGER NOT NULL,activity TEXT DEFAULT 'Étude',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS daily_journal(id INTEGER PRIMARY KEY AUTOINCREMENT,entry_date TEXT NOT NULL UNIQUE,mood TEXT DEFAULT '',energy INTEGER DEFAULT 3,successes TEXT DEFAULT '',improvements TEXT DEFAULT '',tomorrow_priorities TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS meeting_minutes(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,meeting_date TEXT DEFAULT '',participants TEXT DEFAULT '',summary TEXT DEFAULT '',decisions TEXT DEFAULT '',actions TEXT DEFAULT '',status TEXT DEFAULT 'À suivre',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS life_organizer(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,kind TEXT DEFAULT 'Rendez-vous',event_date TEXT DEFAULT '',event_time TEXT DEFAULT '',priority TEXT DEFAULT 'Normale',status TEXT DEFAULT 'À faire',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        """)
         c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_reminders_source ON reminders(source_type, source_id) WHERE source_type <> '' AND source_id IS NOT NULL")
 
-def _migration_fallback(table, column, definition):
-    col = column.lower()
-    if col == "name" and table == "contacts": return "Contact sans nom"
-    if col in {"title", "name"}: return "Élément importé"
-    if col in {"content", "front", "back", "summary", "details", "notes", "description"}: return ""
-    if col in {"event_date", "study_date", "entry_date", "session_date", "log_date", "remind_at"}: return "2000-01-01"
-    if col in {"hours", "amount", "duration_minutes", "habit_id", "subject_id", "progress", "energy", "confidence", "credits", "cm", "td", "tp", "tpe", "vht"}: return "0"
-    if re.search(r"\b(INTEGER|BIGINT|SMALLINT|REAL|DOUBLE|NUMERIC|DECIMAL|SERIAL)\b", definition, re.I): return "0"
-    return ""
+_APP_SCHEMA_DDL = "\n        CREATE TABLE IF NOT EXISTS subjects(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,code TEXT DEFAULT '',semester TEXT DEFAULT '',ue TEXT DEFAULT '',ue_code TEXT DEFAULT '',credits REAL DEFAULT 0,cm REAL DEFAULT 0,td REAL DEFAULT 0,tp REAL DEFAULT 0,tpe REAL DEFAULT 0,vht REAL DEFAULT 0,teacher TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,event_date TEXT NOT NULL,start_time TEXT DEFAULT '',end_time TEXT DEFAULT '',kind TEXT DEFAULT 'Cours',subject_id INTEGER,location TEXT DEFAULT '',notes TEXT DEFAULT '',source TEXT DEFAULT 'Saisie manuelle',created_at TEXT DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE SET NULL);\n        CREATE TABLE IF NOT EXISTS tasks(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,due_date TEXT DEFAULT '',priority TEXT DEFAULT 'Normale',status TEXT DEFAULT 'À faire',category TEXT DEFAULT 'Travail personnel',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS documents(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,category TEXT DEFAULT 'Autre',url TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS study_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,subject_id INTEGER,study_date TEXT NOT NULL,hours DOUBLE PRECISION NOT NULL,method TEXT DEFAULT 'Révision active',confidence INTEGER DEFAULT 3,notes TEXT DEFAULT '',FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE SET NULL);\n        CREATE TABLE IF NOT EXISTS goals(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,category TEXT DEFAULT 'Études',target_date TEXT DEFAULT '',progress INTEGER DEFAULT 0,notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS habits(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,frequency TEXT DEFAULT 'Quotidienne',notes TEXT DEFAULT '',active INTEGER DEFAULT 1,created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS habit_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,habit_id INTEGER NOT NULL,log_date TEXT NOT NULL,done INTEGER DEFAULT 1,UNIQUE(habit_id,log_date),FOREIGN KEY(habit_id) REFERENCES habits(id) ON DELETE CASCADE);\n        CREATE TABLE IF NOT EXISTS budgets(id INTEGER PRIMARY KEY AUTOINCREMENT,entry_date TEXT NOT NULL,kind TEXT NOT NULL,category TEXT DEFAULT 'Autre',amount DOUBLE PRECISION NOT NULL,description TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS life_notes(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,category TEXT DEFAULT 'Personnel',content TEXT DEFAULT '',reminder_date TEXT DEFAULT '',reminder_time TEXT DEFAULT '08:00',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS contacts(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,role TEXT DEFAULT '',phone TEXT DEFAULT '',email TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS career_skills(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,category TEXT DEFAULT 'Technique',level TEXT DEFAULT 'Débutant',target_level TEXT DEFAULT 'Intermédiaire',status TEXT DEFAULT 'À apprendre',resource_url TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS career_training(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,provider TEXT DEFAULT '',kind TEXT DEFAULT 'Formation',start_date TEXT DEFAULT '',end_date TEXT DEFAULT '',status TEXT DEFAULT 'À envisager',url TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS career_opportunities(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,organization TEXT DEFAULT '',kind TEXT DEFAULT 'Stage',location TEXT DEFAULT '',deadline TEXT DEFAULT '',url TEXT DEFAULT '',status TEXT DEFAULT 'À examiner',contact TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS reminders(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,details TEXT DEFAULT '',remind_at TEXT NOT NULL,phone TEXT NOT NULL DEFAULT '',repeat_rule TEXT DEFAULT 'Aucun',enabled INTEGER DEFAULT 1,status TEXT DEFAULT 'En attente',last_sent_at TEXT DEFAULT '',last_error TEXT DEFAULT '',source_type TEXT DEFAULT '',source_id INTEGER,created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY, value TEXT DEFAULT '');\n        CREATE TABLE IF NOT EXISTS assistant_docs(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,content TEXT NOT NULL,uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS productivity_projects(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,domain TEXT DEFAULT 'Personnel',status TEXT DEFAULT 'À faire',progress INTEGER DEFAULT 0,start_date TEXT DEFAULT '',due_date TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS flashcards(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,front TEXT NOT NULL,back TEXT NOT NULL,category TEXT DEFAULT 'Études',mastery INTEGER DEFAULT 0,created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS focus_sessions(id INTEGER PRIMARY KEY AUTOINCREMENT,session_date TEXT NOT NULL,duration_minutes INTEGER NOT NULL,activity TEXT DEFAULT 'Étude',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS daily_journal(id INTEGER PRIMARY KEY AUTOINCREMENT,entry_date TEXT NOT NULL UNIQUE,mood TEXT DEFAULT '',energy INTEGER DEFAULT 3,successes TEXT DEFAULT '',improvements TEXT DEFAULT '',tomorrow_priorities TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS meeting_minutes(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,meeting_date TEXT DEFAULT '',participants TEXT DEFAULT '',summary TEXT DEFAULT '',decisions TEXT DEFAULT '',actions TEXT DEFAULT '',status TEXT DEFAULT 'À suivre',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS life_organizer(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,kind TEXT DEFAULT 'Rendez-vous',event_date TEXT DEFAULT '',event_time TEXT DEFAULT '',priority TEXT DEFAULT 'Normale',status TEXT DEFAULT 'À faire',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        "
 
 def _split_schema_columns(body):
     parts, start, depth, quoted = [], 0, 0, False
@@ -195,82 +228,101 @@ def _split_schema_columns(body):
     if tail: parts.append(tail)
     return parts
 
+def _migration_fallback(table, column, definition):
+    """Valeur sûre pour une colonne obligatoire ajoutée à une table déjà remplie."""
+    col = column.lower()
+    # Les champs de texte affichés à l'utilisateur reçoivent un libellé explicite,
+    # afin de préserver les anciennes lignes sans supprimer de données.
+    if col == "name" and table == "contacts":
+        return "Contact sans nom"
+    if col in {"title", "name"}:
+        return "Élément importé"
+    if col in {"content", "front", "back", "summary", "details", "notes", "description"}:
+        return ""
+    if col in {"event_date", "study_date", "entry_date", "session_date", "log_date", "remind_at"}:
+        return "2000-01-01"
+    if col in {"hours", "amount", "duration_minutes", "habit_id", "subject_id", "progress", "energy", "confidence", "credits", "cm", "td", "tp", "tpe", "vht"}:
+        return "0"
+    # Déterminer un type numérique sans dépendre de la casse du DDL.
+    if re.search(r"\b(INTEGER|BIGINT|SMALLINT|REAL|DOUBLE|NUMERIC|DECIMAL)\b", definition, re.I):
+        return "0"
+    return ""
+
 def _ensure_app_schema():
-    """Vérifie le schéma PostgreSQL et ajoute les colonnes manquantes sans supprimer de données."""
+    """Crée les tables requises et complète le schéma sans perdre les anciennes lignes.
+
+    PostgreSQL refuse d'ajouter directement une colonne NOT NULL à une table qui
+    contient déjà des lignes. On l'ajoute donc d'abord nullable, on remplit les
+    valeurs manquantes, puis on applique NOT NULL seulement si c'est sans risque.
+    """
     definitions = {}
     for statement in _APP_SCHEMA_DDL.split(";"):
         match = re.search(r"CREATE TABLE IF NOT EXISTS\s+(\w+)\s*\((.*)\)\s*$", statement.strip(), re.I | re.S)
-        if not match: continue
+        if not match:
+            continue
         table, body = match.group(1), match.group(2)
         columns = []
         for part in _split_schema_columns(body):
             tokens = part.split(None, 1)
-            if not tokens or tokens[0].upper() in {"PRIMARY", "FOREIGN", "UNIQUE", "CONSTRAINT", "CHECK"}: continue
+            if not tokens:
+                continue
             name = tokens[0].strip('"')
-            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name): columns.append((name, part))
+            if name.upper() in {"PRIMARY", "FOREIGN", "UNIQUE", "CONSTRAINT", "CHECK"}:
+                continue
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+                continue
+            definition = re.sub(r"INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT", "BIGSERIAL PRIMARY KEY", part, flags=re.I)
+            definition = re.sub(r"REAL\b", "DOUBLE PRECISION", definition, flags=re.I)
+            columns.append((name, definition))
         definitions[table] = columns
+
     with connect() as c:
         for table, columns in definitions.items():
-            present = {r["column_name"] for r in c.execute("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=%s", (table,)).fetchall()}
+            present_rows = c.execute(f"PRAGMA table_info({table})").fetchall()
+            present = {row["name"] for row in present_rows}
             for column, definition in columns:
-                if column in present: continue
-                safe = re.sub(r"\s+NOT\s+NULL\b", "", definition, flags=re.I)
-                safe = re.sub(r"\s+PRIMARY\s+KEY\b", "", safe, flags=re.I)
-                safe = re.sub(r"\bINTEGER\s+AUTOINCREMENT\b", "BIGSERIAL", safe, flags=re.I)
-                safe = re.sub(r"\bREAL\b", "DOUBLE PRECISION", safe, flags=re.I)
-                c.execute(f'ALTER TABLE "{table}" ADD COLUMN {safe}')
-                if re.search(r"\bNOT\s+NULL\b", definition, re.I):
+                if column not in present:
+                    # Ajout initial nullable pour éviter l'erreur « contains null values ».
+                    safe_definition = re.sub(r"\s+NOT\s+NULL\b", "", definition, flags=re.I)
+                    safe_definition = re.sub(r"\s+PRIMARY\s+KEY\b", "", safe_definition, flags=re.I)
+                    c.execute(f"ALTER TABLE {table} ADD COLUMN {safe_definition}")
+                    if re.search(r"\bNOT\s+NULL\b", definition, re.I):
+                        fallback = _migration_fallback(table, column, definition)
+                        c.execute(f'UPDATE {table} SET "{column}"=%s WHERE "{column}" IS NULL', (fallback,))
+                        # Contrainte appliquée seulement à une nouvelle colonne
+                        # après remplissage ; si un schéma atypique l'empêche,
+                        # l'initialisation ne doit pas interrompre toute l'application.
+                        try:
+                            c.execute(f'ALTER TABLE {table} ALTER COLUMN "{column}" SET NOT NULL')
+                        except Exception:
+                            pass
+                elif re.search(r"\bNOT\s+NULL\b", definition, re.I):
+                    # Corrige les NULL des anciennes lignes, sans imposer une
+                    # contrainte plus stricte sur une table déjà utilisée.
                     fallback = _migration_fallback(table, column, definition)
-                    c.execute(f'UPDATE "{table}" SET "{column}"=%s WHERE "{column}" IS NULL', (fallback,))
+                    c.execute(f'UPDATE {table} SET "{column}"=%s WHERE "{column}" IS NULL', (fallback,))
+                    # Ne pas forcer SET NOT NULL sur les colonnes existantes :
+                    # les données historiques et les dépendances restent intactes.
         c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_reminders_source ON reminders(source_type, source_id) WHERE source_type <> '' AND source_id IS NOT NULL")
-        found = {r["table_name"] for r in c.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='public'").fetchall()}
-    missing = sorted(set(definitions) - found)
-    if missing: raise RuntimeError("Tables absentes après initialisation : " + ", ".join(missing))
-    return set(definitions)
 
-def migrate_sqlite_data_once():
-    """Importe les données de campus_clair.db vers Supabase, si ce fichier existe.
-    Les lignes déjà présentes sont conservées ; les doublons de clés sont ignorés.
-    """
-    if not DB_PATH.exists(): return 0
-    import sqlite3 as _sqlite3
-    with connect() as pg:
-        pg.execute("CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY, value TEXT DEFAULT '')")
-        marker = pg.execute("SELECT value FROM app_settings WHERE key=%s", ("sqlite_migration_completed",)).fetchone()
-        if marker and marker.get("value") == "1": return 0
-        src = _sqlite3.connect(str(DB_PATH))
-        src.row_factory = _sqlite3.Row
-        total = 0
-        try:
-            tables = [r[0] for r in src.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchall()]
-            for table in tables:
-                exists = pg.execute("SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name=%s", (table,)).fetchone()
-                if not exists: continue
-                cols = [r["column_name"] for r in pg.execute("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=%s ORDER BY ordinal_position", (table,)).fetchall()]
-                source_cols = [r["name"] for r in src.execute(f'PRAGMA table_info("{table}")').fetchall()]
-                shared = [col for col in source_cols if col in cols]
-                if not shared: continue
-                rows = src.execute(f'SELECT {", ".join(chr(34)+x+chr(34) for x in shared)} FROM "{table}"').fetchall()
-                for row in rows:
-                    placeholders = ",".join(["%s"] * len(shared))
-                    names = ",".join(f'"{x}"' for x in shared)
-                    pg.execute(f'INSERT INTO "{table}" ({names}) VALUES ({placeholders}) ON CONFLICT DO NOTHING', tuple(row[x] for x in shared))
-                    total += 1
-            pg.execute("INSERT INTO app_settings(key,value) VALUES(%s,%s) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value", ("sqlite_migration_completed", "1"))
-        finally:
-            src.close()
-    return total
+    expected = set(definitions)
+    with connect() as c:
+        found = {r["name"] for r in c.execute("SELECT table_name AS name FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'").fetchall()}
+    missing = sorted(expected - found)
+    if missing:
+        raise RuntimeError("Tables absentes après initialisation : " + ", ".join(missing))
+    return expected
 
-with st.spinner("Connexion à Supabase : vérification et création automatique des tables…"):
+with st.spinner("Initialisation XXL de Supabase : vérification et création des tables de Secrétaire Issa…"):
     try:
         init_db()
         _expected_app_tables = _ensure_app_schema()
-        _migrated_rows = migrate_sqlite_data_once()
-        if _migrated_rows:
-            st.success(f"Migration initiale terminée : {_migrated_rows} lignes importées depuis l’ancienne base SQLite.")
-        st.session_state["issa_sqlite_tables_ready"] = sorted(_expected_app_tables)
+        # Mode non destructif : les tables étrangères ou anciennes de public
+        # restent en place. Seules les tables utilisées par cette application
+        # sont créées ou mises à niveau ; aucune table n'est supprimée.
+        st.session_state["issa_supabase_tables_ready"] = sorted(_expected_app_tables)
     except Exception as exc:
-        st.error("Initialisation de Supabase impossible. Vérifie les secrets SUPABASE_DB_* et l’accès réseau. Détail technique : " + str(exc)[:700])
+        st.error("Initialisation Supabase impossible. Vérifie les Secrets, les droits PostgreSQL et les journaux. Aucune table supplémentaire n'est supprimée par cette version. Détail technique : " + str(exc)[:700])
         st.stop()
 
 DEFAULT_REMINDER_PHONE = "+221777473170"  # conservé pour compatibilité avec les anciennes bases
@@ -516,7 +568,7 @@ def start_reminder_worker():
 def read_df(sql,params=()):
     with connect() as c:
         cur = c.execute(sql, params)
-        columns = [d[0] for d in cur.description] if cur.description else []
+        columns = [d.name for d in cur.description] if cur.description else []
         rows = cur.fetchall()
         return pd.DataFrame([dict(r) for r in rows], columns=columns)
 def run(sql,params=()):
@@ -1174,7 +1226,7 @@ elif page=="Rappels automatiques":
         st.warning('Les rappels sont préparés automatiquement, mais l’envoi nécessite les identifiants Gmail SMTP dans les Secrets Streamlit.')
     with st.expander('⚙️ Configuration Gmail gratuite (à faire une seule fois)', expanded=not bool(get_config('SMTP_PASSWORD'))):
         st.markdown('Utilise ton adresse Gmail et un **mot de passe d’application Google de 16 caractères**. Ne mets jamais ton mot de passe Gmail habituel et ne partage pas ce secret.')
-        st.code('SMTP_HOST = \"smtp.gmail.com\"\nSMTP_PORT = \"587\"\nSMTP_USERNAME = \"ton_adresse_gmail@gmail.com\"\nSMTP_PASSWORD = \"mot_de_passe_application_google\"\nSMTP_SENDER_NAME = \"Secrétaire Issa\"\nAPP_USERNAME = \"identifiant_de_connexion\"\nAPP_PASSWORD = \"mot_de_passe_de_connexion\"\n\nYOUAGRONOME_OWNER_EMAIL = \"identifiant_proprietaire\"\nYOUAGRONOME_OWNER_PASS = \"mot_de_passe_proprietaire\"', language='toml')
+        st.code('SMTP_HOST = \"smtp.gmail.com\"\nSMTP_PORT = \"587\"\nSMTP_USERNAME = \"ton_adresse_gmail@gmail.com\"\nSMTP_PASSWORD = \"mot_de_passe_application_google\"\nSMTP_SENDER_NAME = \"Secrétaire Issa\"\nAPP_USERNAME = \"identifiant_de_connexion\"\nAPP_PASSWORD = \"mot_de_passe_de_connexion\"\n\nSUPABASE_DB_HOST = \"aws-0-eu-west-1.pooler.supabase.com\"\nSUPABASE_DB_PORT = \"5432\"\nSUPABASE_DB_NAME = \"postgres\"\nSUPABASE_DB_USER = \"postgres.sruhwwoaasctnzeckrct\"\nSUPABASE_DB_PASSWORD = \"mot_de_passe_supabase\"\n\nYOUAGRONOME_OWNER_EMAIL = \"identifiant_proprietaire\"\nYOUAGRONOME_OWNER_PASS = \"mot_de_passe_proprietaire\"', language='toml')
         st.caption('Dans Streamlit Cloud : Manage app → Settings → Secrets. L’adresse d’expédition est lue depuis SMTP_USERNAME. L’adresse de réception des rappels se règle ci-dessus. Le code essaie STARTTLS sur le port 587 puis SSL sur le port 465 si nécessaire.')
     if st.button('🧪 Envoyer un e-mail de test', disabled=not (get_config('SMTP_PASSWORD') and get_recipient_email())):
         try:
@@ -1643,19 +1695,19 @@ elif page=="Centre de productivité XXL":
         else: st.info('Aucun rendez-vous ou démarche enregistré.')
 
 elif page=="Paramètres & sauvegarde":
-    header('PARAMÈTRES & DONNÉES','Paramètres & sauvegarde','Les données sont enregistrées dans une base SQLite locale ; les tables sont vérifiées et créées automatiquement.')
-    st.success(f'Base active : SQLite locale · {DB_PATH.name}. Les tables de l’application sont vérifiées et créées automatiquement au démarrage.')
+    header('PARAMÈTRES & DONNÉES','Paramètres & sauvegarde','Les données sont enregistrées dans Supabase PostgreSQL ; les tables sont vérifiées et créées automatiquement, sans supprimer les tables déjà présentes.')
+    st.success(f'Base active : Supabase PostgreSQL · { _SUPABASE_DB_HOST } · base { _SUPABASE_DB_NAME }. Les tables de l’application sont créées automatiquement au démarrage ; les autres tables Supabase sont conservées.')
     tables={'Matières':'subjects','Emploi du temps':'events','Tâches':'tasks','Ressources archivées (ancien espace)':'documents','Journal d’étude':'study_logs','Objectifs':'goals','Habitudes':'habits','Historique habitudes':'habit_logs','Budget':'budgets','Notes personnelles':'life_notes','Contacts':'contacts','Compétences':'career_skills','Formations':'career_training','Opportunités professionnelles':'career_opportunities','Rappels e-mail':'reminders','Projets du Central':'productivity_projects','Flashcards':'flashcards','Séances de concentration':'focus_sessions','Journal quotidien':'daily_journal','Comptes rendus':'meeting_minutes','Organisateur de vie':'life_organizer'}
     for label,table in tables.items():
         df=read_df(f'SELECT * FROM {table}')
         with st.expander(f'{label} — {len(df)} enregistrement(s)'):
             export_csv(df,label,table)
-    st.info('Pour sauvegarder toutes les données, copie le fichier campus_clair.db depuis le dossier de l’application. Les exports CSV restent disponibles pour chaque module.')
+    st.info('Pour une sauvegarde complète de Supabase, utilise le tableau de bord Supabase ou exporte les tables depuis les options CSV ci-dessus. Les exports CSV restent disponibles pour chaque module.')
     st.markdown('### Dépendances facultatives')
-    st.code('streamlit\npandas\nSpeechRecognition>=3.10.0\nstreamlit-mic-recorder>=0.0.8\nopenpyxl\nPyMuPDF\npython-docx',language='text')
+    st.code('streamlit\npandas\npsycopg2-binary>=2.9.9\nSpeechRecognition>=3.10.0\nstreamlit-mic-recorder>=0.0.8\nopenpyxl\nPyMuPDF\npython-docx',language='text')
     st.caption('openpyxl permet les imports Excel. PyMuPDF permet de lire le texte des PDF. L’application reste utilisable sans ces deux dépendances si tu utilises CSV et la saisie manuelle.')
 
-st.markdown('<div class="issa-footer"><strong>🗂️ Secrétaire Issa</strong><br><small>Un espace personnel de secrétariat, de suivi et d’organisation · Données stockées dans SQLite.</small></div>',unsafe_allow_html=True)
+st.markdown('<div class="issa-footer"><strong>🗂️ Secrétaire Issa</strong><br><small>Un espace personnel de secrétariat, de suivi et d’organisation · Données stockées dans Supabase PostgreSQL.</small></div>',unsafe_allow_html=True)
 role_icons={
     "Vue d’ensemble":"🏠", "Maquettes & matières":"🎓", "Emploi du temps":"🗓️",
     "Programmes de révision":"🎯", "Suivi & progression":"📈", "Assistant de vie":"👤", "Rappels automatiques":"🔔", "Assistant e-mail & documents":"✉️",
