@@ -693,6 +693,13 @@ def sync_existing_entries_to_reminders():
             upsert_auto_reminder('note', r.id, f"Note à ne pas oublier : {r.title}", r.content or '', dt.strftime('%Y-%m-%d %H:%M:%S'))
         except Exception: pass
 
+def display_text(value, fallback=""):
+    """Évite d’afficher None ou la chaîne None dans les textes de l’interface."""
+    if value is None:
+        return fallback
+    text_value = str(value).strip()
+    return fallback if text_value.lower() in {"none", "null", "nan"} else text_value
+
 def norm(s):
     return re.sub(r'[^a-z0-9]+',' ',unicodedata.normalize('NFKD',str(s or '')).encode('ascii','ignore').decode().lower()).strip()
 def header(kicker,title,desc):
@@ -702,13 +709,17 @@ def card(label,value,note=''):
 def export_csv(df,name,key):
     if not df.empty: st.download_button(f"Exporter {name} en CSV",df.to_csv(index=False).encode('utf-8-sig'),file_name=f"campusclair_{key}.csv",mime='text/csv',key=f"csv_{key}")
 REMINDER_WORKER = start_reminder_worker()
-# Synchronise les entrées puis traite immédiatement les échéances lors de chaque exécution
-# du script Streamlit. Cela évite de dépendre uniquement du thread en arrière-plan :
-# si Streamlit Cloud suspend le thread, le prochain chargement de l'application rattrape
-# les rappels arrivés à échéance. Pour un envoi garanti même quand l'application dort,
-# un planificateur externe et une base persistante restent nécessaires.
-sync_existing_entries_to_reminders()
-process_due_reminders()
+# Traitement allégé : ne pas refaire toutes les synchronisations SQL à chaque clic.
+# Les appels sont explicitement affectés à une variable pour éviter qu'une valeur
+# de retour None soit affichée par le mécanisme Magic de Streamlit.
+_sync_clock = time_module.time()
+_sync_previous = float(st.session_state.get("issa_global_sync_last", 0) or 0)
+if _sync_clock - _sync_previous >= 300:
+    _sync_result = sync_existing_entries_to_reminders()
+    st.session_state["issa_global_sync_last"] = _sync_clock
+if not st.session_state.get("issa_initial_reminder_check_done", False):
+    _reminder_process_result = process_due_reminders()
+    st.session_state["issa_initial_reminder_check_done"] = True
 
 def subject_choices():
     df=read_df('SELECT id,title,semester,ue FROM subjects ORDER BY title')
@@ -1087,7 +1098,7 @@ elif page=="Suivi & progression":
 
 # ---------- Assistant de vie avec sous-onglets ----------
 elif page=="Assistant de vie":
-    header('ESPACE PERSONNEL XXL','Assistant de vie 🧭','Un espace central pour tes objectifs, habitudes, budget, tâches, routines, notes et contacts. Les informations restent dans la base SQLite locale.')
+    header('ESPACE PERSONNEL XXL','Assistant de vie 🧭','Un espace central pour tes objectifs, habitudes, budget, tâches, routines, notes et contacts. Les informations sont enregistrées dans Supabase PostgreSQL.')
     tabs=st.tabs(['🎯 Objectifs','✅ Habitudes','💰 Budget','📝 Tâches & démarches','📓 Notes personnelles','👥 Contacts','🌿 Bien-être & routines'])
     with tabs[0]:
         with st.form('goal_form'):
@@ -1712,7 +1723,7 @@ elif page=="Centre de productivité XXL":
         else: st.info('Aucun rendez-vous ou démarche enregistré.')
 
 elif page=="Paramètres & sauvegarde":
-    header('PARAMÈTRES & DONNÉES','Paramètres & sauvegarde','Les données sont enregistrées dans Supabase PostgreSQL ; les tables sont vérifiées et créées automatiquement, sans supprimer les tables déjà présentes.')
+    header('PARAMÈTRES & DONNÉES','Paramètres & sauvegarde','Les données sont enregistrées dans Supabase PostgreSQL ; les tables sont créées automatiquement sans supprimer les tables déjà présentes.')
     st.success(f'Base active : Supabase PostgreSQL · { _SUPABASE_DB_HOST } · base { _SUPABASE_DB_NAME }. Les tables de l’application sont créées automatiquement au démarrage ; les autres tables Supabase sont conservées.')
     tables={'Matières':'subjects','Emploi du temps':'events','Tâches':'tasks','Ressources archivées (ancien espace)':'documents','Journal d’étude':'study_logs','Objectifs':'goals','Habitudes':'habits','Historique habitudes':'habit_logs','Budget':'budgets','Notes personnelles':'life_notes','Contacts':'contacts','Compétences':'career_skills','Formations':'career_training','Opportunités professionnelles':'career_opportunities','Rappels e-mail':'reminders','Projets du Central':'productivity_projects','Flashcards':'flashcards','Séances de concentration':'focus_sessions','Journal quotidien':'daily_journal','Comptes rendus':'meeting_minutes','Organisateur de vie':'life_organizer'}
     for label,table in tables.items():
