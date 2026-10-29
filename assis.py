@@ -118,14 +118,6 @@ def init_db():
         );
         CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY, value TEXT DEFAULT '');
         CREATE TABLE IF NOT EXISTS assistant_docs(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,content TEXT NOT NULL,uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP);
-        CREATE TABLE IF NOT EXISTS quick_capture(id INTEGER PRIMARY KEY AUTOINCREMENT,content TEXT NOT NULL,category TEXT DEFAULT 'Idée',captured_at TEXT DEFAULT CURRENT_TIMESTAMP,converted INTEGER DEFAULT 0);
-        CREATE TABLE IF NOT EXISTS projects(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,category TEXT DEFAULT 'Études',status TEXT DEFAULT 'À démarrer',priority TEXT DEFAULT 'Normale',start_date TEXT DEFAULT '',due_date TEXT DEFAULT '',progress INTEGER DEFAULT 0,description TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
-        CREATE TABLE IF NOT EXISTS flashcards(id INTEGER PRIMARY KEY AUTOINCREMENT,subject_id INTEGER,question TEXT NOT NULL,answer TEXT NOT NULL,tags TEXT DEFAULT '',confidence INTEGER DEFAULT 0,last_reviewed TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE SET NULL);
-        CREATE TABLE IF NOT EXISTS daily_journal(id INTEGER PRIMARY KEY AUTOINCREMENT,journal_date TEXT NOT NULL UNIQUE,mood TEXT DEFAULT 'Correcte',energy INTEGER DEFAULT 3,highlights TEXT DEFAULT '',improvements TEXT DEFAULT '',tomorrow TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP,updated_at TEXT DEFAULT CURRENT_TIMESTAMP);
-        CREATE TABLE IF NOT EXISTS exam_deadlines(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,kind TEXT DEFAULT 'Examen',subject_id INTEGER,deadline TEXT NOT NULL,priority TEXT DEFAULT 'Haute',status TEXT DEFAULT 'À préparer',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE SET NULL);
-        CREATE TABLE IF NOT EXISTS focus_sessions(id INTEGER PRIMARY KEY AUTOINCREMENT,session_date TEXT NOT NULL,subject_id INTEGER,duration_minutes INTEGER NOT NULL,method TEXT DEFAULT 'Pomodoro',focus_level INTEGER DEFAULT 3,notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE SET NULL);
-        CREATE TABLE IF NOT EXISTS meeting_notes(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,meeting_date TEXT NOT NULL,meeting_time TEXT DEFAULT '',location TEXT DEFAULT '',participants TEXT DEFAULT '',purpose TEXT DEFAULT '',discussion TEXT DEFAULT '',decisions TEXT DEFAULT '',action_items TEXT DEFAULT '',next_meeting TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
-        CREATE TABLE IF NOT EXISTS life_planner(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,category TEXT DEFAULT 'Démarche personnelle',due_date TEXT DEFAULT '',due_time TEXT DEFAULT '',priority TEXT DEFAULT 'Normale',status TEXT DEFAULT 'À faire',location TEXT DEFAULT '',estimated_cost REAL DEFAULT 0,notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         """)
 init_db()
 with connect() as _conn:
@@ -407,15 +399,6 @@ def sync_existing_entries_to_reminders():
             c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type LIKE 'training_%' AND source_id NOT IN (SELECT id FROM career_training) AND status IN ('En attente','Erreur')")
             c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type='habit' AND source_id NOT IN (SELECT id FROM habits) AND status IN ('En attente','Erreur')")
             c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type='note' AND source_id NOT IN (SELECT id FROM life_notes) AND status IN ('En attente','Erreur')")
-            # Réunions terminées : annuler les rappels de réunion ; conserver seulement les prochaines rencontres futures.
-            c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type='meeting' AND source_id IN (SELECT id FROM meeting_notes WHERE meeting_date < date('now','localtime')) AND status IN ('En attente','Erreur')")
-            c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type='meeting_next' AND source_id IN (SELECT id FROM meeting_notes WHERE next_meeting='') AND status IN ('En attente','Erreur')")
-            c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type IN ('life_planner','life_planner_day') AND source_id IN (SELECT id FROM life_planner WHERE status IN ('Terminé','Annulé') OR due_date='') AND status IN ('En attente','Erreur')")
-            c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type='life_planner_day' AND source_id IN (SELECT id FROM life_planner WHERE due_time <> '') AND status IN ('En attente','Erreur')")
-            c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type='life_planner' AND source_id IN (SELECT id FROM life_planner WHERE due_time = '') AND status IN ('En attente','Erreur')")
-            # Les entrées supprimées n'ont plus besoin de rappels.
-            c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type IN ('meeting','meeting_next') AND source_id NOT IN (SELECT id FROM meeting_notes) AND status IN ('En attente','Erreur')")
-            c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type IN ('life_planner','life_planner_day') AND source_id NOT IN (SELECT id FROM life_planner) AND status IN ('En attente','Erreur')")
     except Exception:
         pass
     # Emploi du temps : une heure avant le début ; si l'évènement est imminent/passé aujourd'hui, rappel immédiat.
@@ -473,47 +456,6 @@ def sync_existing_entries_to_reminders():
             dt = datetime.strptime(f"{r.reminder_date} {r.reminder_time or '08:00'}", '%Y-%m-%d %H:%M')
             upsert_auto_reminder('note', r.id, f"Note à ne pas oublier : {r.title}", r.content or '', dt.strftime('%Y-%m-%d %H:%M:%S'))
         except Exception: pass
-    # Carnet de réunions : rappel automatique une heure avant les réunions futures.
-    for r in read_df("SELECT id,title,meeting_date,meeting_time,location,participants,purpose,decisions,action_items FROM meeting_notes WHERE meeting_date >= ?", (today.isoformat(),)).itertuples():
-        try:
-            meeting_dt = datetime.strptime(f"{r.meeting_date} {r.meeting_time or '08:00'}", '%Y-%m-%d %H:%M')
-            if meeting_dt <= datetime.now():
-                continue
-            remind = meeting_dt - timedelta(hours=1)
-            if remind < datetime.now():
-                remind = datetime.now() + timedelta(minutes=1)
-            details = f"Rencontre : {r.meeting_date} à {r.meeting_time or '08:00'}. Lieu : {r.location or 'non précisé'}. Participants : {r.participants or 'non précisés'}. Objet : {r.purpose or ''}. Décisions/actions : {r.decisions or ''} {r.action_items or ''}"
-            upsert_auto_reminder('meeting', r.id, f"Réunion / rencontre : {r.title}", details, remind.strftime('%Y-%m-%d %H:%M:%S'))
-        except Exception: pass
-    # Prochaine rencontre indiquée dans un compte rendu : rappel la veille à 08 h.
-    for r in read_df("SELECT id,title,next_meeting,location,participants FROM meeting_notes WHERE next_meeting <> '' AND next_meeting >= ?", (today.isoformat(),)).itertuples():
-        try:
-            next_date = datetime.strptime(str(r.next_meeting), '%Y-%m-%d').date()
-            remind = datetime.combine(next_date - timedelta(days=1), time(8, 0))
-            if next_date <= today and remind < datetime.now():
-                remind = datetime.now() + timedelta(minutes=1)
-            details = f"Prochaine rencontre prévue le {next_date.isoformat()}. Lieu : {r.location or 'non précisé'}. Participants : {r.participants or 'non précisés'}. Prépare les points à reprendre du compte rendu « {r.title} »."
-            upsert_auto_reminder('meeting_next', r.id, f"Préparer la prochaine rencontre : {r.title}", details, remind.strftime('%Y-%m-%d %H:%M:%S'))
-        except Exception: pass
-    # Organisateur de vie quotidienne : rappel la veille à 08 h, ou une heure avant si une heure précise est indiquée.
-    for r in read_df("SELECT id,title,category,due_date,due_time,priority,status,location,notes FROM life_planner WHERE status NOT IN ('Terminé','Annulé') AND due_date <> ''").itertuples():
-        try:
-            due_date = datetime.strptime(str(r.due_date), '%Y-%m-%d').date()
-            if r.due_time:
-                due_dt = datetime.strptime(f"{r.due_date} {r.due_time}", '%Y-%m-%d %H:%M')
-                remind = due_dt - timedelta(hours=1)
-                if due_dt <= datetime.now():
-                    remind = datetime.now() + timedelta(minutes=1)
-                elif remind < datetime.now():
-                    remind = datetime.now() + timedelta(minutes=1)
-            else:
-                remind = datetime.combine(due_date - timedelta(days=1), time(8, 0))
-                if due_date <= today and remind < datetime.now():
-                    remind = datetime.now() + timedelta(minutes=1)
-            details = f"Catégorie : {r.category}. Échéance : {r.due_date}{(' à ' + r.due_time) if r.due_time else ''}. Priorité : {r.priority}. Lieu : {r.location or 'non précisé'}. {r.notes or ''}"
-            source = 'life_planner' if r.due_time else 'life_planner_day'
-            upsert_auto_reminder(source, r.id, f"À ne pas oublier : {r.title}", details, remind.strftime('%Y-%m-%d %H:%M:%S'))
-        except Exception: pass
 
 def norm(s):
     return re.sub(r'[^a-z0-9]+',' ',unicodedata.normalize('NFKD',str(s or '')).encode('ascii','ignore').decode().lower()).strip()
@@ -538,16 +480,15 @@ def subject_choices():
     for r in df.itertuples(): opts[f"{r.title} · {r.semester} · {r.ue}"]=int(r.id)
     return df,opts
 
-PAGES=["Vue d’ensemble","Centre XXL","Maquettes & matières","Emploi du temps","Programmes de révision","Suivi & progression","Assistant de vie","Rappels automatiques","Assistant e-mail & documents","Compétences & Carrière","Paramètres & sauvegarde"]
+PAGES=["Vue d’ensemble","Maquettes & matières","Emploi du temps","Programmes de révision","Suivi & progression","Assistant de vie","Rappels automatiques","Assistant e-mail & documents","Compétences & Carrière","Paramètres & sauvegarde"]
 PAGE_SHORT={
-    "Vue d’ensemble":"🏠 Accueil XXL", "Centre XXL":"⚡ Centre XXL", "Maquettes & matières":"🎓 Académie", "Emploi du temps":"🗓️ Planning",
+    "Vue d’ensemble":"🏠 Accueil XXL", "Maquettes & matières":"🎓 Académie", "Emploi du temps":"🗓️ Planning",
     "Programmes de révision":"🎯 Révisions", "Suivi & progression":"📈 Progression",
     "Assistant de vie":"👤 Vie personnelle", "Rappels automatiques":"📧 Rappels e-mail", "Assistant e-mail & documents":"✉️ Assistant complet", "Compétences & Carrière":"🚀 Carrière",
     "Paramètres & sauvegarde":"⚙️ Paramètres"
 }
 PAGE_ROLE={
     "Vue d’ensemble":"Secrétaire chargé de la coordination générale",
-    "Centre XXL":"Centre de productivité : capture rapide, projets, fiches de mémorisation et journal quotidien",
     "Maquettes & matières":"Secrétaire chargé du suivi pédagogique et des maquettes",
     "Emploi du temps":"Secrétaire chargé de la planification et de l’emploi du temps",
     "Programmes de révision":"Secrétaire chargé de l’organisation des révisions",
@@ -1157,6 +1098,90 @@ elif page=="Assistant e-mail & documents":
 
 # ---------- Compétences & Carrière ----------
 elif page=="Compétences & Carrière":
+    # Profil professionnel inspiré du CV fourni, avec zone modifiable et portfolio public.
+    st.markdown("""
+    <style>
+    @keyframes yamGlow {0%,100%{box-shadow:0 10px 30px rgba(36,87,167,.14);transform:translateY(0)}50%{box-shadow:0 18px 42px rgba(59,183,201,.30);transform:translateY(-3px)}}
+    @keyframes yamShine {0%{background-position:-200% 0}100%{background-position:200% 0}}
+    .career-xxl{position:relative;overflow:hidden;border-radius:26px;padding:26px 28px;margin:8px 0 20px;
+      color:#fff;background:linear-gradient(120deg,#10213c,#2457a7 55%,#167f91);animation:yamGlow 5s ease-in-out infinite}
+    .career-xxl:after{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(110deg,transparent 25%,rgba(255,255,255,.13) 45%,transparent 65%);background-size:200% 100%;animation:yamShine 7s linear infinite}
+    .career-xxl h1{font-size:clamp(1.8rem,4vw,3rem);font-weight:900;letter-spacing:-.04em;margin:4px 0;color:#fff}
+    .career-xxl p{font-size:1rem;color:#e7f4ff;margin:5px 0}
+    .career-pill{display:inline-block;border:1px solid rgba(255,255,255,.35);background:rgba(255,255,255,.12);border-radius:999px;padding:6px 12px;margin:4px 5px 0 0;font-size:.8rem}
+    .career-photo-frame{border:4px solid rgba(255,255,255,.88);border-radius:24px;padding:5px;background:linear-gradient(135deg,#f0b84b,#fff,#3bb7c9);box-shadow:0 12px 30px rgba(0,0,0,.22)}
+    .career-section{border:1px solid #dbe7f5;border-radius:18px;padding:16px 18px;background:linear-gradient(135deg,#fff,#f2f8ff);margin:12px 0}
+    @media(max-width:700px){.career-xxl{padding:20px;border-radius:18px}.career-xxl h1{font-size:1.8rem}}
+    @media(prefers-reduced-motion:reduce){.career-xxl{animation:none}.career-xxl:after{animation:none}}
+    </style>
+    <div class="career-xxl">
+      <span class="career-pill">PROFIL PROFESSIONNEL · XXL</span>
+      <h1>ISSA YOUME</h1>
+      <p>Étudiant en agronomie et sciences alimentaires · Université Amadou Makhtar Mbow (UAM)</p>
+      <p>Sol, géomatique, sciences agricoles, biostatistique et outils numériques — profil évolutif pour stages, projets et opportunités.</p>
+      <span class="career-pill">🌱 Agronomie</span><span class="career-pill">🗺️ ArcGIS Pro</span>
+      <span class="career-pill">📊 Biostatistique</span><span class="career-pill">💻 Python</span>
+    </div>
+    """, unsafe_allow_html=True)
+    photo_path = APP_DIR / "im1.jpeg"
+    photo_col, intro_col = st.columns([1, 2.7], gap="large")
+    with photo_col:
+        if photo_path.exists():
+            st.markdown('<div class="career-photo-frame">', unsafe_allow_html=True)
+            st.image(str(photo_path), use_container_width=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+        else:
+            st.warning("Photo non trouvée : ajoute le fichier **im1.jpeg** à côté du fichier Python dans le dépôt GitHub/Streamlit.")
+    with intro_col:
+        st.markdown('<div class="career-section"><h3>🎯 Profil & objectif professionnel</h3><p>Étudiant en deuxième année de licence en agronomie et sciences alimentaires à l’UAM. Bases théoriques en étude des sols, biologie, botanique, physiologie végétale et animale et biotechnologies. Recherche d’occasions de stage et d’immersion pour mettre en pratique les connaissances et développer des compétences techniques.</p></div>', unsafe_allow_html=True)
+        st.markdown("**Portfolio personnel**")
+        st.link_button("🌐 Ouvrir issayoume.streamlit.app", "https://issayoume.streamlit.app", use_container_width=True)
+        st.caption("Le portfolio s’ouvre dans un nouvel onglet selon le navigateur.")
+    with st.expander("✍️ Ajouter ou actualiser les informations de mon profil", expanded=False):
+        st.caption("Les éléments ci-dessous servent à compléter le profil affiché dans cet espace. Les informations du CV fourni sont déjà présentées plus bas.")
+        with st.form("career_profile_additions"):
+            extra_headline = st.text_input("Titre professionnel complémentaire", value=get_saved_setting("career_extra_headline", "À compléter"))
+            extra_skills = st.text_area("Compétences ou logiciels à ajouter", value=get_saved_setting("career_extra_skills", ""))
+            extra_projects = st.text_area("Projets, expériences pratiques ou réalisations", value=get_saved_setting("career_extra_projects", ""))
+            extra_contact = st.text_input("Lien ou contact professionnel supplémentaire", value=get_saved_setting("career_extra_contact", ""))
+            save_profile = st.form_submit_button("💾 Enregistrer les compléments")
+        if save_profile:
+            save_setting("career_extra_headline", extra_headline)
+            save_setting("career_extra_skills", extra_skills)
+            save_setting("career_extra_projects", extra_projects)
+            save_setting("career_extra_contact", extra_contact)
+            st.success("Compléments du profil enregistrés.")
+            st.rerun()
+    st.markdown("### 📄 Informations issues du CV")
+    cv1, cv2 = st.columns(2)
+    with cv1:
+        st.markdown("**Formation**")
+        st.markdown("- 2025–2026 : 2e année de Licence en Agronomie — UAM, Sénégal")
+        st.markdown("- 2024–2025 : 1re année de Licence en Agronomie — UAM, Sénégal")
+        st.markdown("- 2023–2024 : Baccalauréat scientifique S2 — Lycée d’Excellence Aimé Césaire, Saint-Louis")
+        st.markdown("**Compétences techniques**")
+        st.markdown("- Agronomie, biotechnologies, botanique et physiologie végétale")
+        st.markdown("- Sols, aménagement, cartographie, géomatique et télédétection (ArcGIS Pro)")
+        st.markdown("- Python, JupyterLab, AlgoBox, Word, Excel et PowerPoint")
+        st.markdown("- Biostatistique et analyse de données agricoles")
+    with cv2:
+        st.markdown("**Leadership & engagement**")
+        st.markdown("- Ancien président du Club d’éducation à la vie sociale et environnementale (EVFS) et ministre des Finances — Lycée d’Excellence Aimé Césaire")
+        st.markdown("- Ancien président du Gouvernement scolaire — Collège Guillabert, Saint-Louis")
+        st.markdown("**Distinctions**")
+        st.markdown("- 2022 : sélectionné en catégorie conte à Créafest (France)")
+        st.markdown("- 2021 : lauréat d’un concours de nouvelles de l’Institut Français de Saint-Louis")
+        st.markdown("**Langues** : français courant, wolof courant, anglais intermédiaire.")
+    _extra_headline = get_saved_setting("career_extra_headline", "")
+    _extra_skills = get_saved_setting("career_extra_skills", "")
+    _extra_projects = get_saved_setting("career_extra_projects", "")
+    _extra_contact = get_saved_setting("career_extra_contact", "")
+    if any([_extra_headline, _extra_skills, _extra_projects, _extra_contact]):
+        st.markdown("### ✨ Compléments ajoutés")
+        if _extra_headline: st.info(_extra_headline)
+        if _extra_skills: st.markdown("**Compétences ajoutées**\n\n" + _extra_skills)
+        if _extra_projects: st.markdown("**Projets et réalisations**\n\n" + _extra_projects)
+        if _extra_contact: st.markdown("**Contact / lien complémentaire :** " + _extra_contact)
     header('DÉVELOPPEMENT PROFESSIONNEL','Compétences & Carrière 🚀','Prépare ton avenir professionnel : compétences, formations, certifications, stages et opportunités. Les informations sont conservées dans SQLite.')
     skills=read_df('SELECT * FROM career_skills')
     trainings=read_df('SELECT * FROM career_training')
@@ -1262,379 +1287,11 @@ elif page=="Compétences & Carrière":
         st.markdown('#### Conseils de départ')
         st.markdown('- Choisis 3 compétences prioritaires à développer ce mois-ci.\n- Ajoute les formations réellement commencées ou envisagées.\n- Enregistre les liens officiels des stages et opportunités pour retrouver facilement les annonces.')
 
-# ---------- Centre de productivité XXL : nouveautés complémentaires ----------
-elif page=="Centre XXL":
-    header("CENTRE DE PRODUCTIVITÉ XXL", "Ton cockpit personnel ⚡", "Capture tes idées, pilote tes projets, mémorise tes cours et fais le bilan de tes journées. Ces modules s’ajoutent aux fonctionnalités existantes sans remplacer tes données.")
-    # Indicateurs consolidés
-    _cap_n = int(read_df("SELECT COUNT(*) n FROM quick_capture WHERE converted=0").iloc[0]["n"])
-    _proj_df = read_df("SELECT * FROM projects")
-    _fc_n = int(read_df("SELECT COUNT(*) n FROM flashcards").iloc[0]["n"])
-    _journal_n = int(read_df("SELECT COUNT(*) n FROM daily_journal").iloc[0]["n"])
-    _m = st.columns(4)
-    with _m[0]: card("Idées à traiter", _cap_n, "Capture rapide")
-    with _m[1]: card("Projets", len(_proj_df), "Tous statuts")
-    with _m[2]: card("Fiches mémoire", _fc_n, "Révisions actives")
-    with _m[3]: card("Bilans quotidiens", _journal_n, "Journal personnel")
-    tab_search, tab_capture, tab_projects, tab_cards, tab_exams, tab_focus, tab_journal, tab_meetings, tab_life = st.tabs(["🔎 Recherche globale", "⚡ Capture rapide", "🚀 Projets", "🧠 Mémorisation", "🗓️ Examens & échéances", "⏱️ Concentration", "📔 Journal quotidien", "🤝 Réunions & rencontres", "🌿 Vie quotidienne"])
-
-    with tab_search:
-        st.markdown("#### Retrouver rapidement une information")
-        _q = st.text_input("Recherche dans tes matières, séances, tâches, notes, documents et opportunités", placeholder="Ex. pédologie, stage, examen, date limite…", key="xxl_global_search")
-        if _q.strip():
-            _like = "%" + _q.strip() + "%"
-            _search_defs = [
-                ("Matières", "SELECT title AS Titre, semester AS Période, ue AS Détail FROM subjects WHERE title LIKE ? OR code LIKE ? OR ue LIKE ? OR notes LIKE ?", 4),
-                ("Emploi du temps", "SELECT title AS Titre, event_date AS Date, kind AS Type FROM events WHERE title LIKE ? OR kind LIKE ? OR location LIKE ? OR notes LIKE ?", 4),
-                ("Tâches", "SELECT title AS Titre, due_date AS Échéance, status AS Statut FROM tasks WHERE title LIKE ? OR category LIKE ? OR notes LIKE ? OR status LIKE ?", 4),
-                ("Notes personnelles", "SELECT title AS Titre, category AS Catégorie, content AS Contenu FROM life_notes WHERE title LIKE ? OR category LIKE ? OR content LIKE ? OR content LIKE ?", 4),
-                ("Documents", "SELECT title AS Titre, substr(content,1,240) AS Extrait, uploaded_at AS Import FROM assistant_docs WHERE title LIKE ? OR content LIKE ? OR content LIKE ? OR content LIKE ?", 4),
-                ("Opportunités", "SELECT title AS Titre, organization AS Organisation, deadline AS Échéance FROM career_opportunities WHERE title LIKE ? OR organization LIKE ? OR kind LIKE ? OR notes LIKE ?", 4),
-                ("Projets", "SELECT title AS Titre, status AS Statut, due_date AS Échéance FROM projects WHERE title LIKE ? OR description LIKE ? OR category LIKE ? OR status LIKE ?", 4),
-                ("Réunions & rencontres", "SELECT title AS Objet, meeting_date AS Date, participants AS Participants, decisions AS Décisions FROM meeting_notes WHERE title LIKE ? OR participants LIKE ? OR discussion LIKE ? OR decisions LIKE ?", 4),
-                ("Vie quotidienne", "SELECT title AS Action, category AS Catégorie, due_date AS Date, status AS Statut FROM life_planner WHERE title LIKE ? OR category LIKE ? OR location LIKE ? OR notes LIKE ?", 4),
-            ]
-            _found_any = False
-            for _label, _sql, _n in _search_defs:
-                try:
-                    _res = read_df(_sql, tuple([_like] * _n))
-                    if not _res.empty:
-                        _found_any = True
-                        st.markdown(f"**{_label} · {_len if (_len := len(_res)) else 0} résultat(s)**")
-                        st.dataframe(_res.head(30), use_container_width=True, hide_index=True)
-                except Exception:
-                    continue
-            if not _found_any: st.info("Aucun résultat trouvé. Essaie un mot plus court ou une autre orthographe.")
-        else:
-            st.caption("La recherche s’effectue dans les données déjà enregistrées localement. Elle ne lance pas de recherche Internet.")
-
-    with tab_capture:
-        st.markdown("#### Boîte de réception des idées")
-        with st.form("xxl_capture_form", clear_on_submit=True):
-            _capture_text = st.text_area("Note, idée, chose à faire ou information à ne pas oublier *", height=100)
-            _capture_cat = st.selectbox("Classer cette capture", ["Idée", "Tâche", "Cours", "Projet", "Personnel", "À vérifier"])
-            _capture_submit = st.form_submit_button("⚡ Capturer", type="primary")
-        if _capture_submit:
-            if _capture_text.strip():
-                run("INSERT INTO quick_capture(content,category) VALUES(?,?)", (_capture_text.strip(), _capture_cat))
-                st.success("Capture enregistrée."); st.rerun()
-            else: st.warning("Écris une information avant de l’enregistrer.")
-        _captures = read_df("SELECT * FROM quick_capture WHERE converted=0 ORDER BY id DESC")
-        if _captures.empty: st.info("Ta boîte de capture est vide.")
-        else:
-            for _r in _captures.itertuples():
-                with st.container(border=True):
-                    st.markdown(f"**{_r.category} · {_r.captured_at}**")
-                    st.write(_r.content)
-                    _ca, _cb = st.columns([3, 1])
-                    with _ca:
-                        if st.button("Convertir en tâche", key=f"capture_task_{_r.id}"):
-                            run("INSERT INTO tasks(title,due_date,priority,status,category,notes) VALUES(?,?,?,?,?,?)", (_r.content[:180], "", "Normale", "À faire", "Travail personnel", f"Créée depuis la capture #{_r.id}"))
-                            run("UPDATE quick_capture SET converted=1 WHERE id=?", (int(_r.id),))
-                            st.success("Tâche créée."); st.rerun()
-                    with _cb:
-                        if st.button("Archiver", key=f"capture_archive_{_r.id}"):
-                            run("UPDATE quick_capture SET converted=1 WHERE id=?", (int(_r.id),)); st.rerun()
-        _arch = read_df("SELECT id,category,content,captured_at FROM quick_capture WHERE converted=1 ORDER BY id DESC LIMIT 20")
-        with st.expander("Captures archivées / converties"):
-            if _arch.empty: st.caption("Aucune capture archivée.")
-            else: st.dataframe(_arch, use_container_width=True, hide_index=True)
-
-    with tab_projects:
-        st.markdown("#### Gestion de projets personnels, universitaires ou professionnels")
-        with st.form("xxl_project_form", clear_on_submit=True):
-            _ptitle = st.text_input("Nom du projet *")
-            _pcols = st.columns(3)
-            _pcat = _pcols[0].selectbox("Domaine", ["Études", "Agronomie", "Professionnel", "Entreprise", "Personnel", "Recherche", "Autre"])
-            _pstatus = _pcols[1].selectbox("Statut", ["À démarrer", "En cours", "En attente", "Terminé", "Abandonné"])
-            _ppriority = _pcols[2].selectbox("Priorité", ["Basse", "Normale", "Haute", "Urgente"])
-            _pdates = st.columns(2)
-            _pstart = _pdates[0].date_input("Date de début", value=date.today())
-            _pdue_on = _pdates[1].checkbox("Définir une échéance", value=True)
-            _pdue = _pdates[1].date_input("Échéance", value=date.today()+timedelta(days=14), disabled=not _pdue_on)
-            _pprog = st.slider("Progression initiale (%)", 0, 100, 0)
-            _pdesc = st.text_area("Objectif, étapes et notes", height=90)
-            _psubmit = st.form_submit_button("Créer le projet", type="primary")
-        if _psubmit:
-            if not _ptitle.strip(): st.error("Le nom du projet est obligatoire.")
-            elif _pdue_on and _pdue < _pstart: st.error("L’échéance doit être égale ou postérieure au début.")
-            else:
-                run("INSERT INTO projects(title,category,status,priority,start_date,due_date,progress,description) VALUES(?,?,?,?,?,?,?,?)", (_ptitle.strip(), _pcat, _pstatus, _ppriority, _pstart.isoformat(), _pdue.isoformat() if _pdue_on else "", int(_pprog), _pdesc.strip()))
-                st.success("Projet créé."); st.rerun()
-        _projects = read_df("SELECT * FROM projects ORDER BY CASE priority WHEN 'Urgente' THEN 1 WHEN 'Haute' THEN 2 WHEN 'Normale' THEN 3 ELSE 4 END, due_date")
-        if _projects.empty: st.info("Aucun projet enregistré pour le moment.")
-        else:
-            for _r in _projects.itertuples():
-                with st.container(border=True):
-                    _head = st.columns([4, 1, 1])
-                    _head[0].markdown(f"### {_r.title}")
-                    _head[1].metric("Progression", f"{int(_r.progress)}%")
-                    _head[2].caption(f"Priorité : {_r.priority}")
-                    st.progress(max(0, min(100, int(_r.progress))) / 100)
-                    st.caption(f"{_r.category} · {_r.status} · Début : {_r.start_date or '—'} · Échéance : {_r.due_date or '—'}")
-                    if _r.description: st.write(_r.description)
-                    _ec1, _ec2, _ec3, _ec4 = st.columns([2, 2, 1, 1])
-                    _new_progress = _ec1.slider("Progression", 0, 100, int(_r.progress), key=f"proj_progress_{_r.id}")
-                    _new_status = _ec2.selectbox("Statut", ["À démarrer", "En cours", "En attente", "Terminé", "Abandonné"], index=["À démarrer", "En cours", "En attente", "Terminé", "Abandonné"].index(_r.status) if _r.status in ["À démarrer", "En cours", "En attente", "Terminé", "Abandonné"] else 0, key=f"proj_status_{_r.id}")
-                    if _ec3.button("Mettre à jour", key=f"proj_update_{_r.id}"):
-                        if _new_status == "Terminé": _new_progress = 100
-                        run("UPDATE projects SET progress=?,status=? WHERE id=?", (int(_new_progress), _new_status, int(_r.id))); st.rerun()
-                    if _ec4.button("Supprimer", key=f"proj_delete_{_r.id}"):
-                        run("DELETE FROM projects WHERE id=?", (int(_r.id),)); st.rerun()
-            export_csv(_projects, "les projets", "projets_xxl")
-
-    with tab_cards:
-        st.markdown("#### Fiches de mémorisation — question au recto, réponse au verso")
-        _sub_df, _sub_opts = subject_choices()
-        with st.form("xxl_flashcard_form", clear_on_submit=True):
-            _fquestion = st.text_area("Question / notion à retenir *", height=75)
-            _fanswer = st.text_area("Réponse / explication *", height=100)
-            _fsubject = st.selectbox("Matière associée", list(_sub_opts.keys()))
-            _ftags = st.text_input("Mots-clés")
-            _fsubmit = st.form_submit_button("Ajouter la fiche", type="primary")
-        if _fsubmit:
-            if not _fquestion.strip() or not _fanswer.strip(): st.error("La question et la réponse sont obligatoires.")
-            else:
-                run("INSERT INTO flashcards(subject_id,question,answer,tags) VALUES(?,?,?,?)", (_sub_opts[_fsubject], _fquestion.strip(), _fanswer.strip(), _ftags.strip()))
-                st.success("Fiche ajoutée."); st.rerun()
-        _fdf = read_df("SELECT f.*,s.title AS subject_title FROM flashcards f LEFT JOIN subjects s ON s.id=f.subject_id ORDER BY f.last_reviewed ASC,f.id DESC")
-        if _fdf.empty: st.info("Crée tes premières fiches à partir de tes cours, définitions, formules ou notions agronomiques.")
-        else:
-            _filter_subjects = ["Toutes les matières"] + sorted([str(x) for x in _fdf.subject_title.dropna().unique() if str(x).strip()])
-            _filter = st.selectbox("Filtrer les fiches", _filter_subjects, key="xxl_flash_filter")
-            _deck = _fdf if _filter == "Toutes les matières" else _fdf[_fdf.subject_title == _filter]
-            if not _deck.empty:
-                _idx = st.selectbox("Choisir une fiche", list(range(len(_deck))), format_func=lambda i: f"{i+1}/{len(_deck)} · {str(_deck.iloc[i]['question'])[:100]}", key="xxl_flash_pick")
-                _fc = _deck.iloc[_idx]
-                st.markdown("<div class='cc-card'>", unsafe_allow_html=True)
-                st.markdown("**QUESTION**")
-                st.markdown(str(_fc["question"]))
-                if _fc["tags"]: st.caption("Mots-clés : " + str(_fc["tags"]))
-                if st.button("👁️ Révéler la réponse", key=f"reveal_flash_{int(_fc['id'])}"):
-                    st.session_state[f"flash_revealed_{int(_fc['id'])}"] = True
-                if st.session_state.get(f"flash_revealed_{int(_fc['id'])}"):
-                    st.markdown("**RÉPONSE**")
-                    st.write(str(_fc["answer"]))
-                    _rating = st.radio("Comment as-tu maîtrisé cette fiche ?", ["À revoir", "Moyennement", "Bien maîtrisée"], horizontal=True, key=f"flash_rating_{int(_fc['id'])}")
-                    if st.button("Enregistrer mon niveau", key=f"flash_save_rating_{int(_fc['id'])}"):
-                        _conf = {"À revoir":1, "Moyennement":2, "Bien maîtrisée":3}[_rating]
-                        run("UPDATE flashcards SET confidence=?,last_reviewed=? WHERE id=?", (_conf, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), int(_fc["id"])))
-                        st.session_state[f"flash_revealed_{int(_fc['id'])}"] = False
-                        st.success("Progression de mémorisation enregistrée."); st.rerun()
-                st.markdown("</div>", unsafe_allow_html=True)
-                if st.button("Supprimer cette fiche", key=f"delete_flash_{int(_fc['id'])}"):
-                    run("DELETE FROM flashcards WHERE id=?", (int(_fc["id"]),)); st.rerun()
-            _stats = _fdf.confidence.value_counts().to_dict()
-            st.caption(f"À revoir : {_stats.get(1,0)} · Moyennement maîtrisées : {_stats.get(2,0)} · Bien maîtrisées : {_stats.get(3,0)}")
-            export_csv(_fdf, "les fiches mémoire", "fiches_memoire")
-
-    with tab_exams:
-        st.markdown("#### Calendrier des examens, devoirs et échéances importantes")
-        _sub_df_exam, _sub_opts_exam = subject_choices()
-        with st.form("xxl_exam_form", clear_on_submit=True):
-            _exam_title = st.text_input("Intitulé de l’échéance *", placeholder="Ex. Examen de pédologie, rendu du rapport…")
-            _excols = st.columns(3)
-            _exam_kind = _excols[0].selectbox("Type", ["Examen", "Devoir", "TP/TD", "Présentation", "Rapport", "Inscription", "Autre"])
-            _exam_subject = _excols[1].selectbox("Matière associée", list(_sub_opts_exam.keys()), key="xxl_exam_subject")
-            _exam_priority = _excols[2].selectbox("Priorité", ["Urgente", "Haute", "Normale", "Basse"], index=1)
-            _exam_date = st.date_input("Date limite / date prévue", value=date.today()+timedelta(days=7), key="xxl_exam_date")
-            _exam_notes = st.text_area("Chapitres à réviser, consignes ou détails", height=75)
-            _exam_submit = st.form_submit_button("Ajouter au calendrier", type="primary")
-        if _exam_submit:
-            if not _exam_title.strip(): st.error("L’intitulé est obligatoire.")
-            else:
-                run("INSERT INTO exam_deadlines(title,kind,subject_id,deadline,priority,notes) VALUES(?,?,?,?,?,?)", (_exam_title.strip(), _exam_kind, _sub_opts_exam[_exam_subject], _exam_date.isoformat(), _exam_priority, _exam_notes.strip()))
-                st.success("Échéance enregistrée."); st.rerun()
-        _exams = read_df("SELECT e.*,s.title AS subject_title FROM exam_deadlines e LEFT JOIN subjects s ON s.id=e.subject_id ORDER BY CASE e.status WHEN 'Terminé' THEN 2 ELSE 1 END, e.deadline ASC")
-        if _exams.empty:
-            st.info("Aucune échéance enregistrée. Ajoute tes examens et devoirs pour anticiper les révisions.")
-        else:
-            _today_s = date.today().isoformat()
-            _pending_ex = _exams[_exams.status != "Terminé"]
-            _overdue_ex = _pending_ex[_pending_ex.deadline.astype(str) < _today_s]
-            _ec = st.columns(3)
-            _ec[0].metric("Échéances", len(_exams))
-            _ec[1].metric("À préparer", len(_pending_ex))
-            _ec[2].metric("En retard", len(_overdue_ex))
-            for _ex in _exams.itertuples():
-                with st.container(border=True):
-                    _days_left = (date.fromisoformat(str(_ex.deadline)[:10]) - date.today()).days
-                    _tag = "✅ Terminé" if _ex.status == "Terminé" else (f"⚠️ En retard de {-_days_left} jour(s)" if _days_left < 0 else ("🔴 Aujourd’hui" if _days_left == 0 else f"📅 Dans {_days_left} jour(s)"))
-                    st.markdown(f"**{_ex.title}** · {_ex.kind} · {_ex.priority}")
-                    st.caption(f"{_ex.subject_title or 'Sans matière'} · Date : {_ex.deadline} · {_tag}")
-                    if _ex.notes: st.write(_ex.notes)
-                    _sx, _dx = st.columns([3,1])
-                    _new_exam_status = _sx.selectbox("État", ["À préparer", "En préparation", "Terminé", "Reporté"], index=["À préparer", "En préparation", "Terminé", "Reporté"].index(_ex.status) if _ex.status in ["À préparer", "En préparation", "Terminé", "Reporté"] else 0, key=f"exam_status_{_ex.id}")
-                    if _sx.button("Enregistrer l’état", key=f"exam_update_{_ex.id}"):
-                        run("UPDATE exam_deadlines SET status=? WHERE id=?", (_new_exam_status, int(_ex.id))); st.rerun()
-                    if _dx.button("Supprimer", key=f"exam_delete_{_ex.id}"):
-                        run("DELETE FROM exam_deadlines WHERE id=?", (int(_ex.id),)); st.rerun()
-            export_csv(_exams, "les examens et échéances", "examens_echeances")
-
-    with tab_focus:
-        st.markdown("#### Séances de concentration et suivi du temps d’étude")
-        st.info("Enregistre ici une séance réellement effectuée. Le module journalise le temps et les matières ; il ne prétend pas faire tourner un minuteur en arrière-plan lorsque l’application est fermée.")
-        _sub_df_focus, _sub_opts_focus = subject_choices()
-        with st.form("xxl_focus_form", clear_on_submit=True):
-            _focus_date = st.date_input("Date de la séance", value=date.today(), key="xxl_focus_date")
-            _focus_subject = st.selectbox("Matière étudiée", list(_sub_opts_focus.keys()), key="xxl_focus_subject")
-            _focus_cols = st.columns(3)
-            _focus_minutes = _focus_cols[0].number_input("Durée (minutes)", min_value=5, max_value=600, value=25, step=5)
-            _focus_method = _focus_cols[1].selectbox("Méthode", ["Pomodoro", "Révision active", "Lecture", "Exercices", "Fiche de synthèse", "Travail pratique", "Autre"])
-            _focus_level = _focus_cols[2].slider("Concentration (1–5)", 1, 5, 4)
-            _focus_notes = st.text_area("Ce que tu as accompli / prochaine étape", height=75)
-            _focus_submit = st.form_submit_button("Enregistrer la séance", type="primary")
-        if _focus_submit:
-            run("INSERT INTO focus_sessions(session_date,subject_id,duration_minutes,method,focus_level,notes) VALUES(?,?,?,?,?,?)", (_focus_date.isoformat(), _sub_opts_focus[_focus_subject], int(_focus_minutes), _focus_method, int(_focus_level), _focus_notes.strip()))
-            st.success("Séance enregistrée. Bravo pour le travail accompli !"); st.rerun()
-        _focus_df = read_df("SELECT f.*,s.title AS subject_title FROM focus_sessions f LEFT JOIN subjects s ON s.id=f.subject_id ORDER BY f.session_date DESC,f.id DESC")
-        if _focus_df.empty:
-            st.caption("Tes statistiques de concentration apparaîtront après la première séance enregistrée.")
-        else:
-            _focus_today = _focus_df[_focus_df.session_date.astype(str) == date.today().isoformat()]
-            _focus_week_start = (date.today()-timedelta(days=date.today().weekday())).isoformat()
-            _focus_week = _focus_df[_focus_df.session_date.astype(str) >= _focus_week_start]
-            _fc1, _fc2, _fc3 = st.columns(3)
-            _fc1.metric("Aujourd’hui", f"{_focus_today.duration_minutes.sum()/60:.1f} h", f"{len(_focus_today)} séance(s)")
-            _fc2.metric("Cette semaine", f"{_focus_week.duration_minutes.sum()/60:.1f} h", f"{len(_focus_week)} séance(s)")
-            _fc3.metric("Temps cumulé", f"{_focus_df.duration_minutes.sum()/60:.1f} h", f"{len(_focus_df)} séance(s)")
-            st.dataframe(_focus_df[["session_date","subject_title","duration_minutes","method","focus_level","notes"]].rename(columns={"session_date":"Date","subject_title":"Matière","duration_minutes":"Minutes","method":"Méthode","focus_level":"Concentration / 5","notes":"Bilan"}), use_container_width=True, hide_index=True)
-            export_csv(_focus_df, "les séances de concentration", "seances_concentration")
-
-    with tab_journal:
-        st.markdown("#### Bilan quotidien pour suivre ton énergie et tes progrès")
-        _jdate = st.date_input("Date du bilan", value=date.today(), key="xxl_journal_date")
-        _existing_j = read_df("SELECT * FROM daily_journal WHERE journal_date=?", (_jdate.isoformat(),))
-        _jrow = _existing_j.iloc[0] if not _existing_j.empty else None
-        with st.form("xxl_journal_form"):
-            _jmood_opts = ["Excellente", "Bonne", "Correcte", "Fatiguée", "Stressée"]
-            _jmood_default = _jmood_opts.index(_jrow["mood"]) if _jrow is not None and _jrow["mood"] in _jmood_opts else 2
-            _jmood = st.selectbox("Humeur générale", _jmood_opts, index=_jmood_default)
-            _jenergy = st.slider("Énergie (1 = très basse, 5 = très élevée)", 1, 5, int(_jrow["energy"]) if _jrow is not None else 3)
-            _jhigh = st.text_area("Mes réussites / ce que j’ai appris", value=str(_jrow["highlights"]) if _jrow is not None else "")
-            _jbetter = st.text_area("Ce que je peux améliorer", value=str(_jrow["improvements"]) if _jrow is not None else "")
-            _jtomo = st.text_area("Mes trois priorités pour demain", value=str(_jrow["tomorrow"]) if _jrow is not None else "")
-            _jsave = st.form_submit_button("Enregistrer le bilan", type="primary")
-        if _jsave:
-            run("INSERT INTO daily_journal(journal_date,mood,energy,highlights,improvements,tomorrow,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(journal_date) DO UPDATE SET mood=excluded.mood,energy=excluded.energy,highlights=excluded.highlights,improvements=excluded.improvements,tomorrow=excluded.tomorrow,updated_at=excluded.updated_at", (_jdate.isoformat(), _jmood, int(_jenergy), _jhigh.strip(), _jbetter.strip(), _jtomo.strip(), datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-            st.success("Bilan enregistré."); st.rerun()
-        _jhistory = read_df("SELECT journal_date AS Date,mood AS Humeur,energy AS Energie,highlights AS Reussites,tomorrow AS Priorites_demain FROM daily_journal ORDER BY journal_date DESC LIMIT 30")
-        if not _jhistory.empty:
-            st.markdown("#### Historique récent")
-            st.dataframe(_jhistory, use_container_width=True, hide_index=True)
-            export_csv(_jhistory, "le journal quotidien", "journal_quotidien")
-
-    with tab_meetings:
-        st.markdown("#### Carnet de réunions, rendez-vous professionnels et rencontres")
-        st.caption("Garde une trace claire de ce qui a été discuté, des décisions prises et des actions à suivre. Les réunions futures déclenchent automatiquement un rappel par e-mail une heure avant ; une prochaine rencontre enregistrée déclenche un rappel la veille à 08 h.")
-        with st.form("xxl_meeting_form", clear_on_submit=True):
-            _mtitle = st.text_input("Objet de la réunion / rencontre *", placeholder="Ex. Réunion du comité, rencontre avec un partenaire")
-            _mc1, _mc2, _mc3 = st.columns(3)
-            _mdate = _mc1.date_input("Date", value=date.today(), key="xxl_meeting_date")
-            _mtime = _mc2.time_input("Heure", value=time(10, 0), key="xxl_meeting_time")
-            _mlocation = _mc3.text_input("Lieu / lien", placeholder="Bureau, salle, téléphone…")
-            _mparticipants = st.text_input("Participants", placeholder="Noms, fonctions ou organisations")
-            _mpurpose = st.text_area("Objet et objectifs", height=65)
-            _mdiscussion = st.text_area("Résumé des échanges / points abordés", height=110)
-            _mdecisions = st.text_area("Décisions prises", height=85)
-            _mactions = st.text_area("Actions à mener : responsable et délai", height=85, placeholder="Action — responsable — échéance")
-            _mnext_on = st.checkbox("Prévoir une prochaine rencontre", value=False, key="xxl_meeting_next_on")
-            _mnext = st.date_input("Date de la prochaine rencontre", value=date.today()+timedelta(days=7), disabled=not _mnext_on, key="xxl_meeting_next")
-            _msave = st.form_submit_button("💾 Enregistrer le compte rendu", type="primary")
-        if _msave:
-            if not _mtitle.strip():
-                st.error("L’objet de la réunion est obligatoire.")
-            else:
-                run("INSERT INTO meeting_notes(title,meeting_date,meeting_time,location,participants,purpose,discussion,decisions,action_items,next_meeting) VALUES(?,?,?,?,?,?,?,?,?,?)", (_mtitle.strip(), _mdate.isoformat(), _mtime.strftime("%H:%M"), _mlocation.strip(), _mparticipants.strip(), _mpurpose.strip(), _mdiscussion.strip(), _mdecisions.strip(), _mactions.strip(), _mnext.isoformat() if _mnext_on else ""))
-                st.success("Compte rendu enregistré. Le rappel de la réunion ou de la prochaine rencontre sera synchronisé automatiquement."); st.rerun()
-        _meetings = read_df("SELECT * FROM meeting_notes ORDER BY meeting_date DESC,id DESC")
-        _meeting_reminders = read_df("SELECT title,remind_at,status FROM reminders WHERE source_type IN ('meeting','meeting_next') AND enabled=1 AND status='En attente' ORDER BY remind_at")
-        if not _meeting_reminders.empty:
-            st.info(f"🔔 {len(_meeting_reminders)} rappel(s) de réunion / prochaine rencontre sont programmés. Prochain : {_meeting_reminders.iloc[0]['title']} — {_meeting_reminders.iloc[0]['remind_at']}.")
-        else:
-            st.caption("Aucun rappel de réunion en attente pour le moment. Les rappels se créent automatiquement dès qu’une date future est enregistrée.")
-        st.markdown("#### Comptes rendus enregistrés")
-        if _meetings.empty:
-            st.info("Aucune réunion enregistrée. Le premier compte rendu apparaîtra ici.")
-        else:
-            _meeting_filter = st.text_input("Filtrer par objet, participant, lieu ou contenu", key="xxl_meeting_filter")
-            _meeting_view = _meetings
-            if _meeting_filter.strip():
-                _mask = _meetings.astype(str).apply(lambda col: col.str.contains(_meeting_filter.strip(), case=False, na=False)).any(axis=1)
-                _meeting_view = _meetings[_mask]
-            for _mr in _meeting_view.itertuples():
-                with st.container(border=True):
-                    st.markdown(f"### 🤝 {_mr.title}")
-                    st.caption(f"{_mr.meeting_date} à {_mr.meeting_time or 'heure non précisée'} · {_mr.location or 'Lieu non précisé'}")
-                    if _mr.participants: st.markdown(f"**Participants :** {_mr.participants}")
-                    if _mr.purpose: st.markdown(f"**Objet :** {_mr.purpose}")
-                    if _mr.discussion: st.markdown(f"**Échanges :** {_mr.discussion}")
-                    if _mr.decisions: st.markdown(f"**Décisions :** {_mr.decisions}")
-                    if _mr.action_items: st.markdown(f"**Actions à suivre :**\n\n{_mr.action_items}")
-                    if _mr.next_meeting: st.caption(f"Prochaine rencontre : {_mr.next_meeting}")
-                    if st.button("Supprimer ce compte rendu", key=f"meeting_delete_{_mr.id}"):
-                        run("DELETE FROM meeting_notes WHERE id=?", (int(_mr.id),)); st.rerun()
-            export_csv(_meetings, "les comptes rendus de réunion", "comptes_rendus_reunions")
-
-    with tab_life:
-        st.markdown("#### Organisateur de vie quotidienne")
-        st.caption("Pour tes rendez-vous, démarches administratives, courses, obligations familiales, projets personnels et choses à ne pas oublier — sans lien avec les études. Le rappel est créé automatiquement : la veille à 08 h pour une tâche datée sans heure, ou une heure avant si tu précises l’heure.")
-        with st.form("xxl_life_form", clear_on_submit=True):
-            _ltitle = st.text_input("Que dois-tu faire ? *", placeholder="Ex. Renouveler un document, acheter du matériel, voir un partenaire")
-            _lc1, _lc2, _lc3 = st.columns(3)
-            _lcat = _lc1.selectbox("Catégorie", ["Rendez-vous", "Démarche administrative", "Courses / achats", "Famille", "Maison", "Transport / déplacement", "Finances", "Projet personnel", "Autre"])
-            _ldate_on = _lc2.checkbox("Définir une date", value=True, key="xxl_life_date_on")
-            _ldate = _lc2.date_input("Date prévue", value=date.today(), disabled=not _ldate_on, key="xxl_life_date")
-            _ltime_on = _lc3.checkbox("Définir une heure", value=False, key="xxl_life_time_on")
-            _ltime = _lc3.time_input("Heure", value=time(9, 0), disabled=not _ltime_on, key="xxl_life_time")
-            _lc4, _lc5, _lc6 = st.columns(3)
-            _lpriority = _lc4.selectbox("Priorité", ["Basse", "Normale", "Haute", "Urgente"])
-            _llocation = _lc5.text_input("Lieu", placeholder="Adresse, quartier ou établissement")
-            _lcost = _lc6.number_input("Budget estimé (FCFA)", min_value=0, value=0, step=500)
-            _lnotes = st.text_area("Notes, documents à apporter ou détails", height=80)
-            _lsave = st.form_submit_button("➕ Ajouter à mon organiseur", type="primary")
-        if _lsave:
-            if not _ltitle.strip():
-                st.error("Indique ce que tu dois faire.")
-            else:
-                run("INSERT INTO life_planner(title,category,due_date,due_time,priority,status,location,estimated_cost,notes) VALUES(?,?,?,?,?,?,?,?,?)", (_ltitle.strip(), _lcat, _ldate.isoformat() if _ldate_on else "", _ltime.strftime("%H:%M") if _ltime_on else "", _lpriority, "À faire", _llocation.strip(), float(_lcost), _lnotes.strip()))
-                st.success("Ajouté à ton organiseur personnel. Le rappel sera programmé automatiquement selon la date et l’heure indiquées."); st.rerun()
-        _life = read_df("SELECT * FROM life_planner ORDER BY CASE status WHEN 'Terminé' THEN 2 ELSE 1 END, CASE priority WHEN 'Urgente' THEN 1 WHEN 'Haute' THEN 2 WHEN 'Normale' THEN 3 ELSE 4 END, CASE WHEN due_date='' THEN 1 ELSE 0 END,due_date,due_time")
-        _life_reminders = read_df("SELECT title,remind_at,status FROM reminders WHERE source_type IN ('life_planner','life_planner_day') AND enabled=1 AND status='En attente' ORDER BY remind_at")
-        if not _life_reminders.empty:
-            st.info(f"🔔 {len(_life_reminders)} rappel(s) personnel(s) sont programmés. Prochain : {_life_reminders.iloc[0]['title']} — {_life_reminders.iloc[0]['remind_at']}.")
-        if _life.empty:
-            st.info("Ton organiseur est vide. Ajoute un rendez-vous ou une démarche à suivre.")
-        else:
-            _today_l = date.today().isoformat()
-            _pending_l = _life[_life.status != "Terminé"]
-            _overdue_l = _pending_l[(_pending_l.due_date.astype(str) != "") & (_pending_l.due_date.astype(str) < _today_l)]
-            _lcards = st.columns(3)
-            _lcards[0].metric("À faire", len(_pending_l))
-            _lcards[1].metric("En retard", len(_overdue_l))
-            _lcards[2].metric("Terminés", int((_life.status == "Terminé").sum()))
-            _life_filter = st.selectbox("Afficher", ["Tout", "À faire", "En cours", "Terminé"] , key="xxl_life_filter")
-            _life_view = _life if _life_filter == "Tout" else _life[_life.status == _life_filter]
-            for _lr in _life_view.itertuples():
-                with st.container(border=True):
-                    _due_label = _lr.due_date or "Sans date"
-                    if _lr.due_date and _lr.status != "Terminé" and _lr.due_date < _today_l:
-                        _due_label += " · ⚠️ EN RETARD"
-                    st.markdown(f"**{_lr.title}** · {_lr.category}")
-                    st.caption(f"{_due_label}{(' à ' + _lr.due_time) if _lr.due_time else ''} · Priorité : {_lr.priority} · Lieu : {_lr.location or '—'} · Budget estimé : {float(_lr.estimated_cost):,.0f} FCFA")
-                    if _lr.notes: st.write(_lr.notes)
-                    _lu, _ld = st.columns([3,1])
-                    _new_lstatus = _lu.selectbox("Statut", ["À faire", "En cours", "Terminé", "Annulé"], index=["À faire", "En cours", "Terminé", "Annulé"].index(_lr.status) if _lr.status in ["À faire", "En cours", "Terminé", "Annulé"] else 0, key=f"life_status_{_lr.id}")
-                    if _lu.button("Mettre à jour", key=f"life_update_{_lr.id}"):
-                        run("UPDATE life_planner SET status=? WHERE id=?", (_new_lstatus, int(_lr.id))); st.rerun()
-                    if _ld.button("Supprimer", key=f"life_delete_{_lr.id}"):
-                        run("DELETE FROM life_planner WHERE id=?", (int(_lr.id),)); st.rerun()
-            export_csv(_life, "les tâches de vie quotidienne", "organiseur_vie_quotidienne")
-
 # ---------- Sauvegarde ----------
 elif page=="Paramètres & sauvegarde":
     header('PARAMÈTRES & DONNÉES','Paramètres & sauvegarde','Télécharge tes données pour garder une copie. Fais régulièrement une sauvegarde du fichier SQLite.')
     st.warning(f'Base active : {DB_PATH}. Cette application utilise une base distincte ; ne la remplace pas par la base d’une autre application.')
-    tables={'Matières':'subjects','Emploi du temps':'events','Tâches':'tasks','Ressources archivées (ancien espace)':'documents','Journal d’étude':'study_logs','Objectifs':'goals','Habitudes':'habits','Historique habitudes':'habit_logs','Budget':'budgets','Notes personnelles':'life_notes','Contacts':'contacts','Compétences':'career_skills','Formations':'career_training','Opportunités professionnelles':'career_opportunities','Rappels e-mail':'reminders','Captures rapides':'quick_capture','Projets XXL':'projects','Fiches mémoire':'flashcards','Journal quotidien':'daily_journal','Examens et échéances':'exam_deadlines','Séances de concentration':'focus_sessions','Comptes rendus de réunion':'meeting_notes','Organiseur de vie quotidienne':'life_planner','Bibliothèque de documents':'assistant_docs'}
+    tables={'Matières':'subjects','Emploi du temps':'events','Tâches':'tasks','Ressources archivées (ancien espace)':'documents','Journal d’étude':'study_logs','Objectifs':'goals','Habitudes':'habits','Historique habitudes':'habit_logs','Budget':'budgets','Notes personnelles':'life_notes','Contacts':'contacts','Compétences':'career_skills','Formations':'career_training','Opportunités professionnelles':'career_opportunities','Rappels e-mail':'reminders'}
     for label,table in tables.items():
         df=read_df(f'SELECT * FROM {table}')
         with st.expander(f'{label} — {len(df)} enregistrement(s)'):
@@ -1649,7 +1306,7 @@ elif page=="Paramètres & sauvegarde":
 
 st.markdown('<div class="issa-footer"><strong>🗂️ Secrétaire Issa</strong><br><small>Un espace personnel de secrétariat, de suivi et d’organisation · Données stockées localement dans SQLite.</small></div>',unsafe_allow_html=True)
 role_icons={
-    "Vue d’ensemble":"🏠", "Centre XXL":"⚡", "Maquettes & matières":"🎓", "Emploi du temps":"🗓️",
+    "Vue d’ensemble":"🏠", "Maquettes & matières":"🎓", "Emploi du temps":"🗓️",
     "Programmes de révision":"🎯", "Suivi & progression":"📈", "Assistant de vie":"👤", "Rappels automatiques":"🔔", "Assistant e-mail & documents":"✉️",
     "Compétences & Carrière":"🚀", "Paramètres & sauvegarde":"⚙️"
 }
