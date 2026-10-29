@@ -286,13 +286,20 @@ def _ensure_app_schema():
                     if re.search(r"\bNOT\s+NULL\b", definition, re.I):
                         fallback = _migration_fallback(table, column, definition)
                         c.execute(f'UPDATE {table} SET "{column}"=%s WHERE "{column}" IS NULL', (fallback,))
-                        c.execute(f'ALTER TABLE {table} ALTER COLUMN "{column}" SET NOT NULL')
+                        # Contrainte appliquée seulement à une nouvelle colonne
+                        # après remplissage ; si un schéma atypique l'empêche,
+                        # l'initialisation ne doit pas interrompre toute l'application.
+                        try:
+                            c.execute(f'ALTER TABLE {table} ALTER COLUMN "{column}" SET NOT NULL')
+                        except Exception:
+                            pass
                 elif re.search(r"\bNOT\s+NULL\b", definition, re.I):
-                    # Certaines anciennes versions avaient déjà la colonne mais
-                    # des lignes anciennes contiennent NULL. Les corriger d'abord.
+                    # Corrige les NULL des anciennes lignes, sans imposer une
+                    # contrainte plus stricte sur une table déjà utilisée.
                     fallback = _migration_fallback(table, column, definition)
                     c.execute(f'UPDATE {table} SET "{column}"=%s WHERE "{column}" IS NULL', (fallback,))
-                    c.execute(f'ALTER TABLE {table} ALTER COLUMN "{column}" SET NOT NULL')
+                    # Ne pas forcer SET NOT NULL sur les colonnes existantes :
+                    # les données historiques et les dépendances restent intactes.
         c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_reminders_source ON reminders(source_type, source_id) WHERE source_type <> '' AND source_id IS NOT NULL")
 
     expected = set(definitions)
@@ -303,30 +310,16 @@ def _ensure_app_schema():
         raise RuntimeError("Tables absentes après initialisation : " + ", ".join(missing))
     return expected
 
-def _keep_only_app_tables(expected_tables):
-    """Supprime les tables supplémentaires du schéma public; conserve toutes les tables de l'application."""
-    from psycopg2 import sql
-    with connect() as c:
-        rows = c.execute(
-            "SELECT table_name FROM information_schema.tables "
-            "WHERE table_schema='public' AND table_type='BASE TABLE' ORDER BY table_name"
-        ).fetchall()
-        existing = {row["table_name"] for row in rows}
-        extras = sorted(existing - set(expected_tables))
-        for table_name in extras:
-            # Identifiant SQL échappé par psycopg2; CASCADE retire aussi les dépendances SQL de cette table.
-            c.execute(sql.SQL("DROP TABLE IF EXISTS public.{} CASCADE").format(sql.Identifier(table_name)))
-    return extras
-
-with st.spinner("Initialisation et nettoyage des tables Supabase…"):
+with st.spinner("Initialisation XXL de Supabase : vérification et création des tables de Secrétaire Issa…"):
     try:
         init_db()
         _expected_app_tables = _ensure_app_schema()
-        _removed_extra_tables = _keep_only_app_tables(_expected_app_tables)
-        if _removed_extra_tables:
-            st.success("Nettoyage Supabase terminé. Tables supplémentaires supprimées : " + ", ".join(_removed_extra_tables))
+        # Mode non destructif : les tables étrangères ou anciennes de public
+        # restent en place. Seules les tables utilisées par cette application
+        # sont créées ou mises à niveau ; aucune table n'est supprimée.
+        st.session_state["issa_supabase_tables_ready"] = sorted(_expected_app_tables)
     except Exception as exc:
-        st.error("Initialisation/nettoyage Supabase impossible. Vérifie les Secrets et les droits PostgreSQL. Le schéma existant a pu nécessiter une migration; consulte les journaux. Détail technique : " + str(exc)[:700])
+        st.error("Initialisation Supabase impossible. Vérifie les Secrets, les droits PostgreSQL et les journaux. Aucune table supplémentaire n'est supprimée par cette version. Détail technique : " + str(exc)[:700])
         st.stop()
 
 DEFAULT_REMINDER_PHONE = "+221777473170"  # conservé pour compatibilité avec les anciennes bases
@@ -1699,8 +1692,8 @@ elif page=="Centre de productivité XXL":
         else: st.info('Aucun rendez-vous ou démarche enregistré.')
 
 elif page=="Paramètres & sauvegarde":
-    header('PARAMÈTRES & DONNÉES','Paramètres & sauvegarde','Les données sont enregistrées dans Supabase PostgreSQL ; les tables sont vérifiées et créées automatiquement.')
-    st.success(f'Base active : Supabase PostgreSQL · { _SUPABASE_DB_HOST } · base { _SUPABASE_DB_NAME }. Les tables de l’application sont créées automatiquement au démarrage.')
+    header('PARAMÈTRES & DONNÉES','Paramètres & sauvegarde','Les données sont enregistrées dans Supabase PostgreSQL ; les tables sont vérifiées et créées automatiquement, sans supprimer les tables déjà présentes.')
+    st.success(f'Base active : Supabase PostgreSQL · { _SUPABASE_DB_HOST } · base { _SUPABASE_DB_NAME }. Les tables de l’application sont créées automatiquement au démarrage ; les autres tables Supabase sont conservées.')
     tables={'Matières':'subjects','Emploi du temps':'events','Tâches':'tasks','Ressources archivées (ancien espace)':'documents','Journal d’étude':'study_logs','Objectifs':'goals','Habitudes':'habits','Historique habitudes':'habit_logs','Budget':'budgets','Notes personnelles':'life_notes','Contacts':'contacts','Compétences':'career_skills','Formations':'career_training','Opportunités professionnelles':'career_opportunities','Rappels e-mail':'reminders','Projets du Central':'productivity_projects','Flashcards':'flashcards','Séances de concentration':'focus_sessions','Journal quotidien':'daily_journal','Comptes rendus':'meeting_minutes','Organisateur de vie':'life_organizer'}
     for label,table in tables.items():
         df=read_df(f'SELECT * FROM {table}')
