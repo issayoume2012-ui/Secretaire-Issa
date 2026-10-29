@@ -412,8 +412,8 @@ def fetch_recent_emails(limit=15):
             items.append({"id": msg_id.decode("ascii", errors="ignore"), "subject": _decode_mime(msg.get("Subject", "(sans objet)")), "from": _decode_mime(msg.get("From", "")), "date": _decode_mime(msg.get("Date", "")), "body": _email_body(msg)})
     return items
 
-def transcribe_audio(uploaded_audio):
-    """Transcrit un enregistrement vocal en français avec des messages d'erreur utiles."""
+def transcribe_audio(uploaded_audio, language="fr-FR"):
+    """Transcrit un enregistrement vocal dans la langue choisie, avec des erreurs utiles."""
     if uploaded_audio is None:
         return ""
     try:
@@ -434,9 +434,9 @@ def transcribe_audio(uploaded_audio):
         if getattr(audio_data, "frame_data", b"") == b"":
             raise RuntimeError("L’enregistrement est vide. Vérifie le microphone puis recommence.")
         try:
-            text = recognizer.recognize_google(audio_data, language="fr-FR")
+            text = recognizer.recognize_google(audio_data, language=language)
         except sr.UnknownValueError:
-            raise RuntimeError("Aucune parole claire n’a été reconnue. Parle distinctement en français, près du microphone, dans un endroit calme. Enregistre une phrase courte (2 à 6 secondes), puis réessaie.") from None
+            raise RuntimeError("Aucune parole claire n’a été reconnue. Parle distinctement, près du microphone, dans un endroit calme. En wolof, la reconnaissance dépend du support du service vocal : essaie une phrase courte ou saisis la commande au clavier.") from None
         except sr.RequestError:
             raise RuntimeError("Le service de reconnaissance vocale est momentanément inaccessible. Vérifie la connexion Internet puis réessaie.") from None
         if not text or not text.strip():
@@ -790,70 +790,90 @@ PAGE_ROLE={
     "Paramètres & sauvegarde":"Secrétaire chargé des paramètres, des exports et de la sauvegarde des données"
 }
 st.markdown('''<div class="issa-brand"><span class="issa-badge">Organisation · Pédagogie · Assistance</span><h1>🗂️ Secrétaire Issa</h1><p>Votre espace de secrétariat intelligent : chaque espace correspond à un secrétaire chargé d’une mission précise.</p></div>''',unsafe_allow_html=True)
-st.markdown('<div class="issa-nav-title">Navigation vocale XXL · Dites le nom d’un onglet ou d’un sous-onglet</div>',unsafe_allow_html=True)
-# Contrôle vocal global : indépendant de la dictée des e-mails et de la rubrique Carrière.
-# Il est placé tout en haut et ne remplace aucune fonctionnalité existante.
+st.markdown('<div class="issa-nav-title">🎙️ Seugn bi · Navigation vocale intelligente — Parlez français ou wolof</div>',unsafe_allow_html=True)
+# Navigation vocale bilingue + lanceur d'applications externes. Les applications s'ouvrent dans un nouvel onglet via des liens explicites.
+_NAV_APPS = {
+    "Gmail": ("https://mail.google.com/", ("gmail", "mail", "e mail", "email", "courriel", "saññ email", "email yi")),
+    "Google Calendar": ("https://calendar.google.com/", ("calendar", "google calendar", "agenda google", "calendrier google", "waxtu yi", "sama agenda")),
+    "Google Drive": ("https://drive.google.com/", ("drive", "google drive", "fichiers google", "sama dokimaan", "documents yi")),
+    "WhatsApp Web": ("https://web.whatsapp.com/", ("whatsapp", "wati", "waatsapp", "messages whatsapp")),
+    "YouTube": ("https://www.youtube.com/", ("youtube", "video", "vidéos", "wone video")),
+    "Google Maps": ("https://maps.google.com/", ("maps", "google maps", "itineraire", "carte", "yoon wi")),
+    "ChatGPT": ("https://chatgpt.com/", ("chatgpt", "assistant ia", "intelligence artificielle", "seugn bi ak ia")),
+}
 with st.container(border=True):
-    _voice_col, _help_col = st.columns([3, 2])
-    with _voice_col:
-        _nav_audio = st.audio_input("🎙️ Parler pour ouvrir une rubrique ou poser une question", key="global_voice_navigation_audio")
-        _nav_text = st.text_input("Ou écrivez votre commande", placeholder="Ex. : ouvre l’emploi du temps", key="global_voice_navigation_text")
-        _nav_go = st.button("🧭 Seugn bi : comprendre et répondre", key="global_voice_navigation_go", use_container_width=True, type="primary", disabled=(_nav_audio is None and not _nav_text.strip()))
-    with _help_col:
-        st.markdown("**Exemples de commandes**")
-        st.caption("« Ouvre l’emploi du temps », « va à carrière », « ouvre les matières », « assistant e-mail », « paramètres ».")
-        st.caption("Tu peux aussi prononcer un sous-onglet, par exemple « compétences » ou « formations ».")
+    _vcol1, _vcol2 = st.columns([3, 2])
+    with _vcol1:
+        _nav_language_label = st.selectbox("🌍 Langue de commande / Làkk", ["Français", "Wolof"], key="global_voice_nav_language", help="La saisie écrite accepte les deux langues. La reconnaissance vocale wolof dépend du support du moteur de transcription.")
+        _nav_lang_code = "fr-FR" if _nav_language_label == "Français" else "wo-SN"
+        _nav_audio = st.audio_input("🎙️ Enregistrez votre commande / Waxal sa ndigal", key="global_voice_navigation_audio")
+        _nav_text = st.text_input("⌨️ Ou tapez votre demande / Wallaa nga bind", placeholder="Ex. : Ouvre l’emploi du temps · Ubbi sama emploi du temps · Ouvre Gmail", key="global_voice_navigation_text")
+        _nav_go = st.button("✨ Seugn bi, écoute et agis ! / Déggal te defal", key="global_voice_navigation_go", use_container_width=True, type="primary", disabled=(_nav_audio is None and not _nav_text.strip()))
+    with _vcol2:
+        st.markdown("**Essaie ces commandes / Jéemal ndigal yii**")
+        st.markdown("- 🇫🇷 « Ouvre mon planning » · « Va aux révisions » · « Ouvre Gmail »")
+        st.markdown("- 🇸🇳 « Ubbi sama planning » · « Demal ci révisions » · « Ubbi Gmail »")
+        st.caption("Seugn bi peut naviguer dans les rubriques et ouvrir des applications web. Il ne peut pas envoyer un message ou modifier une autre application sans connexion et autorisation dédiées.")
     if _nav_go and (_nav_audio is not None or _nav_text.strip()):
         try:
-            _spoken_nav = transcribe_audio(_nav_audio) if _nav_audio is not None else _nav_text.strip()
+            _spoken_nav = transcribe_audio(_nav_audio, language=_nav_lang_code) if _nav_audio is not None else _nav_text.strip()
             _spoken_norm = unicodedata.normalize("NFKD", _spoken_nav.lower()).encode("ascii", "ignore").decode("ascii")
             _spoken_norm = re.sub(r"[^a-z0-9 ]+", " ", _spoken_norm)
+            _app_match = next(((name, url) for name, (url, terms) in _NAV_APPS.items() if any(unicodedata.normalize("NFKD", term.lower()).encode("ascii", "ignore").decode("ascii") in _spoken_norm for term in terms)), None)
+            if _app_match:
+                _app_name, _app_url = _app_match
+                _reply = (f"Seugn bi: D'accord, j'ouvre {_app_name} dans un nouvel onglet. Suivez le lien ci-dessous si le navigateur ne l'ouvre pas automatiquement."
+                          if _nav_language_label == "Français" else f"Seugn bi: Waaw, maa ngi lay jox yoon wi ci {_app_name}. Cuqal ci butoŋ bi ngir ubbi ko ci beneen onglet.")
+                st.session_state["global_voice_nav_app"] = _app_name
+                st.session_state["global_voice_nav_app_url"] = _app_url
+                st.session_state["global_voice_nav_message"] = _reply
+                st.session_state["global_voice_nav_speak"] = _reply
+                st.session_state["global_voice_nav_speech_lang"] = "fr-FR" if _nav_language_label == "Français" else "wo-SN"
+                st.rerun()
             _nav_routes = [
-                (("accueil", "vue d ensemble", "vue ensemble", "home", "tableau de bord general"), "Vue d’ensemble", None),
-                (("matiere", "matieres", "maquette", "maquettes", "academie", "ue"), "Maquettes & matières", None),
-                (("emploi du temps", "planning", "agenda", "calendrier", "cours"), "Emploi du temps", None),
-                (("revision", "revisions", "programme de revision", "programmes de revision"), "Programmes de révision", None),
-                (("progression", "suivi", "resultats", "heures etude"), "Suivi & progression", None),
-                (("vie personnelle", "assistant de vie", "budget", "contacts", "habitudes", "objectifs"), "Assistant de vie", None),
-                (("rappel", "rappels", "echeance", "rappels automatiques"), "Rappels automatiques", None),
-                (("email", "e mail", "messagerie", "documents", "assistant email", "assistant mail"), "Assistant e-mail & documents", None),
-                (("carriere", "competence", "competences", "formation", "formations", "certification", "stage", "opportunite", "portfolio"), "Compétences & Carrière", None),
-                (("parametre", "parametres", "sauvegarde", "export", "configuration"), "Paramètres & sauvegarde", None),
+                (("accueil", "vue d ensemble", "vue ensemble", "home", "tableau de bord general", "kaay ci kanam", "dalal ak jamm"), "Vue d’ensemble"),
+                (("matiere", "matieres", "maquette", "maquettes", "academie", "ue", "jàng", "njàng"), "Maquettes & matières"),
+                (("emploi du temps", "planning", "agenda", "calendrier", "cours", "sama waxtu", "waxtu yi", "cours yi"), "Emploi du temps"),
+                (("revision", "revisions", "programme de revision", "programmes de revision", "jàngaat", "jàngaat yi"), "Programmes de révision"),
+                (("progression", "suivi", "resultats", "heures etude", "sama progrès", "ñu tollu"), "Suivi & progression"),
+                (("vie personnelle", "assistant de vie", "budget", "contacts", "habitudes", "objectifs", "sama dund", "sama xaalis"), "Assistant de vie"),
+                (("rappel", "rappels", "echeance", "rappels automatiques", "fàttali", "fàttalil ma"), "Rappels automatiques"),
+                (("email", "e mail", "messagerie", "documents", "assistant email", "assistant mail", "bataaxal", "sama email"), "Assistant e-mail & documents"),
+                (("carriere", "competence", "competences", "formation", "formations", "certification", "stage", "opportunite", "portfolio", "liggey", "sama liggey"), "Compétences & Carrière"),
+                (("productivite", "productivite xxl", "central xxl", "concentration", "projet", "projets", "organisation", "sama projet"), "Centre de productivité XXL"),
+                (("parametre", "parametres", "sauvegarde", "export", "configuration", "tann", "defar"), "Paramètres & sauvegarde"),
             ]
-            _subtab_terms = {
-                "competences": "🧠 Compétences", "competence": "🧠 Compétences",
-                "formation": "🎓 Formations & certifications", "formations": "🎓 Formations & certifications",
-                "certification": "🎓 Formations & certifications", "certifications": "🎓 Formations & certifications",
-                "stage": "🌍 Stages & opportunités", "stages": "🌍 Stages & opportunités",
-                "opportunite": "🌍 Stages & opportunités", "opportunites": "🌍 Stages & opportunités",
-                "tableau de bord": "📊 Tableau de bord", "messagerie": "✉️ Messagerie",
-                "documents": "📚 Documents & questions", "inbox": "📥 Ouvrir les e-mails reçus",
-                "matiere": "📚 Maquette enregistrée", "matieres": "📚 Maquette enregistrée",
-                "import": "📥 Import en lot", "saisie directe": "➕ Saisie directe",
-            }
-            _route = next((r for r in _nav_routes if any(term in _spoken_norm for term in r[0])), None)
+            _route = next((r for r in _nav_routes if any(unicodedata.normalize("NFKD", term.lower()).encode("ascii", "ignore").decode("ascii") in _spoken_norm for term in r[0])), None)
             if _route:
                 st.session_state["top_nav"] = _route[1]
-                _requested_subtab = next((label for term, label in _subtab_terms.items() if term in _spoken_norm), None)
-                st.session_state["global_voice_nav_message"] = f"Seugn bi a compris : « {_spoken_nav} ». Je t’ouvre « {_route[1]} »" + (f". Sous-onglet demandé : {_requested_subtab}." if _requested_subtab else ".")
-                st.session_state["global_voice_nav_speak"] = st.session_state["global_voice_nav_message"]
-                st.session_state["global_voice_nav_subtab"] = _requested_subtab or ""
+                if _nav_language_label == "Français":
+                    _reply = f"Seugn bi a compris : « {_spoken_nav} ». J’ouvre la rubrique {_route[1]}."
+                else:
+                    _reply = f"Seugn bi dégg na la: « {_spoken_nav} ». Maa ngi lay yóbbu ci {_route[1]}."
+                st.session_state["global_voice_nav_message"] = _reply
+                st.session_state["global_voice_nav_speak"] = _reply
+                st.session_state["global_voice_nav_speech_lang"] = "fr-FR" if _nav_language_label == "Français" else "wo-SN"
+                st.session_state.pop("global_voice_nav_app", None)
+                st.session_state.pop("global_voice_nav_app_url", None)
                 st.rerun()
-            else:
-                _unknown_reply = f"Seugn bi a entendu : {_spoken_nav}. Je n’ai pas reconnu l’onglet. Essaie Accueil, matières, emploi du temps, révisions, progression, vie personnelle, rappels, e-mail, carrière ou paramètres."
-                st.session_state["global_voice_nav_message"] = _unknown_reply
-                st.session_state["global_voice_nav_speak"] = _unknown_reply
-                st.rerun()
+            _unknown_reply = (f"Seugn bi a entendu : « {_spoken_nav} ». Je n’ai pas identifié la commande. Demande une rubrique ou une application comme Gmail, Drive, WhatsApp, YouTube ou ChatGPT."
+                              if _nav_language_label == "Français" else f"Seugn bi dégg na: « {_spoken_nav} ». Xamuma ndigal li. Waxal turu rubrique bi, walla nga ne Gmail, Drive, WhatsApp, YouTube walla ChatGPT.")
+            st.session_state["global_voice_nav_message"] = _unknown_reply
+            st.session_state["global_voice_nav_speak"] = _unknown_reply
+            st.session_state["global_voice_nav_speech_lang"] = "fr-FR" if _nav_language_label == "Français" else "wo-SN"
+            st.rerun()
         except Exception as _nav_err:
-            st.error(f"Saisie vocale indisponible : {_nav_err}")
+            st.error(f"Commande vocale indisponible : {_nav_err}")
 if st.session_state.get("global_voice_nav_message"):
     st.success(st.session_state["global_voice_nav_message"])
-    st.caption("Seugn bi lit sa réponse à voix haute si la synthèse vocale est disponible dans ton navigateur. Les sous-onglets internes restent sélectionnables dans leur rubrique.")
+    if st.session_state.get("global_voice_nav_app_url"):
+        st.link_button(f"🚀 Ouvrir {st.session_state.get('global_voice_nav_app', 'l’application')}", st.session_state["global_voice_nav_app_url"], use_container_width=True)
+    st.caption("🔊 Seugn bi / Wax ak Seugn bi — appuie sur Répéter pour réentendre la réponse.")
     _spoken_reply = str(st.session_state.get("global_voice_nav_speak", ""))
     if _spoken_reply:
-        import html as _html_module
         _reply_js = json.dumps(_spoken_reply, ensure_ascii=False)
-        st.components.v1.html(f"""<div style='font:14px sans-serif;padding:4px 0;color:#17345c'>🔊 Réponse vocale de Seugn bi <button id='issa-speak-again' type='button' style='margin-left:8px;padding:6px 10px;border-radius:8px;border:1px solid #b8c9e3;background:#edf5ff;cursor:pointer'>Répéter</button></div><script>(function(){{const text={_reply_js};function speak(){{if(!('speechSynthesis' in window)){{return;}}window.speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(text);u.lang='fr-FR';u.rate=0.95;window.speechSynthesis.speak(u);}}document.getElementById('issa-speak-again').addEventListener('click',speak);speak();}})();</script>""", height=52)
+        _speech_lang_js = json.dumps(st.session_state.get("global_voice_nav_speech_lang", "fr-FR"))
+        st.components.v1.html(f"""<div style='font:14px sans-serif;padding:4px 0;color:#17345c'>🔊 Réponse vocale de Seugn bi <button id='issa-speak-again' type='button' style='margin-left:8px;padding:8px 12px;border-radius:8px;border:1px solid #b8c9e3;background:#edf5ff;cursor:pointer'>▶ Répéter la réponse</button></div><script>(function(){{const text={_reply_js};const lang={_speech_lang_js};function speak(){{if(!('speechSynthesis' in window)){{return;}}window.speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(text);u.lang=lang;u.rate=0.92;window.speechSynthesis.speak(u);}}document.getElementById('issa-speak-again').addEventListener('click',speak);speak();}})();</script>""", height=54)
 st.markdown('<div class="issa-nav-title">Menu principal · Choisissez aussi par clic</div>',unsafe_allow_html=True)
 if 'top_nav' not in st.session_state: st.session_state['top_nav']=PAGES[0]
 st.radio('Navigation principale',PAGES,format_func=lambda x:PAGE_SHORT[x],horizontal=True,label_visibility='collapsed',key='top_nav')
