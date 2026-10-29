@@ -572,17 +572,35 @@ def start_reminder_worker():
     thread.start()
     return stop_event
 
-def read_df(sql,params=()):
-    """Lit les données sans afficher le texte littéral « None » dans l'interface."""
+def read_df(sql, params=()):
+    """Lit Supabase et neutralise les NULL/None avant tout affichage Streamlit."""
     with connect() as c:
         cur = c.execute(sql, params)
         columns = [d.name for d in cur.description] if cur.description else []
         rows = cur.fetchall()
+
     df = pd.DataFrame([dict(r) for r in rows], columns=columns)
-    # Ne touche pas aux colonnes numériques : les calculs (sommes, métriques,
-    # progressions) restent numériques. Les champs texte NULL deviennent vides.
-    for col in df.select_dtypes(include=["object"]).columns:
-        df[col] = df[col].map(lambda value: "" if value is None or (isinstance(value, str) and value.strip().lower() == "none") else value)
+    if df.empty:
+        return df
+
+    # PostgreSQL peut renvoyer None dans des colonnes entièrement NULL ; pandas
+    # les convertit parfois en NaN numériques, que l'ancien nettoyage manquait.
+    null_words = {"none", "null", "nan", "<na>"}
+    for col in df.columns:
+        series = df[col]
+        non_null = series.dropna()
+        is_numeric = (not non_null.empty and pd.api.types.is_numeric_dtype(series))
+        if is_numeric:
+            # Garder les métriques et calculs numériques utilisables.
+            df[col] = pd.to_numeric(series, errors="coerce").fillna(0)
+        else:
+            def clean_value(value):
+                if value is None or pd.isna(value):
+                    return ""
+                if isinstance(value, str) and value.strip().lower() in null_words:
+                    return ""
+                return value
+            df[col] = series.map(clean_value)
     return df
 def run(sql,params=()):
     with connect() as c: c.execute(sql,params)
@@ -694,17 +712,24 @@ def sync_existing_entries_to_reminders():
         except Exception: pass
 
 def display_text(value, fallback=""):
-    """Évite d’afficher None ou la chaîne None dans les textes de l’interface."""
+    """Convertit les valeurs NULL de Supabase en texte propre pour l'interface."""
     if value is None:
         return fallback
+    try:
+        if pd.isna(value):
+            return fallback
+    except (TypeError, ValueError):
+        pass
     text_value = str(value).strip()
-    return fallback if text_value.lower() in {"none", "null", "nan"} else text_value
+    return fallback if text_value.lower() in {"none", "null", "nan", "<na>"} else text_value
 
 def norm(s):
     return re.sub(r'[^a-z0-9]+',' ',unicodedata.normalize('NFKD',str(s or '')).encode('ascii','ignore').decode().lower()).strip()
 def header(kicker,title,desc):
     st.markdown(f'<div class="cc-hero"><div class="cc-eyebrow">{kicker}</div><div class="cc-title">{title}</div><p class="cc-sub">{desc}</p></div>',unsafe_allow_html=True)
 def card(label,value,note=''):
+    value = display_text(value, '0')
+    note = display_text(note, '')
     st.markdown(f'<div class="cc-card"><div class="cc-label">{label}</div><div class="cc-value">{value}</div><div class="cc-note">{note}</div></div>',unsafe_allow_html=True)
 def export_csv(df,name,key):
     if not df.empty: st.download_button(f"Exporter {name} en CSV",df.to_csv(index=False).encode('utf-8-sig'),file_name=f"campusclair_{key}.csv",mime='text/csv',key=f"csv_{key}")
