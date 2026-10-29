@@ -325,7 +325,7 @@ def _ensure_app_schema():
                 safe_column = re.sub(r"[^A-Za-z0-9_]", "", column_name)
                 c.execute(
                     f"UPDATE \"{safe_table}\" SET \"{safe_column}\"='' "
-                    f"WHERE \"{safe_column}\" IS NULL OR LOWER(BTRIM(\"{safe_column}\")) IN ('none','null','nan','<na>')"
+                    f"WHERE \"{safe_column}\" IS NULL OR LOWER(BTRIM(\"{safe_column}\")) IN ('none','null','nan','<na>','nat','undefined')"
                 )
 
     expected = set(definitions)
@@ -595,8 +595,25 @@ def start_reminder_worker():
     thread.start()
     return stop_event
 
+def _clean_missing_value(value, fallback=""):
+    """Normalise les NULL venant de PostgreSQL/Pandas avant tout affichage."""
+    if value is None:
+        return fallback
+    try:
+        if pd.isna(value):
+            return fallback
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, str):
+        value = value.strip()
+        if value.casefold() in {"none", "null", "nan", "<na>", "nat", "undefined"}:
+            return fallback
+        return value
+    return value
+
+
 def read_df(sql, params=()):
-    """Lit Supabase et nettoie uniformément les valeurs manquantes avant affichage/calcul."""
+    """Lit les données Supabase et normalise les valeurs manquantes dans toutes les requêtes."""
     with connect() as c:
         cur = c.execute(sql, params)
         columns = [d.name for d in cur.description] if cur.description else []
@@ -606,34 +623,15 @@ def read_df(sql, params=()):
     if df.empty:
         return df
 
-    null_words = {"none", "null", "nan", "<na>"}
     numeric_names = {
         "id", "subject_id", "habit_id", "credits", "cm", "td", "tp", "tpe", "vht",
         "hours", "confidence", "progress", "active", "done", "amount", "energy",
-        "duration_minutes", "mastery", "enabled"
+        "duration_minutes", "mastery", "enabled", "ordinal_position", "cid", "pk"
     }
     for col in df.columns:
-        series = df[col]
-        if pd.api.types.is_numeric_dtype(series.dtype):
-            df[col] = pd.to_numeric(series, errors="coerce").fillna(0)
-            continue
-
-        def clean_value(value):
-            if value is None:
-                return ""
-            try:
-                if pd.isna(value):
-                    return ""
-            except (TypeError, ValueError):
-                pass
-            if isinstance(value, str):
-                stripped = value.strip()
-                return "" if stripped.lower() in null_words else stripped
-            return value
-
-        cleaned = series.map(clean_value)
-        # Les colonnes numériques entièrement NULL peuvent être typées object.
-        if col.lower() in numeric_names:
+        # Nettoyage de chaque valeur, y compris les chaînes littérales "None" enregistrées en base.
+        cleaned = df[col].map(lambda value: _clean_missing_value(value, ""))
+        if col.lower() in numeric_names or pd.api.types.is_numeric_dtype(df[col].dtype):
             df[col] = pd.to_numeric(cleaned, errors="coerce").fillna(0)
         else:
             df[col] = cleaned
@@ -749,16 +747,9 @@ def sync_existing_entries_to_reminders():
         except Exception: pass
 
 def display_text(value, fallback=""):
-    """Retourne un texte affichable, jamais None/NULL/NaN."""
-    if value is None:
-        return fallback
-    try:
-        if pd.isna(value):
-            return fallback
-    except (TypeError, ValueError):
-        pass
-    text_value = str(value).strip()
-    return fallback if text_value.lower() in {"none", "null", "nan", "<na>"} else text_value
+    """Retourne une valeur sûre pour l'interface, sans None/NULL/NaN visibles."""
+    cleaned = _clean_missing_value(value, fallback)
+    return fallback if cleaned == "" else str(cleaned)
 
 def norm(s):
     return re.sub(r'[^a-z0-9]+',' ',unicodedata.normalize('NFKD',str(s or '')).encode('ascii','ignore').decode().lower()).strip()
@@ -1286,7 +1277,7 @@ elif page=="Assistant de vie":
             # Nettoyer l'affichage et ne proposer à la suppression que des IDs valides.
             contacts_view = contacts.drop(columns=['created_at'], errors='ignore').copy()
             for col in contacts_view.select_dtypes(include=['object']).columns:
-                contacts_view[col] = contacts_view[col].map(lambda value: display_text(value, '') if value is not None else '')
+                contacts_view[col] = contacts_view[col].map(lambda value: display_text(value, ''))
             st.dataframe(contacts_view, use_container_width=True, hide_index=True)
 
             if 'id' in contacts.columns:
