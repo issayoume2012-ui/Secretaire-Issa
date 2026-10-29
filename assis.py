@@ -800,6 +800,17 @@ _NAV_APPS = {
     "YouTube": ("https://www.youtube.com/", ("youtube", "video", "vidéos", "wone video")),
     "Google Maps": ("https://maps.google.com/", ("maps", "google maps", "itineraire", "carte", "yoon wi")),
     "ChatGPT": ("https://chatgpt.com/", ("chatgpt", "assistant ia", "intelligence artificielle", "seugn bi ak ia")),
+    "Outlook": ("https://outlook.office.com/mail/", ("outlook", "hotmail", "microsoft mail")),
+    "Microsoft Teams": ("https://teams.microsoft.com/", ("teams", "microsoft teams", "reunion teams")),
+    "Zoom": ("https://zoom.us/join", ("zoom", "reunion zoom", "visioconference")),
+    "Facebook": ("https://www.facebook.com/", ("facebook", "fessebook")),
+    "Instagram": ("https://www.instagram.com/", ("instagram", "insta")),
+    "TikTok": ("https://www.tiktok.com/", ("tiktok", "tik tok")),
+    "Spotify": ("https://open.spotify.com/", ("spotify", "musique", "deezer")),
+    "Notion": ("https://www.notion.so/", ("notion", "notes notion")),
+    "Canva": ("https://www.canva.com/", ("canva", "design canva")),
+    "Microsoft Word en ligne": ("https://www.office.com/launch/word", ("word", "microsoft word", "traitement de texte")),
+    "Google Docs": ("https://docs.google.com/", ("google docs", "docs", "document google")),
 }
 with st.container(border=True):
     _vcol1, _vcol2 = st.columns([3, 2])
@@ -809,6 +820,9 @@ with st.container(border=True):
         _nav_audio = st.audio_input("🎙️ Enregistrez votre commande / Waxal sa ndigal", key="global_voice_navigation_audio")
         _nav_text = st.text_input("⌨️ Ou tapez votre demande / Wallaa nga bind", placeholder="Ex. : Ouvre l’emploi du temps · Ubbi sama emploi du temps · Ouvre Gmail", key="global_voice_navigation_text")
         _nav_go = st.button("✨ Seugn bi, écoute et agis ! / Déggal te defal", key="global_voice_navigation_go", use_container_width=True, type="primary", disabled=(_nav_audio is None and not _nav_text.strip()))
+        _auto_repeat = st.checkbox("🔁 Répéter automatiquement la réponse / Waxaatal tontu bi", value=True, key="global_voice_nav_auto_repeat")
+        _repeat_count_label = st.selectbox("Nombre de répétitions / Ñaata yoon", ["1 fois", "2 fois", "3 fois"], index=1, key="global_voice_nav_repeat_count")
+        st.caption("Le navigateur peut ouvrir des applications web. Pour des applications installées sur l’ordinateur ou le téléphone, cela dépend du système, des liens pris en charge et des autorisations : un site web ne peut pas lancer librement toutes les applications locales.")
     with _vcol2:
         st.markdown("**Essaie ces commandes / Jéemal ndigal yii**")
         st.markdown("- 🇫🇷 « Ouvre mon planning » · « Va aux révisions » · « Ouvre Gmail »")
@@ -868,12 +882,14 @@ if st.session_state.get("global_voice_nav_message"):
     st.success(st.session_state["global_voice_nav_message"])
     if st.session_state.get("global_voice_nav_app_url"):
         st.link_button(f"🚀 Ouvrir {st.session_state.get('global_voice_nav_app', 'l’application')}", st.session_state["global_voice_nav_app_url"], use_container_width=True)
-    st.caption("🔊 Seugn bi / Wax ak Seugn bi — appuie sur Répéter pour réentendre la réponse.")
+    st.caption("🔊 Seugn bi / Wax ak Seugn bi — la réponse peut être lue automatiquement plusieurs fois. Le bouton permet de la relancer.")
     _spoken_reply = str(st.session_state.get("global_voice_nav_speak", ""))
     if _spoken_reply:
         _reply_js = json.dumps(_spoken_reply, ensure_ascii=False)
         _speech_lang_js = json.dumps(st.session_state.get("global_voice_nav_speech_lang", "fr-FR"))
-        st.components.v1.html(f"""<div style='font:14px sans-serif;padding:4px 0;color:#17345c'>🔊 Réponse vocale de Seugn bi <button id='issa-speak-again' type='button' style='margin-left:8px;padding:8px 12px;border-radius:8px;border:1px solid #b8c9e3;background:#edf5ff;cursor:pointer'>▶ Répéter la réponse</button></div><script>(function(){{const text={_reply_js};const lang={_speech_lang_js};function speak(){{if(!('speechSynthesis' in window)){{return;}}window.speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(text);u.lang=lang;u.rate=0.92;window.speechSynthesis.speak(u);}}document.getElementById('issa-speak-again').addEventListener('click',speak);speak();}})();</script>""", height=54)
+        _auto_repeat_js = json.dumps(bool(st.session_state.get("global_voice_nav_auto_repeat", True)))
+        _repeat_count_js = json.dumps(int(str(st.session_state.get("global_voice_nav_repeat_count", "2 fois")).split()[0]))
+        st.components.v1.html(f"""<div style='font:14px sans-serif;padding:4px 0;color:#17345c'>🔊 Réponse vocale de Seugn bi <button id='issa-speak-again' type='button' style='margin-left:8px;padding:8px 12px;border-radius:8px;border:1px solid #b8c9e3;background:#edf5ff;cursor:pointer'>▶ Répéter la réponse</button><span id='issa-speech-status' aria-live='polite' style='margin-left:8px'></span></div><script>(function(){{const text={_reply_js};const lang={_speech_lang_js};const autoRepeat={_auto_repeat_js};const repeatCount={_repeat_count_js};let runId=0;function speak(){{if(!('speechSynthesis' in window)){{document.getElementById('issa-speech-status').textContent='La lecture vocale n’est pas prise en charge par ce navigateur.';return;}}runId++;const thisRun=runId;window.speechSynthesis.cancel();let n=0;function sayNext(){{if(thisRun!==runId)return;if(n >= (autoRepeat ? repeatCount : 1)){{document.getElementById('issa-speech-status').textContent='✓ Réponse terminée';return;}}n++;const u=new SpeechSynthesisUtterance(text);u.lang=lang;u.rate=0.92;u.onend=()=>{{if(thisRun===runId)setTimeout(sayNext,450);}};u.onerror=()=>{{document.getElementById('issa-speech-status').textContent='Utilisez le bouton pour relancer la lecture.';}};window.speechSynthesis.speak(u);document.getElementById('issa-speech-status').textContent='Lecture '+n+'/'+(autoRepeat ? repeatCount : 1);}}sayNext();}}document.getElementById('issa-speak-again').addEventListener('click',speak);speak();}})();</script>""", height=65)
 st.markdown('<div class="issa-nav-title">Menu principal · Choisissez aussi par clic</div>',unsafe_allow_html=True)
 if 'top_nav' not in st.session_state: st.session_state['top_nav']=PAGES[0]
 st.radio('Navigation principale',PAGES,format_func=lambda x:PAGE_SHORT[x],horizontal=True,label_visibility='collapsed',key='top_nav')
