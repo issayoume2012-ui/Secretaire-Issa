@@ -1,7 +1,8 @@
-streamlit
-pandas
-speechrecognition>=3.10.0
+streamlit>=1.32.0
+pandas>=2.0.0
+psycopg2-binary>=2.9.9
+SpeechRecognition>=3.10.0
 streamlit-mic-recorder>=0.0.8
-openpyxl
-PyMuPDF
-python-docx
+openpyxl>=3.1.0
+PyMuPDF>=1.23.0
+python-docx>=1.1.0
