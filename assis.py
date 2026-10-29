@@ -225,39 +225,82 @@ def _split_schema_columns(body):
     if tail: parts.append(tail)
     return parts
 
+def _migration_fallback(table, column, definition):
+    """Valeur sûre pour une colonne obligatoire ajoutée à une table déjà remplie."""
+    col = column.lower()
+    # Les champs de texte affichés à l'utilisateur reçoivent un libellé explicite,
+    # afin de préserver les anciennes lignes sans supprimer de données.
+    if col == "name" and table == "contacts":
+        return "Contact sans nom"
+    if col in {"title", "name"}:
+        return "Élément importé"
+    if col in {"content", "front", "back", "summary", "details", "notes", "description"}:
+        return ""
+    if col in {"event_date", "study_date", "entry_date", "session_date", "log_date", "remind_at"}:
+        return "2000-01-01"
+    if col in {"hours", "amount", "duration_minutes", "habit_id", "subject_id", "progress", "energy", "confidence", "credits", "cm", "td", "tp", "tpe", "vht"}:
+        return "0"
+    # Déterminer un type numérique sans dépendre de la casse du DDL.
+    if re.search(r"\b(INTEGER|BIGINT|SMALLINT|REAL|DOUBLE|NUMERIC|DECIMAL)\b", definition, re.I):
+        return "0"
+    return ""
+
 def _ensure_app_schema():
-    """Crée toutes les tables requises et ajoute les colonnes manquantes sans effacer de données."""
-    # init_db a déjà lancé les CREATE TABLE IF NOT EXISTS. On compare ensuite chaque table à son DDL.
+    """Crée les tables requises et complète le schéma sans perdre les anciennes lignes.
+
+    PostgreSQL refuse d'ajouter directement une colonne NOT NULL à une table qui
+    contient déjà des lignes. On l'ajoute donc d'abord nullable, on remplit les
+    valeurs manquantes, puis on applique NOT NULL seulement si c'est sans risque.
+    """
     definitions = {}
     for statement in _APP_SCHEMA_DDL.split(";"):
         match = re.search(r"CREATE TABLE IF NOT EXISTS\s+(\w+)\s*\((.*)\)\s*$", statement.strip(), re.I | re.S)
-        if not match: continue
+        if not match:
+            continue
         table, body = match.group(1), match.group(2)
         columns = []
         for part in _split_schema_columns(body):
             tokens = part.split(None, 1)
-            if not tokens: continue
+            if not tokens:
+                continue
             name = tokens[0].strip('"')
-            if name.upper() in {"PRIMARY", "FOREIGN", "UNIQUE", "CONSTRAINT", "CHECK"}: continue
-            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name): continue
+            if name.upper() in {"PRIMARY", "FOREIGN", "UNIQUE", "CONSTRAINT", "CHECK"}:
+                continue
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+                continue
             definition = re.sub(r"INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT", "BIGSERIAL PRIMARY KEY", part, flags=re.I)
             definition = re.sub(r"REAL\b", "DOUBLE PRECISION", definition, flags=re.I)
             columns.append((name, definition))
         definitions[table] = columns
+
     with connect() as c:
         for table, columns in definitions.items():
-            present = {row["name"] for row in c.execute(f"PRAGMA table_info({table})").fetchall()}
+            present_rows = c.execute(f"PRAGMA table_info({table})").fetchall()
+            present = {row["name"] for row in present_rows}
             for column, definition in columns:
                 if column not in present:
-                    # La table existe déjà : on ajoute seulement la colonne absente, sans toucher aux lignes.
-                    safe_definition = re.sub(r"\s+PRIMARY\s+KEY", "", definition, flags=re.I)
+                    # Ajout initial nullable pour éviter l'erreur « contains null values ».
+                    safe_definition = re.sub(r"\s+NOT\s+NULL\b", "", definition, flags=re.I)
+                    safe_definition = re.sub(r"\s+PRIMARY\s+KEY\b", "", safe_definition, flags=re.I)
                     c.execute(f"ALTER TABLE {table} ADD COLUMN {safe_definition}")
+                    if re.search(r"\bNOT\s+NULL\b", definition, re.I):
+                        fallback = _migration_fallback(table, column, definition)
+                        c.execute(f'UPDATE {table} SET "{column}"=%s WHERE "{column}" IS NULL', (fallback,))
+                        c.execute(f'ALTER TABLE {table} ALTER COLUMN "{column}" SET NOT NULL')
+                elif re.search(r"\bNOT\s+NULL\b", definition, re.I):
+                    # Certaines anciennes versions avaient déjà la colonne mais
+                    # des lignes anciennes contiennent NULL. Les corriger d'abord.
+                    fallback = _migration_fallback(table, column, definition)
+                    c.execute(f'UPDATE {table} SET "{column}"=%s WHERE "{column}" IS NULL', (fallback,))
+                    c.execute(f'ALTER TABLE {table} ALTER COLUMN "{column}" SET NOT NULL')
         c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_reminders_source ON reminders(source_type, source_id) WHERE source_type <> '' AND source_id IS NOT NULL")
+
     expected = set(definitions)
     with connect() as c:
         found = {r["name"] for r in c.execute("SELECT table_name AS name FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'").fetchall()}
     missing = sorted(expected - found)
-    if missing: raise RuntimeError("Tables absentes après initialisation : " + ", ".join(missing))
+    if missing:
+        raise RuntimeError("Tables absentes après initialisation : " + ", ".join(missing))
     return expected
 
 def _keep_only_app_tables(expected_tables):
@@ -283,7 +326,7 @@ with st.spinner("Initialisation et nettoyage des tables Supabase…"):
         if _removed_extra_tables:
             st.success("Nettoyage Supabase terminé. Tables supplémentaires supprimées : " + ", ".join(_removed_extra_tables))
     except Exception as exc:
-        st.error("Initialisation/nettoyage Supabase impossible. Vérifie les Secrets et les droits PostgreSQL. Le nettoyage des tables supplémentaires peut être destructif; consulte les journaux. Détail technique : " + str(exc)[:700])
+        st.error("Initialisation/nettoyage Supabase impossible. Vérifie les Secrets et les droits PostgreSQL. Le schéma existant a pu nécessiter une migration; consulte les journaux. Détail technique : " + str(exc)[:700])
         st.stop()
 
 DEFAULT_REMINDER_PHONE = "+221777473170"  # conservé pour compatibilité avec les anciennes bases
