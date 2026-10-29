@@ -1,6 +1,6 @@
 """Secrétaire Issa — assistant personnel avec rappels automatiques par Gmail.
 Lancement : python -m streamlit run CampusClair_XXL.py
-Base SQLite locale séparée : campus_clair.db
+Base principale : Supabase PostgreSQL ; campus_clair.db est conservée uniquement pour une éventuelle migration locale.
 Dépendances : streamlit, pandas, speechrecognition, openpyxl (facultatif), PyMuPDF (PDF), python-docx (DOCX).
 """
 from pathlib import Path
@@ -74,7 +74,7 @@ _AUTH_PASS = secret_value("YOUAGRONOME_OWNER_PASS") or secret_value("APP_PASSWOR
 _SUPABASE_DB_HOST = secret_value("SUPABASE_DB_HOST", "aws-1-eu-west-1.pooler.supabase.com")
 _SUPABASE_DB_PORT = secret_value("SUPABASE_DB_PORT", "5432")
 _SUPABASE_DB_NAME = secret_value("SUPABASE_DB_NAME", "postgres")
-_SUPABASE_DB_USER = secret_value("SUPABASE_DB_USER", "postgres.lqqctacgbknzytikeuya")
+_SUPABASE_DB_USER = secret_value("SUPABASE_DB_USER", "postgres.ddjwqzsfqpyzdwqdyrld")
 _SUPABASE_DB_PASSWORD = secret_value("SUPABASE_DB_PASSWORD")
 _USE_SUPABASE = all((_SUPABASE_DB_HOST, _SUPABASE_DB_PORT, _SUPABASE_DB_NAME, _SUPABASE_DB_USER, _SUPABASE_DB_PASSWORD))
 if not _AUTH_USER or not _AUTH_PASS:
@@ -83,7 +83,7 @@ if not _AUTH_USER or not _AUTH_PASS:
     st.stop()
 if not _USE_SUPABASE:
     st.error("Le projet Supabase est préconfiguré (hôte, port, base et utilisateur), mais le mot de passe PostgreSQL manque. Dans Streamlit Cloud → Manage app → Settings → Secrets, ajoute uniquement SUPABASE_DB_PASSWORD avec le mot de passe PostgreSQL de ce projet, puis redémarre l’application. Le mot de passe n’est volontairement pas écrit en clair dans le fichier Python.")
-    st.code('SUPABASE_DB_PASSWORD = "COLLE_ICI_LE_MOT_DE_PASSE_POSTGRESQL"', language="toml")
+    st.code('SUPABASE_DB_HOST = "aws-1-eu-west-1.pooler.supabase.com"\nSUPABASE_DB_PORT = "5432"\nSUPABASE_DB_NAME = "postgres"\nSUPABASE_DB_USER = "postgres.ddjwqzsfqpyzdwqdyrld"\nSUPABASE_DB_PASSWORD = "VOTRE_MOT_DE_PASSE_POSTGRESQL"', language="toml")
     st.stop()
 try:
     import psycopg2
