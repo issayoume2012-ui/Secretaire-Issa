@@ -258,13 +258,32 @@ def _ensure_app_schema():
         found = {r["name"] for r in c.execute("SELECT table_name AS name FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'").fetchall()}
     missing = sorted(expected - found)
     if missing: raise RuntimeError("Tables absentes après initialisation : " + ", ".join(missing))
+    return expected
 
-with st.spinner("Initialisation et vérification de la base Supabase…"):
+def _keep_only_app_tables(expected_tables):
+    """Supprime les tables supplémentaires du schéma public; conserve toutes les tables de l'application."""
+    from psycopg2 import sql
+    with connect() as c:
+        rows = c.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema='public' AND table_type='BASE TABLE' ORDER BY table_name"
+        ).fetchall()
+        existing = {row["table_name"] for row in rows}
+        extras = sorted(existing - set(expected_tables))
+        for table_name in extras:
+            # Identifiant SQL échappé par psycopg2; CASCADE retire aussi les dépendances SQL de cette table.
+            c.execute(sql.SQL("DROP TABLE IF EXISTS public.{} CASCADE").format(sql.Identifier(table_name)))
+    return extras
+
+with st.spinner("Initialisation et nettoyage des tables Supabase…"):
     try:
         init_db()
-        _ensure_app_schema()
+        _expected_app_tables = _ensure_app_schema()
+        _removed_extra_tables = _keep_only_app_tables(_expected_app_tables)
+        if _removed_extra_tables:
+            st.success("Nettoyage Supabase terminé. Tables supplémentaires supprimées : " + ", ".join(_removed_extra_tables))
     except Exception as exc:
-        st.error("Initialisation Supabase impossible. Aucune table existante n'a été supprimée. Vérifie les Secrets et les droits de création/modification des tables. Détail technique : " + str(exc)[:700])
+        st.error("Initialisation/nettoyage Supabase impossible. Vérifie les Secrets et les droits PostgreSQL. Le nettoyage des tables supplémentaires peut être destructif; consulte les journaux. Détail technique : " + str(exc)[:700])
         st.stop()
 
 DEFAULT_REMINDER_PHONE = "+221777473170"  # conservé pour compatibilité avec les anciennes bases
