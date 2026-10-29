@@ -313,16 +313,23 @@ def _ensure_app_schema():
         raise RuntimeError("Tables absentes après initialisation : " + ", ".join(missing))
     return expected
 
-with st.spinner("Initialisation XXL de Supabase : vérification et création des tables de Secrétaire Issa…"):
+@st.cache_resource(show_spinner=False)
+def _initialize_schema_once():
+    """Initialise le schéma une seule fois par version du processus Streamlit.
+
+    L'ancienne version reparcourait et contrôlait toutes les tables à chaque
+    interaction utilisateur, ce qui pouvait ralentir fortement le site.
+    Le cache est invalidé automatiquement quand le code de cette fonction change.
+    """
+    init_db()
+    return sorted(_ensure_app_schema())
+
+with st.spinner("Connexion à Supabase et vérification initiale des tables…"):
     try:
-        init_db()
-        _expected_app_tables = _ensure_app_schema()
-        # Mode non destructif : les tables étrangères ou anciennes de public
-        # restent en place. Seules les tables utilisées par cette application
-        # sont créées ou mises à niveau ; aucune table n'est supprimée.
-        st.session_state["issa_supabase_tables_ready"] = sorted(_expected_app_tables)
+        _expected_app_tables = _initialize_schema_once()
+        st.session_state["issa_supabase_tables_ready"] = _expected_app_tables
     except Exception as exc:
-        st.error("Initialisation Supabase impossible. Vérifie les Secrets, les droits PostgreSQL et les journaux. Aucune table supplémentaire n'est supprimée par cette version. Détail technique : " + str(exc)[:700])
+        st.error("Initialisation Supabase impossible. Vérifie les Secrets, les droits PostgreSQL et les journaux. Aucune table n'est supprimée par cette version. Détail technique : " + str(exc)[:500])
         st.stop()
 
 DEFAULT_REMINDER_PHONE = "+221777473170"  # conservé pour compatibilité avec les anciennes bases
@@ -566,11 +573,17 @@ def start_reminder_worker():
     return stop_event
 
 def read_df(sql,params=()):
+    """Lit les données sans afficher le texte littéral « None » dans l'interface."""
     with connect() as c:
         cur = c.execute(sql, params)
         columns = [d.name for d in cur.description] if cur.description else []
         rows = cur.fetchall()
-        return pd.DataFrame([dict(r) for r in rows], columns=columns)
+    df = pd.DataFrame([dict(r) for r in rows], columns=columns)
+    # Ne touche pas aux colonnes numériques : les calculs (sommes, métriques,
+    # progressions) restent numériques. Les champs texte NULL deviennent vides.
+    for col in df.select_dtypes(include=["object"]).columns:
+        df[col] = df[col].map(lambda value: "" if value is None or (isinstance(value, str) and value.strip().lower() == "none") else value)
+    return df
 def run(sql,params=()):
     with connect() as c: c.execute(sql,params)
 
@@ -824,7 +837,11 @@ if page=="Vue d’ensemble":
     with cols[2]: card('Tâches ouvertes',len(open_tasks),'À faire ou en cours')
     with cols[3]: card('Heures étudiées',round(hours,1),'Journal de révision')
     # Résumé des rappels issus des autres rubriques, visible dès l'ouverture de l'application.
-    sync_existing_entries_to_reminders()
+    _sync_now = time_module.time()
+    _sync_last = float(st.session_state.get("issa_reminder_sync_last", 0) or 0)
+    if _sync_now - _sync_last >= 120:
+        sync_existing_entries_to_reminders()
+        st.session_state["issa_reminder_sync_last"] = _sync_now
     soon=read_df("SELECT title,details,remind_at,status FROM reminders WHERE enabled=1 AND status='En attente' ORDER BY remind_at LIMIT 6")
     st.subheader('🔔 Ce que tu dois faire bientôt')
     if soon.empty:
