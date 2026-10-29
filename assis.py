@@ -305,6 +305,29 @@ def _ensure_app_schema():
                     # les données historiques et les dépendances restent intactes.
         c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_reminders_source ON reminders(source_type, source_id) WHERE source_type <> '' AND source_id IS NOT NULL")
 
+        # Nettoyage durable de TOUTES les tables gérées par l'application.
+        # Les champs texte NULL ou contenant littéralement None/null/nan
+        # deviennent vides. Aucun enregistrement n'est supprimé.
+        text_types = {"text", "character varying", "character", "varchar", "char", "name"}
+        for table in definitions:
+            col_rows = c.execute(
+                "SELECT column_name, data_type FROM information_schema.columns "
+                "WHERE table_schema='public' AND table_name=%s",
+                (table,),
+            ).fetchall()
+            for col_row in col_rows:
+                column_name = col_row["column_name"]
+                data_type = str(col_row["data_type"] or "").lower()
+                if data_type not in text_types:
+                    continue
+                # Les noms viennent du schéma de l'application, puis sont sécurisés.
+                safe_table = re.sub(r"[^A-Za-z0-9_]", "", table)
+                safe_column = re.sub(r"[^A-Za-z0-9_]", "", column_name)
+                c.execute(
+                    f"UPDATE \"{safe_table}\" SET \"{safe_column}\"='' "
+                    f"WHERE \"{safe_column}\" IS NULL OR LOWER(BTRIM(\"{safe_column}\")) IN ('none','null','nan','<na>')"
+                )
+
     expected = set(definitions)
     with connect() as c:
         found = {r["name"] for r in c.execute("SELECT table_name AS name FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'").fetchall()}
@@ -573,7 +596,7 @@ def start_reminder_worker():
     return stop_event
 
 def read_df(sql, params=()):
-    """Lit Supabase et neutralise les NULL/None avant tout affichage Streamlit."""
+    """Lit Supabase et nettoie uniformément les valeurs manquantes avant affichage/calcul."""
     with connect() as c:
         cur = c.execute(sql, params)
         columns = [d.name for d in cur.description] if cur.description else []
@@ -583,25 +606,39 @@ def read_df(sql, params=()):
     if df.empty:
         return df
 
-    # PostgreSQL peut renvoyer None dans des colonnes entièrement NULL ; pandas
-    # les convertit parfois en NaN numériques, que l'ancien nettoyage manquait.
     null_words = {"none", "null", "nan", "<na>"}
+    numeric_names = {
+        "id", "subject_id", "habit_id", "credits", "cm", "td", "tp", "tpe", "vht",
+        "hours", "confidence", "progress", "active", "done", "amount", "energy",
+        "duration_minutes", "mastery", "enabled"
+    }
     for col in df.columns:
         series = df[col]
-        non_null = series.dropna()
-        is_numeric = (not non_null.empty and pd.api.types.is_numeric_dtype(series))
-        if is_numeric:
-            # Garder les métriques et calculs numériques utilisables.
+        if pd.api.types.is_numeric_dtype(series.dtype):
             df[col] = pd.to_numeric(series, errors="coerce").fillna(0)
+            continue
+
+        def clean_value(value):
+            if value is None:
+                return ""
+            try:
+                if pd.isna(value):
+                    return ""
+            except (TypeError, ValueError):
+                pass
+            if isinstance(value, str):
+                stripped = value.strip()
+                return "" if stripped.lower() in null_words else stripped
+            return value
+
+        cleaned = series.map(clean_value)
+        # Les colonnes numériques entièrement NULL peuvent être typées object.
+        if col.lower() in numeric_names:
+            df[col] = pd.to_numeric(cleaned, errors="coerce").fillna(0)
         else:
-            def clean_value(value):
-                if value is None or pd.isna(value):
-                    return ""
-                if isinstance(value, str) and value.strip().lower() in null_words:
-                    return ""
-                return value
-            df[col] = series.map(clean_value)
+            df[col] = cleaned
     return df
+
 def run(sql,params=()):
     with connect() as c: c.execute(sql,params)
 
@@ -712,7 +749,7 @@ def sync_existing_entries_to_reminders():
         except Exception: pass
 
 def display_text(value, fallback=""):
-    """Convertit les valeurs NULL de Supabase en texte propre pour l'interface."""
+    """Retourne un texte affichable, jamais None/NULL/NaN."""
     if value is None:
         return fallback
     try:
