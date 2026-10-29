@@ -248,6 +248,11 @@ def _migration_fallback(table, column, definition):
         return "0"
     return ""
 
+# Journal de diagnostic : indique en rouge les valeurs NULL/"None" repérées
+# dans Supabase ou normalisées par le code. Il ne contient aucune donnée personnelle.
+_NONE_REPAIR_LOG = []
+_NONE_RUNTIME_LOG = []
+
 def _ensure_app_schema():
     """Crée les tables requises et complète le schéma sans perdre les anciennes lignes.
 
@@ -323,10 +328,13 @@ def _ensure_app_schema():
                 # Les noms viennent du schéma de l'application, puis sont sécurisés.
                 safe_table = re.sub(r"[^A-Za-z0-9_]", "", table)
                 safe_column = re.sub(r"[^A-Za-z0-9_]", "", column_name)
-                c.execute(
+                cleanup_cursor = c.execute(
                     f"UPDATE \"{safe_table}\" SET \"{safe_column}\"='' "
                     f"WHERE \"{safe_column}\" IS NULL OR LOWER(BTRIM(\"{safe_column}\")) IN ('none','null','nan','<na>','nat','undefined')"
                 )
+                repaired_count = max(0, int(getattr(cleanup_cursor, "rowcount", 0) or 0))
+                if repaired_count:
+                    _NONE_REPAIR_LOG.append({"table": table, "column": column_name, "count": repaired_count, "source": "Supabase/PostgreSQL"})
 
     expected = set(definitions)
     with connect() as c:
@@ -628,7 +636,22 @@ def read_df(sql, params=()):
         "hours", "confidence", "progress", "active", "done", "amount", "energy",
         "duration_minutes", "mastery", "enabled", "ordinal_position", "cid", "pk"
     }
+    # Repère les valeurs encore sales à la lecture : elles peuvent provenir
+    # d'une table non gérée par le schéma applicatif ou d'une ancienne donnée.
+    table_match = re.search(r"\bFROM\s+([A-Za-z_][A-Za-z0-9_]*)", sql, re.I)
+    source_table = table_match.group(1) if table_match else "requête SQL"
     for col in df.columns:
+        raw_values = df[col]
+        bad_mask = raw_values.map(
+            lambda value: value is None
+            or (isinstance(value, str) and value.strip().casefold() in {"none", "null", "nan", "<na>", "nat", "undefined"})
+            or (not isinstance(value, str) and not isinstance(value, (list, tuple, dict)) and pd.isna(value))
+        )
+        bad_count = int(bad_mask.sum())
+        if bad_count:
+            entry = {"table": source_table, "column": str(col), "count": bad_count, "source": "lecture SQL / code"}
+            if entry not in _NONE_RUNTIME_LOG:
+                _NONE_RUNTIME_LOG.append(entry)
         # Nettoyage de chaque valeur, y compris les chaînes littérales "None" enregistrées en base.
         cleaned = df[col].map(lambda value: _clean_missing_value(value, ""))
         if col.lower() in numeric_names or pd.api.types.is_numeric_dtype(df[col].dtype):
@@ -1807,6 +1830,21 @@ elif page=="Paramètres & sauvegarde":
         with st.expander(f'{label} — {len(df)} enregistrement(s)'):
             _ = export_csv(df,label,table)
     st.info('Pour une sauvegarde complète de Supabase, utilise le tableau de bord Supabase ou exporte les tables depuis les options CSV ci-dessus. Les exports CSV restent disponibles pour chaque module.')
+    # Diagnostic visible en rouge : distingue les réparations faites dans Supabase
+    # des valeurs détectées à la lecture et neutralisées par le code Python.
+    st.markdown("### Diagnostic des valeurs `None` / `NULL`")
+    if _NONE_REPAIR_LOG or _NONE_RUNTIME_LOG:
+        st.error("Des valeurs manquantes ont été repérées. Le détail ci-dessous indique leur origine et les colonnes concernées.")
+        if _NONE_REPAIR_LOG:
+            st.markdown("**Origine : Supabase / PostgreSQL (valeurs corrigées au démarrage)**")
+            for item in _NONE_REPAIR_LOG:
+                st.markdown(f'<div style="color:#b91c1c;font-weight:700;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:8px;margin:4px 0">Supabase · table <code>{item["table"]}</code> · colonne <code>{item["column"]}</code> · {item["count"]} ligne(s) corrigée(s)</div>', unsafe_allow_html=True)
+        if _NONE_RUNTIME_LOG:
+            st.markdown("**Origine : lecture SQL / code Python (valeurs neutralisées avant affichage)**")
+            for item in _NONE_RUNTIME_LOG:
+                st.markdown(f'<div style="color:#b91c1c;font-weight:700;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:8px;margin:4px 0">Code / SQL · table <code>{item["table"]}</code> · colonne <code>{item["column"]}</code> · {item["count"]} valeur(s) détectée(s)</div>', unsafe_allow_html=True)
+    else:
+        st.success("Aucune valeur None/NULL suspecte n’a été détectée pendant cette session.")
     st.markdown('### Dépendances facultatives')
     st.code('streamlit\npandas\npsycopg2-binary>=2.9.9\nSpeechRecognition>=3.10.0\nstreamlit-mic-recorder>=0.0.8\nopenpyxl\nPyMuPDF\npython-docx',language='text')
     st.caption('openpyxl permet les imports Excel. PyMuPDF permet de lire le texte des PDF. L’application reste utilisable sans ces deux dépendances si tu utilises CSV et la saisie manuelle.')
