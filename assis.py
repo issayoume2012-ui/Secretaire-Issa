@@ -796,15 +796,16 @@ st.markdown('<div class="issa-nav-title">Navigation vocale XXL · Dites le nom d
 with st.container(border=True):
     _voice_col, _help_col = st.columns([3, 2])
     with _voice_col:
-        _nav_audio = st.audio_input("🎙️ Parler pour ouvrir une rubrique", key="global_voice_navigation_audio")
-        _nav_go = st.button("🧭 Comprendre la commande et naviguer", key="global_voice_navigation_go", use_container_width=True, type="primary", disabled=_nav_audio is None)
+        _nav_audio = st.audio_input("🎙️ Parler pour ouvrir une rubrique ou poser une question", key="global_voice_navigation_audio")
+        _nav_text = st.text_input("Ou écrivez votre commande", placeholder="Ex. : ouvre l’emploi du temps", key="global_voice_navigation_text")
+        _nav_go = st.button("🧭 Seugn bi : comprendre et répondre", key="global_voice_navigation_go", use_container_width=True, type="primary", disabled=(_nav_audio is None and not _nav_text.strip()))
     with _help_col:
         st.markdown("**Exemples de commandes**")
         st.caption("« Ouvre l’emploi du temps », « va à carrière », « ouvre les matières », « assistant e-mail », « paramètres ».")
         st.caption("Tu peux aussi prononcer un sous-onglet, par exemple « compétences » ou « formations ».")
-    if _nav_go and _nav_audio is not None:
+    if _nav_go and (_nav_audio is not None or _nav_text.strip()):
         try:
-            _spoken_nav = transcribe_audio(_nav_audio)
+            _spoken_nav = transcribe_audio(_nav_audio) if _nav_audio is not None else _nav_text.strip()
             _spoken_norm = unicodedata.normalize("NFKD", _spoken_nav.lower()).encode("ascii", "ignore").decode("ascii")
             _spoken_norm = re.sub(r"[^a-z0-9 ]+", " ", _spoken_norm)
             _nav_routes = [
@@ -834,16 +835,25 @@ with st.container(border=True):
             if _route:
                 st.session_state["top_nav"] = _route[1]
                 _requested_subtab = next((label for term, label in _subtab_terms.items() if term in _spoken_norm), None)
-                st.session_state["global_voice_nav_message"] = f"Commande reconnue : « {_spoken_nav} ». Ouverture de « {_route[1]} »" + (f" — sous-onglet demandé : {_requested_subtab}." if _requested_subtab else ".")
+                st.session_state["global_voice_nav_message"] = f"Seugn bi a compris : « {_spoken_nav} ». Je t’ouvre « {_route[1]} »" + (f". Sous-onglet demandé : {_requested_subtab}." if _requested_subtab else ".")
+                st.session_state["global_voice_nav_speak"] = st.session_state["global_voice_nav_message"]
                 st.session_state["global_voice_nav_subtab"] = _requested_subtab or ""
                 st.rerun()
             else:
-                st.warning(f"J’ai entendu « {_spoken_nav} », mais je n’ai pas reconnu la rubrique. Réessaie avec le nom d’un onglet du menu.")
+                _unknown_reply = f"Seugn bi a entendu : {_spoken_nav}. Je n’ai pas reconnu l’onglet. Essaie Accueil, matières, emploi du temps, révisions, progression, vie personnelle, rappels, e-mail, carrière ou paramètres."
+                st.session_state["global_voice_nav_message"] = _unknown_reply
+                st.session_state["global_voice_nav_speak"] = _unknown_reply
+                st.rerun()
         except Exception as _nav_err:
             st.error(f"Saisie vocale indisponible : {_nav_err}")
 if st.session_state.get("global_voice_nav_message"):
     st.success(st.session_state["global_voice_nav_message"])
-    st.caption("La navigation vocale ouvre la rubrique principale. Les sous-onglets internes restent sélectionnables dans leur rubrique.")
+    st.caption("Seugn bi lit sa réponse à voix haute si la synthèse vocale est disponible dans ton navigateur. Les sous-onglets internes restent sélectionnables dans leur rubrique.")
+    _spoken_reply = str(st.session_state.get("global_voice_nav_speak", ""))
+    if _spoken_reply:
+        import html as _html_module
+        _reply_js = json.dumps(_spoken_reply, ensure_ascii=False)
+        st.components.v1.html(f"""<div style='font:14px sans-serif;padding:4px 0;color:#17345c'>🔊 Réponse vocale de Seugn bi <button id='issa-speak-again' type='button' style='margin-left:8px;padding:6px 10px;border-radius:8px;border:1px solid #b8c9e3;background:#edf5ff;cursor:pointer'>Répéter</button></div><script>(function(){{const text={_reply_js};function speak(){{if(!('speechSynthesis' in window)){{return;}}window.speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(text);u.lang='fr-FR';u.rate=0.95;window.speechSynthesis.speak(u);}}document.getElementById('issa-speak-again').addEventListener('click',speak);speak();}})();</script>""", height=52)
 st.markdown('<div class="issa-nav-title">Menu principal · Choisissez aussi par clic</div>',unsafe_allow_html=True)
 if 'top_nav' not in st.session_state: st.session_state['top_nav']=PAGES[0]
 st.radio('Navigation principale',PAGES,format_func=lambda x:PAGE_SHORT[x],horizontal=True,label_visibility='collapsed',key='top_nav')
