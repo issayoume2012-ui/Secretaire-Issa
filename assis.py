@@ -1243,11 +1243,34 @@ elif page=="Assistant de vie":
             if name.strip(): _ = run('INSERT INTO contacts(name,role,phone,email,notes) VALUES(?,?,?,?,?)',(name.strip(),role.strip(),phone.strip(),email.strip(),notes.strip())); st.rerun()
             else: st.error('Le nom est obligatoire.')
         contacts=read_df('SELECT * FROM contacts ORDER BY name')
-        if contacts.empty: st.info('Aucun contact enregistré.')
+        if contacts.empty:
+            st.info('Aucun contact enregistré.')
         else:
-            st.dataframe(contacts.drop(columns=['created_at'],errors='ignore'),use_container_width=True,hide_index=True)
-            opts={f"#{r.id} · {r.name}":int(r.id) for r in contacts.itertuples()}; pick=st.selectbox('Contact à supprimer',list(opts))
-            if st.button('Supprimer le contact'): _ = run('DELETE FROM contacts WHERE id=?',(opts[pick],)); st.rerun()
+            # Nettoyer l'affichage et ne proposer à la suppression que des IDs valides.
+            contacts_view = contacts.drop(columns=['created_at'], errors='ignore').copy()
+            for col in contacts_view.select_dtypes(include=['object']).columns:
+                contacts_view[col] = contacts_view[col].map(lambda value: display_text(value, '') if value is not None else '')
+            st.dataframe(contacts_view, use_container_width=True, hide_index=True)
+
+            if 'id' in contacts.columns:
+                contacts['_valid_id'] = pd.to_numeric(contacts['id'], errors='coerce')
+                valid_contacts = contacts[contacts['_valid_id'].notna()]
+            else:
+                valid_contacts = contacts.iloc[0:0]
+
+            opts = {}
+            for _, contact in valid_contacts.iterrows():
+                contact_id = int(contact['_valid_id'])
+                contact_name = display_text(contact.get('name', ''), 'Contact sans nom')
+                opts[f"#{contact_id} · {contact_name}"] = contact_id
+
+            if opts:
+                pick = st.selectbox('Contact à supprimer', list(opts), key='contact_delete_pick')
+                if st.button('Supprimer le contact'):
+                    _ = run('DELETE FROM contacts WHERE id=?', (opts[pick],))
+                    st.rerun()
+            else:
+                st.info('Aucun contact avec un identifiant valide à supprimer. Les contacts affichés sont conservés.')
     with tabs[6]:
         st.markdown('### Petit bilan personnel')
         st.caption('Cet espace aide à organiser tes habitudes, sans remplacer un professionnel de santé. Choisis des routines réalistes et adapte-les à tes contraintes.')
