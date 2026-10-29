@@ -321,7 +321,7 @@ def _initialize_schema_once():
     interaction utilisateur, ce qui pouvait ralentir fortement le site.
     Le cache est invalidé automatiquement quand le code de cette fonction change.
     """
-    init_db()
+    _ = init_db()
     return sorted(_ensure_app_schema())
 
 with st.spinner("Connexion à Supabase et vérification initiale des tables…"):
@@ -547,19 +547,19 @@ def process_due_reminders():
             sent_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             if r.repeat_rule == "Quotidien":
                 next_at = (datetime.strptime(r.remind_at, "%Y-%m-%d %H:%M:%S") + timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
-                run("UPDATE reminders SET remind_at=?,status='En attente',last_sent_at=?,last_error='' WHERE id=?", (next_at, sent_at, int(r.id)))
+                _ = run("UPDATE reminders SET remind_at=?,status='En attente',last_sent_at=?,last_error='' WHERE id=?", (next_at, sent_at, int(r.id)))
             elif r.repeat_rule == "Hebdomadaire":
                 next_at = (datetime.strptime(r.remind_at, "%Y-%m-%d %H:%M:%S") + timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
-                run("UPDATE reminders SET remind_at=?,status='En attente',last_sent_at=?,last_error='' WHERE id=?", (next_at, sent_at, int(r.id)))
+                _ = run("UPDATE reminders SET remind_at=?,status='En attente',last_sent_at=?,last_error='' WHERE id=?", (next_at, sent_at, int(r.id)))
             else:
-                run("UPDATE reminders SET status='Envoyé',last_sent_at=?,last_error='' WHERE id=?", (sent_at, int(r.id)))
+                _ = run("UPDATE reminders SET status='Envoyé',last_sent_at=?,last_error='' WHERE id=?", (sent_at, int(r.id)))
         except Exception as exc:
-            run("UPDATE reminders SET status='Erreur',last_error=? WHERE id=?", (str(exc)[:500], int(r.id)))
+            _ = run("UPDATE reminders SET status='Erreur',last_error=? WHERE id=?", (str(exc)[:500], int(r.id)))
 
 def _reminder_worker(stop_event):
     while not stop_event.is_set():
         try:
-            process_due_reminders()
+            _ = process_due_reminders()
         except Exception:
             pass
         stop_event.wait(30)
@@ -661,7 +661,7 @@ def sync_existing_entries_to_reminders():
             event_dt = datetime.strptime(f"{r.event_date} {r.start_time or '08:00'}", '%Y-%m-%d %H:%M')
             remind = event_dt - timedelta(hours=1)
             if remind < datetime.now(): remind = datetime.now() + timedelta(minutes=1)
-            upsert_auto_reminder('event', r.id, f"{r.kind} : {r.title}", f"Date : {r.event_date} à {r.start_time or '08:00'}. Lieu : {r.location or 'non précisé'}. {r.notes or ''}", remind.strftime('%Y-%m-%d %H:%M:%S'))
+            _ = upsert_auto_reminder('event', r.id, f"{r.kind} : {r.title}", f"Date : {r.event_date} à {r.start_time or '08:00'}. Lieu : {r.location or 'non précisé'}. {r.notes or ''}", remind.strftime('%Y-%m-%d %H:%M:%S'))
         except Exception: pass
     # Toutes les tâches non terminées, y compris celles dont la date limite est dépassée.
     for r in read_df("SELECT id,title,due_date,priority,status,category,notes FROM tasks WHERE status NOT IN ('Terminée','Terminé','Rendue','Rendu')").itertuples():
@@ -669,7 +669,7 @@ def sync_existing_entries_to_reminders():
             due = datetime.strptime(str(r.due_date), '%Y-%m-%d').date()
             remind = datetime.combine(due - timedelta(days=1), time(8,0))
             if due <= today and remind < datetime.now(): remind = datetime.now() + timedelta(minutes=1)
-            upsert_auto_reminder('task', r.id, f"Échéance : {r.title}", f"Date limite : {due.isoformat()}. Priorité : {r.priority}. Domaine : {r.category}. Statut : {r.status}. {r.notes or ''}", remind.strftime('%Y-%m-%d %H:%M:%S'))
+            _ = upsert_auto_reminder('task', r.id, f"Échéance : {r.title}", f"Date limite : {due.isoformat()}. Priorité : {r.priority}. Domaine : {r.category}. Statut : {r.status}. {r.notes or ''}", remind.strftime('%Y-%m-%d %H:%M:%S'))
         except Exception: pass
     # Objectifs en cours.
     for r in read_df("SELECT id,title,target_date,category,progress,notes FROM goals WHERE progress < 100").itertuples():
@@ -678,7 +678,7 @@ def sync_existing_entries_to_reminders():
             due = datetime.strptime(str(r.target_date), '%Y-%m-%d').date()
             remind = datetime.combine(due - timedelta(days=1), time(8,0))
             if due <= today and remind < datetime.now(): remind = datetime.now() + timedelta(minutes=1)
-            upsert_auto_reminder('goal', r.id, f"Objectif à suivre : {r.title}", f"Date cible : {due.isoformat()}. Domaine : {r.category}. Progression : {r.progress} %. {r.notes or ''}", remind.strftime('%Y-%m-%d %H:%M:%S'))
+            _ = upsert_auto_reminder('goal', r.id, f"Objectif à suivre : {r.title}", f"Date cible : {due.isoformat()}. Domaine : {r.category}. Progression : {r.progress} %. {r.notes or ''}", remind.strftime('%Y-%m-%d %H:%M:%S'))
         except Exception: pass
     # Stages, concours, bourses et autres opportunités avec échéance.
     for r in read_df("SELECT id,title,deadline,organization,kind,status,notes FROM career_opportunities WHERE deadline <> '' AND status NOT IN ('Refusée','Expirée','Retenue')").itertuples():
@@ -686,7 +686,7 @@ def sync_existing_entries_to_reminders():
             due = datetime.strptime(str(r.deadline), '%Y-%m-%d').date()
             remind = datetime.combine(due - timedelta(days=1), time(8,0))
             if due <= today and remind < datetime.now(): remind = datetime.now() + timedelta(minutes=1)
-            upsert_auto_reminder('opportunity', r.id, f"Date limite : {r.title}", f"Échéance : {due.isoformat()}. {r.kind} · {r.organization or 'Organisation non précisée'} · Statut : {r.status}. {r.notes or ''}", remind.strftime('%Y-%m-%d %H:%M:%S'))
+            _ = upsert_auto_reminder('opportunity', r.id, f"Date limite : {r.title}", f"Échéance : {due.isoformat()}. {r.kind} · {r.organization or 'Organisation non précisée'} · Statut : {r.status}. {r.notes or ''}", remind.strftime('%Y-%m-%d %H:%M:%S'))
         except Exception: pass
     # Formations : rappel la veille du début et de la fin (deux entrées de rappel distinctes).
     for r in read_df("SELECT id,title,start_date,end_date,provider,status,notes FROM career_training WHERE status NOT IN ('Terminée','Abandonnée')").itertuples():
@@ -697,18 +697,18 @@ def sync_existing_entries_to_reminders():
                 if due < today: continue
                 remind = datetime.combine(due - timedelta(days=1), time(8,0))
                 if due <= today and remind < datetime.now(): remind = datetime.now() + timedelta(minutes=1)
-                upsert_auto_reminder(f'training_{phase}', r.id, f"Formation — {phase} : {r.title}", f"Date : {due.isoformat()}. Organisme : {r.provider or 'non précisé'}. État : {r.status}. {r.notes or ''}", remind.strftime('%Y-%m-%d %H:%M:%S'))
+                _ = upsert_auto_reminder(f'training_{phase}', r.id, f"Formation — {phase} : {r.title}", f"Date : {due.isoformat()}. Organisme : {r.provider or 'non précisé'}. État : {r.status}. {r.notes or ''}", remind.strftime('%Y-%m-%d %H:%M:%S'))
         except Exception: pass
     # Habitudes actives : rappel quotidien stable, sans repousser la date à chaque rechargement.
     for r in read_df("SELECT id,title,frequency,notes FROM habits WHERE active=1").itertuples():
         remind = datetime.combine(today, time(8,0))
         if remind < datetime.now(): remind = datetime.now() + timedelta(minutes=1)
-        upsert_auto_reminder('habit', r.id, f"Habitude du jour : {r.title}", f"Fréquence : {r.frequency}. {r.notes or ''}", remind.strftime('%Y-%m-%d %H:%M:%S'), 'Quotidien')
+        _ = upsert_auto_reminder('habit', r.id, f"Habitude du jour : {r.title}", f"Fréquence : {r.frequency}. {r.notes or ''}", remind.strftime('%Y-%m-%d %H:%M:%S'), 'Quotidien')
     # Notes classées « Rappel » : une date et une heure sont demandées dans la rubrique Notes personnelles.
     for r in read_df("SELECT id,title,content,reminder_date,reminder_time FROM life_notes WHERE category='Rappel' AND reminder_date <> ''").itertuples():
         try:
             dt = datetime.strptime(f"{r.reminder_date} {r.reminder_time or '08:00'}", '%Y-%m-%d %H:%M')
-            upsert_auto_reminder('note', r.id, f"Note à ne pas oublier : {r.title}", r.content or '', dt.strftime('%Y-%m-%d %H:%M:%S'))
+            _ = upsert_auto_reminder('note', r.id, f"Note à ne pas oublier : {r.title}", r.content or '', dt.strftime('%Y-%m-%d %H:%M:%S'))
         except Exception: pass
 
 def display_text(value, fallback=""):
@@ -861,22 +861,22 @@ except Exception:
 
 # ---------- Tableau de bord ----------
 if page=="Vue d’ensemble":
-    header("ESPACE CENTRAL","Ton tableau de bord 👋","Une vue simple de tes cours, de tes révisions et de tes objectifs. Les indicateurs reposent sur tes saisies réelles.")
+    _ = header("ESPACE CENTRAL","Ton tableau de bord 👋","Une vue simple de tes cours, de tes révisions et de tes objectifs. Les indicateurs reposent sur tes saisies réelles.")
     subjects=read_df('SELECT * FROM subjects'); events=read_df('SELECT * FROM events'); tasks=read_df('SELECT * FROM tasks'); logs=read_df('SELECT * FROM study_logs'); goals=read_df('SELECT * FROM goals')
     today=date.today().isoformat()
     upcoming=events[events.event_date>=today] if not events.empty else events
     open_tasks=tasks[~tasks.status.isin(['Terminée','Terminé','Rendue','Rendu'])] if not tasks.empty else tasks
     hours=float(logs.hours.sum()) if not logs.empty else 0
     cols=st.columns(4)
-    with cols[0]: card('Matières enregistrées',len(subjects),'Maquette pédagogique')
-    with cols[1]: card('Séances à venir',len(upcoming),'Cours, TD, TP, examens…')
-    with cols[2]: card('Tâches ouvertes',len(open_tasks),'À faire ou en cours')
-    with cols[3]: card('Heures étudiées',round(hours,1),'Journal de révision')
+    with cols[0]: _ = card('Matières enregistrées',len(subjects),'Maquette pédagogique')
+    with cols[1]: _ = card('Séances à venir',len(upcoming),'Cours, TD, TP, examens…')
+    with cols[2]: _ = card('Tâches ouvertes',len(open_tasks),'À faire ou en cours')
+    with cols[3]: _ = card('Heures étudiées',round(hours,1),'Journal de révision')
     # Résumé des rappels issus des autres rubriques, visible dès l'ouverture de l'application.
     _sync_now = time_module.time()
     _sync_last = float(st.session_state.get("issa_reminder_sync_last", 0) or 0)
     if _sync_now - _sync_last >= 120:
-        sync_existing_entries_to_reminders()
+        _ = sync_existing_entries_to_reminders()
         st.session_state["issa_reminder_sync_last"] = _sync_now
     soon=read_df("SELECT title,details,remind_at,status FROM reminders WHERE enabled=1 AND status='En attente' ORDER BY remind_at LIMIT 6")
     st.subheader('🔔 Ce que tu dois faire bientôt')
@@ -903,7 +903,7 @@ if page=="Vue d’ensemble":
 
 # ---------- Maquettes ----------
 elif page=="Maquettes & matières":
-    header('PÉDAGOGIE','Maquettes & matières','Saisie manuelle, import en lot par CSV/Excel et contrôle des doublons. Les PDF peuvent être lus, mais leur conversion nécessite une vérification.')
+    _ = header('PÉDAGOGIE','Maquettes & matières','Saisie manuelle, import en lot par CSV/Excel et contrôle des doublons. Les PDF peuvent être lus, mais leur conversion nécessite une vérification.')
     tab1,tab2,tab3=st.tabs(['➕ Saisie directe','📥 Import en lot','📚 Maquette enregistrée'])
     with tab1:
         with st.form('add_subject'):
@@ -915,7 +915,7 @@ elif page=="Maquettes & matières":
         if ok:
             if not title.strip(): st.error('L’intitulé est obligatoire.')
             else:
-                run('INSERT INTO subjects(title,code,semester,ue,ue_code,credits,cm,td,tp,tpe,vht,teacher,notes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(title.strip(),code.strip(),semester,ue.strip(),ue_code.strip(),credits,cm,td,tp,tpe,vht,teacher.strip(),notes.strip()))
+                _ = run('INSERT INTO subjects(title,code,semester,ue,ue_code,credits,cm,td,tp,tpe,vht,teacher,notes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(title.strip(),code.strip(),semester,ue.strip(),ue_code.strip(),credits,cm,td,tp,tpe,vht,teacher.strip(),notes.strip()))
                 st.success('Matière enregistrée.'); st.rerun()
     with tab2:
         st.markdown('**Pour une saisie massive**, prépare un CSV ou Excel avec les colonnes ci-dessous. Les noms de colonnes sont reconnus sans tenir compte des majuscules et accents.')
@@ -944,7 +944,7 @@ elif page=="Maquettes & matières":
                                 try: v=float(v or 0)
                                 except: v=0.
                             vals.append(v)
-                        run('INSERT INTO subjects(title,code,semester,ue,ue_code,credits,cm,td,tp,tpe,vht,teacher,notes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',tuple(vals))
+                        _ = run('INSERT INTO subjects(title,code,semester,ue,ue_code,credits,cm,td,tp,tpe,vht,teacher,notes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',tuple(vals))
                         count+=1
                     st.success(f'{count} matière(s) importée(s). Les doublons exacts ont été ignorés.'); st.rerun()
             except Exception as ex: st.error(f'Lecture impossible : {ex}')
@@ -961,16 +961,16 @@ elif page=="Maquettes & matières":
         if df.empty: st.info('Aucune matière enregistrée.')
         else:
             st.dataframe(df.drop(columns=['created_at'],errors='ignore'),use_container_width=True,hide_index=True)
-            export_csv(df,'la maquette','maquette')
+            _ = export_csv(df,'la maquette','maquette')
             opts={f"#{r.id} — {r.title} ({r.semester})":int(r.id) for r in df.itertuples()}; chosen=st.selectbox('Fiche à supprimer (si nécessaire)',list(opts),key='del_subject_pick')
             if st.button('Supprimer la matière choisie',key='delete_subject'):
-                run('DELETE FROM subjects WHERE id=?',(opts[chosen],)); st.success('Matière supprimée.'); st.rerun()
+                _ = run('DELETE FROM subjects WHERE id=?',(opts[chosen],)); st.success('Matière supprimée.'); st.rerun()
             dup=df.assign(n=df.title.map(norm),s=df.semester.map(norm),u=df.ue.map(norm)).groupby(['n','s','u']).filter(lambda g:len(g)>1)
             if not dup.empty: st.warning('Doublons potentiels détectés : vérifie-les avant suppression.'); st.dataframe(dup[['id','title','semester','ue']],hide_index=True)
 
 # ---------- EDT ----------
 elif page=="Emploi du temps":
-    header('AGENDA','Emploi du temps','Saisis les séances une à une ou importe un tableau CSV/Excel. Toute ligne importée est affichée avant enregistrement.')
+    _ = header('AGENDA','Emploi du temps','Saisis les séances une à une ou importe un tableau CSV/Excel. Toute ligne importée est affichée avant enregistrement.')
     subjects,subopts=subject_choices(); tab1,tab2,tab3=st.tabs(['➕ Ajouter une séance','📥 Importer un EDT','🗓️ Agenda enregistré'])
     with tab1:
         with st.form('add_event'):
@@ -982,11 +982,11 @@ elif page=="Emploi du temps":
             if not title.strip(): st.error('Le titre est obligatoire.')
             elif end<=start: st.error('La fin doit être après le début.')
             else:
-                run('INSERT INTO events(title,event_date,start_time,end_time,kind,subject_id,location,notes) VALUES(?,?,?,?,?,?,?,?)',(title.strip(),day.isoformat(),start.strftime('%H:%M'),end.strftime('%H:%M'),kind,subopts[sl],location.strip(),notes.strip()))
+                _ = run('INSERT INTO events(title,event_date,start_time,end_time,kind,subject_id,location,notes) VALUES(?,?,?,?,?,?,?,?)',(title.strip(),day.isoformat(),start.strftime('%H:%M'),end.strftime('%H:%M'),kind,subopts[sl],location.strip(),notes.strip()))
                 new_id = int(read_df('SELECT id FROM events WHERE title=? AND event_date=? ORDER BY id DESC LIMIT 1', (title.strip(),day.isoformat())).iloc[0]['id'])
                 reminder_dt = datetime.combine(day, start) - timedelta(hours=1)
                 if reminder_dt < datetime.now(): reminder_dt = datetime.combine(day, start)
-                upsert_auto_reminder('event', new_id, f'{kind} : {title.strip()}', f'Lieu : {location.strip() or "non précisé"}. {notes.strip()}', reminder_dt.strftime('%Y-%m-%d %H:%M:%S'))
+                _ = upsert_auto_reminder('event', new_id, f'{kind} : {title.strip()}', f'Lieu : {location.strip() or "non précisé"}. {notes.strip()}', reminder_dt.strftime('%Y-%m-%d %H:%M:%S'))
                 st.success('Séance ajoutée. Un rappel est automatiquement créé dans Rappels.'); st.rerun()
     with tab2:
         st.markdown('Colonnes conseillées : **title, event_date, start_time, end_time, kind, subject, location, notes**. Date au format AAAA-MM-JJ et heures HH:MM.')
@@ -1011,7 +1011,7 @@ elif page=="Emploi du temps":
                             if subname:
                                 found=subjects[subjects.title.map(norm)==subname]
                                 if not found.empty: sid=int(found.iloc[0].id)
-                            run('INSERT INTO events(title,event_date,start_time,end_time,kind,subject_id,location,notes,source) VALUES(?,?,?,?,?,?,?,?,?)',(t,ds,stime,etime,str(r.get('kind','Cours')),sid,str(r.get('location','')),str(r.get('notes','')),'Import CSV/Excel'))
+                            _ = run('INSERT INTO events(title,event_date,start_time,end_time,kind,subject_id,location,notes,source) VALUES(?,?,?,?,?,?,?,?,?)',(t,ds,stime,etime,str(r.get('kind','Cours')),sid,str(r.get('location','')),str(r.get('notes','')),'Import CSV/Excel'))
                             count+=1
                         except Exception as ex: errors.append(f'Ligne {ix+2}: {ex}')
                     st.success(f'{count} séance(s) enregistrée(s).');
@@ -1036,13 +1036,13 @@ elif page=="Emploi du temps":
             if filt=='Passées': view=view[view.event_date<date.today().isoformat()]
             if query.strip(): view=view[view.title.str.contains(query,case=False,na=False)]
             st.dataframe(view[['id','event_date','start_time','end_time','title','kind','subject_title','location','source']].rename(columns={'id':'ID','event_date':'Date','start_time':'Début','end_time':'Fin','title':'Événement','kind':'Type','subject_title':'Matière','location':'Lieu','source':'Origine'}),use_container_width=True,hide_index=True)
-            export_csv(view,'l’emploi du temps','edt')
+            _ = export_csv(view,'l’emploi du temps','edt')
             eopts={f"#{r.id} — {r.event_date} {r.title}":int(r.id) for r in ev.itertuples()}; pick=st.selectbox('Séance à supprimer',list(eopts))
-            if st.button('Supprimer la séance sélectionnée'): run('DELETE FROM events WHERE id=?',(eopts[pick],)); st.rerun()
+            if st.button('Supprimer la séance sélectionnée'): _ = run('DELETE FROM events WHERE id=?',(eopts[pick],)); st.rerun()
 
 # ---------- Génération du programme de révision ----------
 elif page=="Programmes de révision":
-    header('PLANIFICATION INTELLIGENTE','Programme de révision','Un planning indicatif construit à partir de ta maquette, de tes disponibilités et de la date cible. Tu peux ajuster les séances ensuite.')
+    _ = header('PLANIFICATION INTELLIGENTE','Programme de révision','Un planning indicatif construit à partir de ta maquette, de tes disponibilités et de la date cible. Tu peux ajuster les séances ensuite.')
     subjects=read_df('SELECT * FROM subjects ORDER BY title')
     if subjects.empty: st.warning('Commence par enregistrer tes matières dans « Maquettes & matières ».'); st.stop()
     with st.form('revision_generator'):
@@ -1084,7 +1084,7 @@ elif page=="Programmes de révision":
         st.download_button('Télécharger le programme CSV',edited.to_csv(index=False).encode('utf-8-sig'),'programme_revision.csv','text/csv')
         if st.button('Créer des tâches à partir de ce programme',type='primary'):
             for r in edited.to_dict('records'):
-                run('INSERT INTO tasks(title,due_date,priority,status,category,notes) VALUES(?,?,?,?,?,?)',(f"Réviser : {r.get('Matière','')}",str(r.get('Date','')), 'Normale', 'À faire','Révision',f"{r.get('Durée (h)','')} h · {r.get('Séance proposée','')}"))
+                _ = run('INSERT INTO tasks(title,due_date,priority,status,category,notes) VALUES(?,?,?,?,?,?)',(f"Réviser : {r.get('Matière','')}",str(r.get('Date','')), 'Normale', 'À faire','Révision',f"{r.get('Durée (h)','')} h · {r.get('Séance proposée','')}"))
             st.success('Séances ajoutées à Tâches & révisions.'); st.rerun()
     st.divider(); st.subheader('Tâches de révision déjà planifiées')
     rt=read_df("SELECT * FROM tasks WHERE category='Révision' ORDER BY due_date")
@@ -1093,7 +1093,7 @@ elif page=="Programmes de révision":
 
 # ---------- Journal et progression ----------
 elif page=="Suivi & progression":
-    header('BAROMÈTRE PÉDAGOGIQUE','Suivi & progression','Enregistre chaque séance réellement étudiée, ton niveau de maîtrise et tes heures cumulées par matière.')
+    _ = header('BAROMÈTRE PÉDAGOGIQUE','Suivi & progression','Enregistre chaque séance réellement étudiée, ton niveau de maîtrise et tes heures cumulées par matière.')
     subjects=read_df('SELECT id,title,semester,vht FROM subjects ORDER BY title')
     if subjects.empty: st.info('Ajoute d’abord les matières dans la maquette.')
     else:
@@ -1104,7 +1104,7 @@ elif page=="Suivi & progression":
             notes=st.text_area('Ce qui est compris / reste à revoir')
             ok=st.form_submit_button('Enregistrer ma séance',type='primary')
         if ok:
-            run('INSERT INTO study_logs(subject_id,study_date,hours,method,confidence,notes) VALUES(?,?,?,?,?,?)',(opts[subject],day.isoformat(),hours,method,confidence,notes.strip())); st.success('Séance enregistrée.'); st.rerun()
+            _ = run('INSERT INTO study_logs(subject_id,study_date,hours,method,confidence,notes) VALUES(?,?,?,?,?,?)',(opts[subject],day.isoformat(),hours,method,confidence,notes.strip())); st.success('Séance enregistrée.'); st.rerun()
         logs=read_df('SELECT l.*,s.title AS subject FROM study_logs l LEFT JOIN subjects s ON s.id=l.subject_id ORDER BY study_date DESC,id DESC')
         summary=read_df('SELECT s.id,s.title,s.semester,s.vht,COALESCE(SUM(l.hours),0) AS studied,AVG(l.confidence) AS confidence FROM subjects s LEFT JOIN study_logs l ON l.subject_id=s.id GROUP BY s.id ORDER BY s.title')
         st.subheader('Progression par matière')
@@ -1117,13 +1117,13 @@ elif page=="Suivi & progression":
         if logs.empty: st.info('Le journal est vide.')
         else:
             st.dataframe(logs[['study_date','subject','hours','method','confidence','notes']].rename(columns={'study_date':'Date','subject':'Matière','hours':'Heures','method':'Méthode','confidence':'Maîtrise /5','notes':'Notes'}),use_container_width=True,hide_index=True)
-            export_csv(logs,'le journal d’étude','journal_etude')
+            _ = export_csv(logs,'le journal d’étude','journal_etude')
             choices={f"#{r.id} · {r.study_date} · {r.subject}":int(r.id) for r in logs.itertuples()}; sel=st.selectbox('Entrée à supprimer',list(choices))
-            if st.button('Supprimer cette entrée du journal'): run('DELETE FROM study_logs WHERE id=?',(choices[sel],)); st.rerun()
+            if st.button('Supprimer cette entrée du journal'): _ = run('DELETE FROM study_logs WHERE id=?',(choices[sel],)); st.rerun()
 
 # ---------- Assistant de vie avec sous-onglets ----------
 elif page=="Assistant de vie":
-    header('ESPACE PERSONNEL XXL','Assistant de vie 🧭','Un espace central pour tes objectifs, habitudes, budget, tâches, routines, notes et contacts. Les informations sont enregistrées dans Supabase PostgreSQL.')
+    _ = header('ESPACE PERSONNEL XXL','Assistant de vie 🧭','Un espace central pour tes objectifs, habitudes, budget, tâches, routines, notes et contacts. Les informations sont enregistrées dans Supabase PostgreSQL.')
     tabs=st.tabs(['🎯 Objectifs','✅ Habitudes','💰 Budget','📝 Tâches & démarches','📓 Notes personnelles','👥 Contacts','🌿 Bien-être & routines'])
     with tabs[0]:
         with st.form('goal_form'):
@@ -1131,11 +1131,11 @@ elif page=="Assistant de vie":
             progress=st.slider('Progression actuelle (%)',0,100,0); notes=st.text_area('Étapes / détails'); ok=st.form_submit_button('Ajouter l’objectif',type='primary')
         if ok:
             if title.strip():
-                run('INSERT INTO goals(title,category,target_date,progress,notes) VALUES(?,?,?,?,?)',(title.strip(),category,target.isoformat(),progress,notes.strip()))
+                _ = run('INSERT INTO goals(title,category,target_date,progress,notes) VALUES(?,?,?,?,?)',(title.strip(),category,target.isoformat(),progress,notes.strip()))
                 new_id=int(read_df('SELECT id FROM goals WHERE title=? ORDER BY id DESC LIMIT 1',(title.strip(),)).iloc[0]['id'])
                 remind=datetime.combine(max(date.today(),target-timedelta(days=1)),time(8,0))
                 if remind < datetime.now(): remind=datetime.combine(target,time(8,0))
-                upsert_auto_reminder('goal',new_id,f'Objectif à suivre : {title.strip()}',f'Domaine : {category}. Progression : {progress} %. {notes.strip()}',remind.strftime('%Y-%m-%d %H:%M:%S'))
+                _ = upsert_auto_reminder('goal',new_id,f'Objectif à suivre : {title.strip()}',f'Domaine : {category}. Progression : {progress} %. {notes.strip()}',remind.strftime('%Y-%m-%d %H:%M:%S'))
                 st.rerun()
             else: st.error('Donne un titre à ton objectif.')
         goals=read_df('SELECT * FROM goals ORDER BY target_date')
@@ -1144,19 +1144,19 @@ elif page=="Assistant de vie":
                 with st.container(border=True):
                     st.write(f"**{r.title}** · {r.category} · cible : {r.target_date or 'non définie'}")
                     new=st.slider(f'Progression — {r.title}',0,100,int(r.progress),key=f'goalprog_{r.id}')
-                    if st.button('Mettre à jour',key=f'goalupdate_{r.id}'): run('UPDATE goals SET progress=? WHERE id=?',(new,r.id)); st.rerun()
+                    if st.button('Mettre à jour',key=f'goalupdate_{r.id}'): _ = run('UPDATE goals SET progress=? WHERE id=?',(new,r.id)); st.rerun()
                     if r.notes: st.caption(r.notes)
-                    if st.button('Supprimer objectif',key=f'goaldel_{r.id}'): run('DELETE FROM goals WHERE id=?',(r.id,)); st.rerun()
+                    if st.button('Supprimer objectif',key=f'goaldel_{r.id}'): _ = run('DELETE FROM goals WHERE id=?',(r.id,)); st.rerun()
     with tabs[1]:
         with st.form('habit_form'):
             title=st.text_input('Habitude à suivre *',placeholder='Ex. lire 20 minutes, réviser, ranger le bureau'); freq=st.selectbox('Fréquence',['Quotidienne','En semaine','Hebdomadaire']); notes=st.text_input('Pourquoi / rappel'); ok=st.form_submit_button('Créer une habitude')
         if ok:
             if title.strip():
-                run('INSERT INTO habits(title,frequency,notes) VALUES(?,?,?)',(title.strip(),freq,notes.strip()))
+                _ = run('INSERT INTO habits(title,frequency,notes) VALUES(?,?,?)',(title.strip(),freq,notes.strip()))
                 new_id=int(read_df('SELECT id FROM habits WHERE title=? ORDER BY id DESC LIMIT 1',(title.strip(),)).iloc[0]['id'])
                 remind=datetime.combine(date.today(),time(8,0))
                 if remind < datetime.now(): remind += timedelta(days=1)
-                upsert_auto_reminder('habit',new_id,f'Habitude du jour : {title.strip()}',f'Fréquence : {freq}. {notes.strip()}',remind.strftime('%Y-%m-%d %H:%M:%S'),'Quotidien')
+                _ = upsert_auto_reminder('habit',new_id,f'Habitude du jour : {title.strip()}',f'Fréquence : {freq}. {notes.strip()}',remind.strftime('%Y-%m-%d %H:%M:%S'),'Quotidien')
                 st.rerun()
             else: st.error('Saisis le nom de l’habitude.')
         habits=read_df('SELECT * FROM habits WHERE active=1 ORDER BY title')
@@ -1166,27 +1166,27 @@ elif page=="Assistant de vie":
             done=read_df('SELECT id FROM habit_logs WHERE habit_id=? AND log_date=? AND done=1',(r.id,date.today().isoformat()))
             if not done.empty: c.success('Fait aujourd’hui')
             elif c.button('Marquer fait',key=f'habitdone_{r.id}'):
-                run('INSERT OR REPLACE INTO habit_logs(habit_id,log_date,done) VALUES(?,?,1)',(r.id,date.today().isoformat())); st.rerun()
+                _ = run('INSERT OR REPLACE INTO habit_logs(habit_id,log_date,done) VALUES(?,?,1)',(r.id,date.today().isoformat())); st.rerun()
             last7=read_df('SELECT COUNT(*) AS n FROM habit_logs WHERE habit_id=? AND done=1 AND log_date>=?',(r.id,(date.today()-timedelta(days=6)).isoformat())).iloc[0]['n']
             st.caption(f'Régularité sur les 7 derniers jours : {int(last7)}/7')
-            if st.button('Supprimer habitude',key=f'habitdel_{r.id}'): run('DELETE FROM habits WHERE id=?',(r.id,)); st.rerun()
+            if st.button('Supprimer habitude',key=f'habitdel_{r.id}'): _ = run('DELETE FROM habits WHERE id=?',(r.id,)); st.rerun()
     with tabs[2]:
         with st.form('budget_form'):
             a,b,c=st.columns(3); day=a.date_input('Date',date.today()); kind=b.selectbox('Mouvement',['Dépense','Revenu']); amount=c.number_input('Montant (FCFA)',min_value=0.,step=500.)
             d,e=st.columns(2); category=d.selectbox('Catégorie',['Alimentation','Transport','Logement','Études','Téléphone / Internet','Santé','Loisirs','Salaire / aide','Épargne','Autre']); desc=e.text_input('Description')
             ok=st.form_submit_button('Enregistrer le mouvement')
         if ok:
-            if amount>0: run('INSERT INTO budgets(entry_date,kind,category,amount,description) VALUES(?,?,?,?,?)',(day.isoformat(),kind,category,amount,desc.strip())); st.rerun()
+            if amount>0: _ = run('INSERT INTO budgets(entry_date,kind,category,amount,description) VALUES(?,?,?,?,?)',(day.isoformat(),kind,category,amount,desc.strip())); st.rerun()
             else: st.error('Le montant doit être supérieur à zéro.')
         budget=read_df('SELECT * FROM budgets ORDER BY entry_date DESC,id DESC')
         if not budget.empty:
             incomes=budget.loc[budget.kind=='Revenu','amount'].sum(); expenses=budget.loc[budget.kind=='Dépense','amount'].sum(); a,b,c=st.columns(3)
-            with a: card('Revenus',f'{incomes:,.0f} FCFA')
-            with b: card('Dépenses',f'{expenses:,.0f} FCFA')
-            with c: card('Solde enregistré',f'{incomes-expenses:,.0f} FCFA')
-            st.dataframe(budget,use_container_width=True,hide_index=True); export_csv(budget,'le budget','budget')
+            with a: _ = card('Revenus',f'{incomes:,.0f} FCFA')
+            with b: _ = card('Dépenses',f'{expenses:,.0f} FCFA')
+            with c: _ = card('Solde enregistré',f'{incomes-expenses:,.0f} FCFA')
+            st.dataframe(budget,use_container_width=True,hide_index=True); _ = export_csv(budget,'le budget','budget')
             opts={f"#{r.id} · {r.entry_date} · {r.kind} · {r.amount:g} FCFA":int(r.id) for r in budget.itertuples()}; pick=st.selectbox('Mouvement à supprimer',list(opts))
-            if st.button('Supprimer le mouvement'): run('DELETE FROM budgets WHERE id=?',(opts[pick],)); st.rerun()
+            if st.button('Supprimer le mouvement'): _ = run('DELETE FROM budgets WHERE id=?',(opts[pick],)); st.rerun()
         else: st.info('Aucun mouvement saisi. Le solde est calculé uniquement à partir des mouvements enregistrés ici.')
     with tabs[3]:
         with st.form('life_task_form'):
@@ -1194,20 +1194,20 @@ elif page=="Assistant de vie":
             category=st.selectbox('Domaine',['Administratif','Études','Famille','Finances','Projet','Personnel','Santé','Travail']); notes=st.text_area('Détails / pièces à prévoir'); ok=st.form_submit_button('Ajouter à ma liste')
         if ok:
             if title.strip():
-                run('INSERT INTO tasks(title,due_date,priority,status,category,notes) VALUES(?,?,?,?,?,?)',(title.strip(),due.isoformat(),priority,'À faire',category,notes.strip()))
+                _ = run('INSERT INTO tasks(title,due_date,priority,status,category,notes) VALUES(?,?,?,?,?,?)',(title.strip(),due.isoformat(),priority,'À faire',category,notes.strip()))
                 new_id=int(read_df('SELECT id FROM tasks WHERE title=? ORDER BY id DESC LIMIT 1',(title.strip(),)).iloc[0]['id'])
                 remind=datetime.combine(max(date.today(), due-timedelta(days=1)), time(8,0))
                 if remind < datetime.now(): remind=datetime.combine(due,time(8,0))
-                upsert_auto_reminder('task',new_id,f'Échéance : {title.strip()}',f'Priorité : {priority}. Domaine : {category}. {notes.strip()}',remind.strftime('%Y-%m-%d %H:%M:%S'))
+                _ = upsert_auto_reminder('task',new_id,f'Échéance : {title.strip()}',f'Priorité : {priority}. Domaine : {category}. {notes.strip()}',remind.strftime('%Y-%m-%d %H:%M:%S'))
                 st.rerun()
             else: st.error('Saisis le titre de la tâche.')
-        tasks=read_df('SELECT * FROM tasks ORDER BY CASE priority WHEN "Urgente" THEN 1 WHEN "Haute" THEN 2 WHEN "Normale" THEN 3 ELSE 4 END,due_date')
+        tasks=read_df("SELECT * FROM tasks ORDER BY CASE priority WHEN 'Urgente' THEN 1 WHEN 'Haute' THEN 2 WHEN 'Normale' THEN 3 ELSE 4 END, due_date")
         if not tasks.empty:
             st.dataframe(tasks[['id','title','due_date','priority','status','category','notes']],use_container_width=True,hide_index=True)
             opts={f"#{r.id} · {r.title}":int(r.id) for r in tasks.itertuples()}; sel=st.selectbox('Tâche à mettre à jour',list(opts)); tid=opts[sel]
             status=st.selectbox('Nouveau statut',['À faire','En cours','Terminée'],key='life_task_status')
-            if st.button('Enregistrer le statut',key='life_task_save'): run('UPDATE tasks SET status=? WHERE id=?',(status,tid)); st.rerun()
-            if st.button('Supprimer cette tâche',key='life_task_delete'): run('DELETE FROM tasks WHERE id=?',(tid,)); st.rerun()
+            if st.button('Enregistrer le statut',key='life_task_save'): _ = run('UPDATE tasks SET status=? WHERE id=?',(status,tid)); st.rerun()
+            if st.button('Supprimer cette tâche',key='life_task_delete'): _ = run('DELETE FROM tasks WHERE id=?',(tid,)); st.rerun()
         else: st.info('Ta liste est vide.')
     with tabs[4]:
         with st.form('note_form'):
@@ -1221,11 +1221,11 @@ elif page=="Assistant de vie":
             if title.strip():
                 rd=reminder_date.isoformat() if reminder_date else ''
                 rt=reminder_time.strftime('%H:%M') if reminder_time else '08:00'
-                run('INSERT INTO life_notes(title,category,content,reminder_date,reminder_time) VALUES(?,?,?,?,?)',(title.strip(),category,content.strip(),rd,rt))
+                _ = run('INSERT INTO life_notes(title,category,content,reminder_date,reminder_time) VALUES(?,?,?,?,?)',(title.strip(),category,content.strip(),rd,rt))
                 new_id=int(read_df('SELECT id FROM life_notes WHERE title=? ORDER BY id DESC LIMIT 1',(title.strip(),)).iloc[0]['id'])
                 if category == 'Rappel' and rd:
                     dt=datetime.combine(reminder_date,reminder_time)
-                    upsert_auto_reminder('note',new_id,f'Note à ne pas oublier : {title.strip()}',content.strip(),dt.strftime('%Y-%m-%d %H:%M:%S'))
+                    _ = upsert_auto_reminder('note',new_id,f'Note à ne pas oublier : {title.strip()}',content.strip(),dt.strftime('%Y-%m-%d %H:%M:%S'))
                     st.success('Note enregistrée et rappel automatiquement programmé.')
                 st.rerun()
             else: st.error('Le titre est obligatoire.')
@@ -1235,19 +1235,19 @@ elif page=="Assistant de vie":
             with st.container(border=True):
                 st.markdown(f'**{r.title}** · {r.category}'); st.write(r.content)
                 if r.category == 'Rappel' and getattr(r, 'reminder_date', ''): st.caption(f"🔔 Rappel prévu le {r.reminder_date} à {getattr(r, 'reminder_time', '08:00')}")
-                if st.button('Supprimer la note',key=f'note_del_{r.id}'): run('DELETE FROM life_notes WHERE id=?',(r.id,)); st.rerun()
+                if st.button('Supprimer la note',key=f'note_del_{r.id}'): _ = run('DELETE FROM life_notes WHERE id=?',(r.id,)); st.rerun()
     with tabs[5]:
         with st.form('contact_form'):
             a,b=st.columns(2); name=a.text_input('Nom / organisation *'); role=b.text_input('Rôle / relation'); c,d=st.columns(2); phone=c.text_input('Téléphone'); email=d.text_input('E-mail'); notes=st.text_area('Notes de contact'); ok=st.form_submit_button('Enregistrer le contact')
         if ok:
-            if name.strip(): run('INSERT INTO contacts(name,role,phone,email,notes) VALUES(?,?,?,?,?)',(name.strip(),role.strip(),phone.strip(),email.strip(),notes.strip())); st.rerun()
+            if name.strip(): _ = run('INSERT INTO contacts(name,role,phone,email,notes) VALUES(?,?,?,?,?)',(name.strip(),role.strip(),phone.strip(),email.strip(),notes.strip())); st.rerun()
             else: st.error('Le nom est obligatoire.')
         contacts=read_df('SELECT * FROM contacts ORDER BY name')
         if contacts.empty: st.info('Aucun contact enregistré.')
         else:
             st.dataframe(contacts.drop(columns=['created_at'],errors='ignore'),use_container_width=True,hide_index=True)
             opts={f"#{r.id} · {r.name}":int(r.id) for r in contacts.itertuples()}; pick=st.selectbox('Contact à supprimer',list(opts))
-            if st.button('Supprimer le contact'): run('DELETE FROM contacts WHERE id=?',(opts[pick],)); st.rerun()
+            if st.button('Supprimer le contact'): _ = run('DELETE FROM contacts WHERE id=?',(opts[pick],)); st.rerun()
     with tabs[6]:
         st.markdown('### Petit bilan personnel')
         st.caption('Cet espace aide à organiser tes habitudes, sans remplacer un professionnel de santé. Choisis des routines réalistes et adapte-les à tes contraintes.')
@@ -1258,8 +1258,8 @@ elif page=="Assistant de vie":
 
 # ---------- Rappels automatiques issus des rubriques enregistrées ----------
 elif page=="Rappels automatiques":
-    header('SECRÉTARIAT PERSONNEL','Rappels automatiques par e-mail 📧','Les rappels sont générés à partir de ce que tu enregistres déjà dans les onglets : agenda, tâches, objectifs, habitudes, formations et opportunités. Tu n’as pas à ressaisir les mêmes informations ici.')
-    sync_existing_entries_to_reminders()
+    _ = header('SECRÉTARIAT PERSONNEL','Rappels automatiques par e-mail 📧','Les rappels sont générés à partir de ce que tu enregistres déjà dans les onglets : agenda, tâches, objectifs, habitudes, formations et opportunités. Tu n’as pas à ressaisir les mêmes informations ici.')
+    _ = sync_existing_entries_to_reminders()
     current_email = get_recipient_email()
     with st.container(border=True):
         st.markdown('#### 📬 Adresse qui recevra les rappels')
@@ -1270,7 +1270,7 @@ elif page=="Rappels automatiques":
             if not re.match(r'^[^\s@]+@[^\s@]+\.[^\s@]+$', recipient_input.strip()):
                 st.error('Entre une adresse e-mail valide.')
             else:
-                save_setting('reminder_email', recipient_input.strip())
+                _ = save_setting('reminder_email', recipient_input.strip())
                 st.success('Adresse de réception enregistrée.')
                 st.rerun()
     if email_configured():
@@ -1294,9 +1294,9 @@ elif page=="Rappels automatiques":
         pending=reminders[(reminders.enabled==1)&(reminders.status=='En attente')]
         overdue=pending[pending.remind_at.astype(str)<=datetime.now().strftime('%Y-%m-%d %H:%M:%S')]
         c1,c2,c3=st.columns(3)
-        with c1: card('Rappels en attente',len(pending),'Échéances à venir ou à traiter')
-        with c2: card('À traiter maintenant',len(overdue),'Date/heure du rappel atteinte')
-        with c3: card('E-mails envoyés',int((reminders.status=='Envoyé').sum()),'Rappels ponctuels déjà transmis')
+        with c1: _ = card('Rappels en attente',len(pending),'Échéances à venir ou à traiter')
+        with c2: _ = card('À traiter maintenant',len(overdue),'Date/heure du rappel atteinte')
+        with c3: _ = card('E-mails envoyés',int((reminders.status=='Envoyé').sum()),'Rappels ponctuels déjà transmis')
         display=reminders.rename(columns={'title':'Rappel automatique','details':'Détails / rubrique','remind_at':'Date et heure','repeat_rule':'Répétition','status':'État e-mail','enabled':'Actif','last_sent_at':'Dernier e-mail','last_error':'Erreur éventuelle','source_type':'Rubrique source','source_id':'N° entrée'})
         st.dataframe(display[['Rappel automatique','Détails / rubrique','Date et heure','Rubrique source','État e-mail','Actif','Dernier e-mail','Erreur éventuelle']],use_container_width=True,hide_index=True)
         choices={f"#{int(r.id)} — {r.title} — {r.remind_at}":int(r.id) for r in reminders.itertuples()}
@@ -1306,7 +1306,7 @@ elif page=="Rappels automatiques":
             cur=read_df('SELECT enabled FROM reminders WHERE id=?',(rid,))
             if not cur.empty:
                 enabled=0 if int(cur.iloc[0]['enabled']) else 1
-                run("UPDATE reminders SET enabled=?,status=? WHERE id=?",(enabled,'En attente' if enabled else 'Désactivé',rid))
+                _ = run("UPDATE reminders SET enabled=?,status=? WHERE id=?",(enabled,'En attente' if enabled else 'Désactivé',rid))
                 st.rerun()
         if b.button('Envoyer ce rappel maintenant par e-mail',key='auto_reminder_send_now',disabled=not email_configured()):
             row=read_df('SELECT * FROM reminders WHERE id=?',(rid,))
@@ -1314,14 +1314,14 @@ elif page=="Rappels automatiques":
                 r=row.iloc[0]
                 try:
                     send_email(f"🔔 Rappel Secrétaire Issa : {r['title']}",f"Rappel : {r['title']}\n\n{r['details']}\n\nDate prévue : {r['remind_at']}\n— Secrétaire Issa")
-                    run("UPDATE reminders SET last_sent_at=?,last_error='' WHERE id=?",(datetime.now().strftime('%Y-%m-%d %H:%M:%S'),rid))
+                    _ = run("UPDATE reminders SET last_sent_at=?,last_error='' WHERE id=?",(datetime.now().strftime('%Y-%m-%d %H:%M:%S'),rid))
                     st.success('E-mail transmis au serveur de messagerie.')
                 except Exception as exc: st.error(str(exc))
     st.caption('Vérification des rappels au démarrage de chaque exécution de l’application et contrôle en arrière-plan toutes les 30 secondes tant que le processus Streamlit reste actif. Les rappels sont issus de l’agenda (1 h avant), des tâches et objectifs (veille à 08 h ou immédiatement si déjà en retard), des formations, des stages/concours/bourses, des notes « Rappel » et des habitudes actives. Gmail utilise le port 587 STARTTLS avec secours sur 465 SSL. Streamlit Cloud peut suspendre l’application lorsqu’elle est inactive : un envoi garanti même application endormie nécessite un planificateur externe et une base de données persistante.')
 
 # ---------- Assistant e-mail, voix et documents ----------
 elif page=="Assistant e-mail & documents":
-    header("ASSISTANT PERSONNEL", "E-mails, voix et documents ✉️", "Prépare tes messages, dicte-les à la voix, envoie-les depuis Gmail, consulte ta boîte de réception et interroge tes documents importés.")
+    _ = header("ASSISTANT PERSONNEL", "E-mails, voix et documents ✉️", "Prépare tes messages, dicte-les à la voix, envoie-les depuis Gmail, consulte ta boîte de réception et interroge tes documents importés.")
     st.info(f"Adresse d’expédition fixe : **{FIXED_SENDER_EMAIL}**. La lecture de la boîte utilise IMAP Gmail et le même mot de passe d’application.")
     mail_tab, docs_tab = st.tabs(["✉️ Messagerie", "📚 Documents & questions"])
     with mail_tab:
@@ -1391,7 +1391,7 @@ elif page=="Assistant e-mail & documents":
                 extracted = extract_document_text(upload)
                 if not extracted.strip(): st.warning("Aucun texte n’a été extrait. Pour un PDF scanné, il faut un OCR.")
                 else:
-                    run("INSERT INTO assistant_docs(title,content) VALUES(?,?)", (upload.name, extracted))
+                    _ = run("INSERT INTO assistant_docs(title,content) VALUES(?,?)", (upload.name, extracted))
                     st.success(f"Document « {upload.name} » enregistré. Texte extrait : {len(extracted)} caractères.")
                     st.rerun()
             except Exception as exc: st.error(str(exc))
@@ -1425,7 +1425,7 @@ elif page=="Assistant e-mail & documents":
                         st.caption("Résultat fondé sur les mots présents dans le document importé ; vérifie le contexte complet avant de prendre une décision.")
                     else: st.warning("Aucun passage ne correspond clairement aux mots de la question. Essaie avec des termes plus précis ou lis le document complet.")
             if st.button("🗑️ Supprimer ce document", key="assistant_delete_doc"):
-                run("DELETE FROM assistant_docs WHERE id=?", (int(selected_doc["id"]),)); st.rerun()
+                _ = run("DELETE FROM assistant_docs WHERE id=?", (int(selected_doc["id"]),)); st.rerun()
 
 # ---------- Compétences & Carrière ----------
 elif page=="Compétences & Carrière":
@@ -1513,10 +1513,10 @@ elif page=="Compétences & Carrière":
             extra_contact = st.text_input("Lien ou contact professionnel supplémentaire", value=get_saved_setting("career_extra_contact", ""), key="career_extra_contact_input")
             save_profile = st.form_submit_button("💾 Enregistrer les compléments")
         if save_profile:
-            save_setting("career_extra_headline", extra_headline)
-            save_setting("career_extra_skills", extra_skills)
-            save_setting("career_extra_projects", extra_projects)
-            save_setting("career_extra_contact", extra_contact)
+            _ = save_setting("career_extra_headline", extra_headline)
+            _ = save_setting("career_extra_skills", extra_skills)
+            _ = save_setting("career_extra_projects", extra_projects)
+            _ = save_setting("career_extra_contact", extra_contact)
             st.success("Compléments du profil enregistrés.")
             st.rerun()
     st.markdown("### 📄 Informations issues du CV")
@@ -1549,16 +1549,16 @@ elif page=="Compétences & Carrière":
         if _extra_skills: st.markdown("**Compétences ajoutées**\n\n" + _extra_skills)
         if _extra_projects: st.markdown("**Projets et réalisations**\n\n" + _extra_projects)
         if _extra_contact: st.markdown("**Contact / lien complémentaire :** " + _extra_contact)
-    header('DÉVELOPPEMENT PROFESSIONNEL','Compétences & Carrière 🚀','Prépare ton avenir professionnel : compétences, formations, certifications, stages et opportunités. Les informations sont conservées dans SQLite.')
+    _ = header('DÉVELOPPEMENT PROFESSIONNEL','Compétences & Carrière 🚀','Prépare ton avenir professionnel : compétences, formations, certifications, stages et opportunités. Les informations sont conservées dans SQLite.')
     skills=read_df('SELECT * FROM career_skills')
     trainings=read_df('SELECT * FROM career_training')
     opportunities=read_df('SELECT * FROM career_opportunities')
     applied=opportunities[opportunities.status.isin(['Candidature envoyée','Entretien','Retenue','Refusée'])] if not opportunities.empty else opportunities
     metrics=st.columns(4)
-    with metrics[0]: card('Compétences suivies',len(skills),'À acquérir ou à renforcer')
-    with metrics[1]: card('Formations',len(trainings),'Formations et certifications')
-    with metrics[2]: card('Opportunités',len(opportunities),'Stages, emplois, bourses…')
-    with metrics[3]: card('Candidatures suivies',len(applied),'Démarches déjà engagées')
+    with metrics[0]: _ = card('Compétences suivies',len(skills),'À acquérir ou à renforcer')
+    with metrics[1]: _ = card('Formations',len(trainings),'Formations et certifications')
+    with metrics[2]: _ = card('Opportunités',len(opportunities),'Stages, emplois, bourses…')
+    with metrics[3]: _ = card('Candidatures suivies',len(applied),'Démarches déjà engagées')
     tabs=st.tabs(['🧠 Compétences','🎓 Formations & certifications','🌍 Stages & opportunités','📊 Tableau de bord'])
     with tabs[0]:
         st.markdown('#### Ajouter une compétence')
@@ -1571,7 +1571,7 @@ elif page=="Compétences & Carrière":
             if not name.strip(): st.error('Le nom de la compétence est obligatoire.')
             elif url.strip() and not re.match(r'^https?://',url.strip()): st.error('Le lien doit commencer par http:// ou https://')
             else:
-                run('INSERT INTO career_skills(name,category,level,target_level,status,resource_url,notes) VALUES(?,?,?,?,?,?,?)',(name.strip(),category,level,target,status,url.strip(),notes.strip()))
+                _ = run('INSERT INTO career_skills(name,category,level,target_level,status,resource_url,notes) VALUES(?,?,?,?,?,?,?)',(name.strip(),category,level,target,status,url.strip(),notes.strip()))
                 st.success('Compétence enregistrée.'); st.rerun()
         skills=read_df('SELECT * FROM career_skills ORDER BY category,name')
         if skills.empty: st.info('Aucune compétence enregistrée. Commence par ajouter les logiciels, méthodes ou savoir-faire que tu veux maîtriser.')
@@ -1586,10 +1586,10 @@ elif page=="Compétences & Carrière":
                             x,y,z=st.columns(3); ename=x.text_input('Nom',value=r.name); elevel=y.selectbox('Niveau actuel',['À évaluer','Débutant','Élémentaire','Intermédiaire','Avancé','Maîtrisé'],index=['À évaluer','Débutant','Élémentaire','Intermédiaire','Avancé','Maîtrisé'].index(r.level) if r.level in ['À évaluer','Débutant','Élémentaire','Intermédiaire','Avancé','Maîtrisé'] else 0); estatus=z.selectbox('Statut',['À apprendre','En cours','À pratiquer','Acquise'],index=['À apprendre','En cours','À pratiquer','Acquise'].index(r.status) if r.status in ['À apprendre','En cours','À pratiquer','Acquise'] else 0)
                             enotes=st.text_area('Notes',value=r.notes or ''); save=st.form_submit_button('Enregistrer les modifications')
                         if save:
-                            run('UPDATE career_skills SET name=?,level=?,status=?,notes=? WHERE id=?',(ename.strip(),elevel,estatus,enotes.strip(),int(r.id))); st.rerun()
+                            _ = run('UPDATE career_skills SET name=?,level=?,status=?,notes=? WHERE id=?',(ename.strip(),elevel,estatus,enotes.strip(),int(r.id))); st.rerun()
                         if st.button('Supprimer la compétence',key=f'del_skill_{r.id}'):
-                            run('DELETE FROM career_skills WHERE id=?',(int(r.id),)); st.rerun()
-            export_csv(skills,'les compétences','competences_carriere')
+                            _ = run('DELETE FROM career_skills WHERE id=?',(int(r.id),)); st.rerun()
+            _ = export_csv(skills,'les compétences','competences_carriere')
     with tabs[1]:
         with st.form('career_training_form'):
             title=st.text_input('Nom de la formation ou certification *'); provider=st.text_input('Organisme / plateforme'); kind=st.selectbox('Type',['Formation','Certification','Cours en ligne','Atelier','Conférence','Autre'])
@@ -1601,14 +1601,14 @@ elif page=="Compétences & Carrière":
             elif url.strip() and not re.match(r'^https?://',url.strip()): st.error('Le lien doit commencer par http:// ou https://')
             elif end<start: st.error('La date de fin ne peut pas précéder la date de début.')
             else:
-                run('INSERT INTO career_training(title,provider,kind,start_date,end_date,status,url,notes) VALUES(?,?,?,?,?,?,?,?)',(title.strip(),provider.strip(),kind,start.isoformat(),end.isoformat(),status,url.strip(),notes.strip())); new_id=int(read_df('SELECT id FROM career_training WHERE title=? ORDER BY id DESC LIMIT 1',(title.strip(),)).iloc[0]['id']); sync_existing_entries_to_reminders(); st.success('Formation enregistrée : ses rappels de début et de fin sont programmés.'); st.rerun()
+                _ = run('INSERT INTO career_training(title,provider,kind,start_date,end_date,status,url,notes) VALUES(?,?,?,?,?,?,?,?)',(title.strip(),provider.strip(),kind,start.isoformat(),end.isoformat(),status,url.strip(),notes.strip())); new_id=int(read_df('SELECT id FROM career_training WHERE title=? ORDER BY id DESC LIMIT 1',(title.strip(),)).iloc[0]['id']); _ = sync_existing_entries_to_reminders(); st.success('Formation enregistrée : ses rappels de début et de fin sont programmés.'); st.rerun()
         trainings=read_df('SELECT * FROM career_training ORDER BY start_date DESC,id DESC')
         if trainings.empty: st.info('Aucune formation ou certification enregistrée.')
         else:
             st.dataframe(trainings[['title','provider','kind','start_date','end_date','status','url','notes']].rename(columns={'title':'Formation','provider':'Organisme','kind':'Type','start_date':'Début','end_date':'Fin','status':'État','url':'Lien','notes':'Notes'}),use_container_width=True,hide_index=True)
             opts={f"#{r.id} · {r.title}":int(r.id) for r in trainings.itertuples()}; pick=st.selectbox('Formation à supprimer',list(opts),key='career_training_delete_pick')
-            if st.button('Supprimer la formation sélectionnée',key='career_training_delete'): run('DELETE FROM career_training WHERE id=?',(opts[pick],)); st.rerun()
-            export_csv(trainings,'les formations','formations_carriere')
+            if st.button('Supprimer la formation sélectionnée',key='career_training_delete'): _ = run('DELETE FROM career_training WHERE id=?',(opts[pick],)); st.rerun()
+            _ = export_csv(trainings,'les formations','formations_carriere')
     with tabs[2]:
         with st.form('career_opportunity_form'):
             title=st.text_input('Intitulé de l’opportunité *'); organization=st.text_input('Organisation / entreprise'); kind=st.selectbox('Type',['Stage','Emploi','Bourse','Formation','Concours','Bénévolat','Projet','Autre']); location=st.text_input('Lieu / modalité')
@@ -1619,7 +1619,7 @@ elif page=="Compétences & Carrière":
             if not title.strip(): st.error('L’intitulé est obligatoire.')
             elif url.strip() and not re.match(r'^https?://',url.strip()): st.error('Le lien doit commencer par http:// ou https://')
             else:
-                run('INSERT INTO career_opportunities(title,organization,kind,location,deadline,url,status,contact,notes) VALUES(?,?,?,?,?,?,?,?,?)',(title.strip(),organization.strip(),kind,location.strip(),deadline.isoformat(),url.strip(),status,contact.strip(),notes.strip())); sync_existing_entries_to_reminders(); st.success('Opportunité enregistrée : rappel de date limite programmé.'); st.rerun()
+                _ = run('INSERT INTO career_opportunities(title,organization,kind,location,deadline,url,status,contact,notes) VALUES(?,?,?,?,?,?,?,?,?)',(title.strip(),organization.strip(),kind,location.strip(),deadline.isoformat(),url.strip(),status,contact.strip(),notes.strip())); _ = sync_existing_entries_to_reminders(); st.success('Opportunité enregistrée : rappel de date limite programmé.'); st.rerun()
         opportunities=read_df('SELECT * FROM career_opportunities ORDER BY deadline,id DESC')
         if opportunities.empty: st.info('Aucune opportunité enregistrée. Ajoute ici les stages, emplois, bourses ou formations qui t’intéressent.')
         else:
@@ -1632,19 +1632,19 @@ elif page=="Compétences & Carrière":
                     if r.notes: st.write(r.notes)
                     a,b=st.columns([3,1]); newstatus=a.selectbox('Mettre à jour le statut',['À examiner','À préparer','Candidature envoyée','Entretien','Retenue','Refusée','Expirée'],index=['À examiner','À préparer','Candidature envoyée','Entretien','Retenue','Refusée','Expirée'].index(r.status) if r.status in ['À examiner','À préparer','Candidature envoyée','Entretien','Retenue','Refusée','Expirée'] else 0,key=f'opp_status_{r.id}')
                     if b.button('Enregistrer',key=f'opp_save_{r.id}'):
-                        run('UPDATE career_opportunities SET status=? WHERE id=?',(newstatus,int(r.id))); st.rerun()
+                        _ = run('UPDATE career_opportunities SET status=? WHERE id=?',(newstatus,int(r.id))); st.rerun()
                     if st.button('Supprimer',key=f'del_opp_{r.id}'):
-                        run('DELETE FROM career_opportunities WHERE id=?',(int(r.id),)); st.rerun()
-            export_csv(opportunities,'les opportunités','opportunites_carriere')
+                        _ = run('DELETE FROM career_opportunities WHERE id=?',(int(r.id),)); st.rerun()
+            _ = export_csv(opportunities,'les opportunités','opportunites_carriere')
     with tabs[3]:
         skills=read_df('SELECT * FROM career_skills'); trainings=read_df('SELECT * FROM career_training'); opportunities=read_df('SELECT * FROM career_opportunities')
         done_skills=int((skills.status=='Acquise').sum()) if not skills.empty else 0
         in_progress=int((trainings.status=='En cours').sum()) if not trainings.empty else 0
         sent=int(opportunities.status.isin(['Candidature envoyée','Entretien','Retenue']).sum()) if not opportunities.empty else 0
         a,b,c=st.columns(3)
-        with a: card('Compétences acquises',done_skills,f'sur {len(skills)} suivie(s)')
-        with b: card('Formations en cours',in_progress,f'sur {len(trainings)} enregistrée(s)')
-        with c: card('Candidatures actives',sent,'Envoyées, entretien ou retenues')
+        with a: _ = card('Compétences acquises',done_skills,f'sur {len(skills)} suivie(s)')
+        with b: _ = card('Formations en cours',in_progress,f'sur {len(trainings)} enregistrée(s)')
+        with c: _ = card('Candidatures actives',sent,'Envoyées, entretien ou retenues')
         st.markdown('#### Mes prochaines échéances')
         if not opportunities.empty:
             upcoming=opportunities[opportunities.deadline.astype(str)>=date.today().isoformat()].sort_values('deadline').head(8)
@@ -1656,7 +1656,7 @@ elif page=="Compétences & Carrière":
 
 # ---------- Sauvegarde ----------
 elif page=="Centre de productivité XXL":
-    header('CENTRE DE PRODUCTIVITÉ XXL','🧠 Le Central — tout piloter au même endroit','Recherche transversale, capture rapide, projets, mémorisation, concentration, journal quotidien, réunions et organisation de vie. Les autres modules restent inchangés.')
+    _ = header('CENTRE DE PRODUCTIVITÉ XXL','🧠 Le Central — tout piloter au même endroit','Recherche transversale, capture rapide, projets, mémorisation, concentration, journal quotidien, réunions et organisation de vie. Les autres modules restent inchangés.')
     tabs=st.tabs(['🔎 Recherche globale','⚡ Capture rapide','📌 Projets','🧠 Flashcards','⏱️ Concentration','📔 Journal quotidien','🤝 Réunions','🗓️ Organisateur de vie'])
     with tabs[0]:
         query=st.text_input('Rechercher dans les données de l’application',placeholder='Ex. agronomie, examen, stage, budget…',key='central_global_search')
@@ -1678,7 +1678,7 @@ elif page=="Centre de productivité XXL":
         if submitted:
             if not idea.strip(): st.error('Saisis une idée avant de l’enregistrer.')
             else:
-                run('INSERT INTO tasks(title,due_date,priority,status,category,notes) VALUES(?,?,?,?,?,?)',(idea.strip(),due.isoformat() if due else '',priority,'À faire',domain,details.strip()))
+                _ = run('INSERT INTO tasks(title,due_date,priority,status,category,notes) VALUES(?,?,?,?,?,?)',(idea.strip(),due.isoformat() if due else '',priority,'À faire',domain,details.strip()))
                 st.success('Idée enregistrée comme tâche.'); st.rerun()
         quick=read_df('SELECT id,title,due_date,priority,status,category,notes FROM tasks ORDER BY id DESC LIMIT 20')
         if not quick.empty: st.dataframe(quick,use_container_width=True,hide_index=True)
@@ -1687,7 +1687,7 @@ elif page=="Centre de productivité XXL":
             title=st.text_input('Nom du projet *'); domain=st.selectbox('Domaine du projet',['Études','Carrière','Finances','Agronomie','Personnel','Association','Entreprise','Autre']); status=st.selectbox('Statut',['À faire','En cours','En pause','Terminé','Abandonné']); progress=st.slider('Progression',0,100,0); a,b=st.columns(2); start=a.date_input('Début',value=date.today()); due=b.date_input('Échéance',value=date.today()+timedelta(days=30)); notes=st.text_area('Description / prochaines étapes'); save=st.form_submit_button('Enregistrer le projet')
         if save:
             if not title.strip(): st.error('Le nom du projet est obligatoire.')
-            else: run('INSERT INTO productivity_projects(title,domain,status,progress,start_date,due_date,notes) VALUES(?,?,?,?,?,?,?)',(title.strip(),domain,status,progress,start.isoformat(),due.isoformat(),notes.strip())); st.success('Projet enregistré.'); st.rerun()
+            else: _ = run('INSERT INTO productivity_projects(title,domain,status,progress,start_date,due_date,notes) VALUES(?,?,?,?,?,?,?)',(title.strip(),domain,status,progress,start.isoformat(),due.isoformat(),notes.strip())); st.success('Projet enregistré.'); st.rerun()
         projects=read_df('SELECT * FROM productivity_projects ORDER BY due_date,id DESC')
         if not projects.empty:
             for r in projects.itertuples():
@@ -1696,65 +1696,65 @@ elif page=="Centre de productivité XXL":
                     a,b=st.columns(2)
                     with a:
                         newp=st.slider('Mettre à jour la progression',0,100,int(r.progress),key=f'proj_prog_{r.id}')
-                        if st.button('Actualiser',key=f'proj_update_{r.id}'): run('UPDATE productivity_projects SET progress=?,status=? WHERE id=?',(newp,'Terminé' if newp==100 else ('En cours' if newp>0 else 'À faire'),int(r.id))); st.rerun()
+                        if st.button('Actualiser',key=f'proj_update_{r.id}'): _ = run('UPDATE productivity_projects SET progress=?,status=? WHERE id=?',(newp,'Terminé' if newp==100 else ('En cours' if newp>0 else 'À faire'),int(r.id))); st.rerun()
                     with b:
-                        if st.button('Supprimer le projet',key=f'proj_del_{r.id}'): run('DELETE FROM productivity_projects WHERE id=?',(int(r.id),)); st.rerun()
-            export_csv(projects,'les projets','productivity_projects')
+                        if st.button('Supprimer le projet',key=f'proj_del_{r.id}'): _ = run('DELETE FROM productivity_projects WHERE id=?',(int(r.id),)); st.rerun()
+            _ = export_csv(projects,'les projets','productivity_projects')
         else: st.info('Aucun projet enregistré.')
     with tabs[3]:
         with st.form('central_flashcard_form'):
             title=st.text_input('Titre de la fiche *'); category=st.text_input('Catégorie / matière',value='Études'); front=st.text_area('Recto — question ou notion *'); back=st.text_area('Verso — réponse ou explication *'); save=st.form_submit_button('Créer la flashcard')
         if save:
             if not title.strip() or not front.strip() or not back.strip(): st.error('Complète le titre, le recto et le verso.')
-            else: run('INSERT INTO flashcards(title,front,back,category) VALUES(?,?,?,?)',(title.strip(),front.strip(),back.strip(),category.strip())); st.success('Fiche créée.'); st.rerun()
+            else: _ = run('INSERT INTO flashcards(title,front,back,category) VALUES(?,?,?,?)',(title.strip(),front.strip(),back.strip(),category.strip())); st.success('Fiche créée.'); st.rerun()
         cards=read_df('SELECT * FROM flashcards ORDER BY id DESC')
         if not cards.empty:
             selected=st.selectbox('Choisir une fiche',cards['id'].tolist(),format_func=lambda i: f"#{i} · {cards.loc[cards.id==i,'title'].iloc[0]}")
             row=cards[cards.id==selected].iloc[0]; st.markdown(f'**{row["title"]}** · {row["category"]}'); st.info('RECTO — '+str(row['front']))
             if st.button('Afficher le verso',key='flash_show_back'): st.success('VERSO — '+str(row['back']))
             mastery=st.radio('Auto-évaluation', ['À revoir','En cours d’acquisition','Maîtrisée'],horizontal=True,key=f'flash_mastery_{selected}')
-            if st.button('Enregistrer mon niveau',key='flash_save_mastery'): run('UPDATE flashcards SET mastery=? WHERE id=?',({'À revoir':0,'En cours d’acquisition':1,'Maîtrisée':2}[mastery],int(selected))); st.success('Auto-évaluation enregistrée.'); st.rerun()
-            export_csv(cards,'les flashcards','flashcards')
+            if st.button('Enregistrer mon niveau',key='flash_save_mastery'): _ = run('UPDATE flashcards SET mastery=? WHERE id=?',({'À revoir':0,'En cours d’acquisition':1,'Maîtrisée':2}[mastery],int(selected))); st.success('Auto-évaluation enregistrée.'); st.rerun()
+            _ = export_csv(cards,'les flashcards','flashcards')
         else: st.info('Crée tes premières fiches recto/verso.')
     with tabs[4]:
         with st.form('central_focus_form'):
             activity=st.text_input('Activité de concentration',value='Étude'); duration=st.number_input('Durée (minutes)',min_value=1,max_value=600,value=25); notes=st.text_area('Bilan de la séance'); save=st.form_submit_button('Enregistrer la séance')
-        if save: run('INSERT INTO focus_sessions(session_date,duration_minutes,activity,notes) VALUES(?,?,?,?)',(date.today().isoformat(),int(duration),activity.strip(),notes.strip())); st.success('Séance de concentration enregistrée.'); st.rerun()
+        if save: _ = run('INSERT INTO focus_sessions(session_date,duration_minutes,activity,notes) VALUES(?,?,?,?)',(date.today().isoformat(),int(duration),activity.strip(),notes.strip())); st.success('Séance de concentration enregistrée.'); st.rerun()
         focus=read_df('SELECT * FROM focus_sessions ORDER BY id DESC'); total=int(focus.duration_minutes.sum()) if not focus.empty else 0; a,b=st.columns(2); a.metric('Minutes cumulées',total); b.metric('Heures cumulées',round(total/60,1))
-        if not focus.empty: st.dataframe(focus,use_container_width=True,hide_index=True); export_csv(focus,'les séances de concentration','focus_sessions')
+        if not focus.empty: st.dataframe(focus,use_container_width=True,hide_index=True); _ = export_csv(focus,'les séances de concentration','focus_sessions')
     with tabs[5]:
         today=date.today().isoformat(); existing=read_df('SELECT * FROM daily_journal WHERE entry_date=?',(today,)); default=existing.iloc[0] if not existing.empty else None
         with st.form('central_daily_journal_form'):
             mood=st.selectbox('Humeur',['Très bonne','Bonne','Neutre','Difficile','Très difficile'],index=['Très bonne','Bonne','Neutre','Difficile','Très difficile'].index(default['mood']) if default is not None and default['mood'] in ['Très bonne','Bonne','Neutre','Difficile','Très difficile'] else 2); energy=st.slider('Énergie',1,5,int(default['energy']) if default is not None else 3); successes=st.text_area('Réussites du jour',value=str(default['successes']) if default is not None else ''); improvements=st.text_area('À améliorer',value=str(default['improvements']) if default is not None else ''); priorities=st.text_area('Priorités pour demain',value=str(default['tomorrow_priorities']) if default is not None else ''); save=st.form_submit_button('Enregistrer le journal du jour')
-        if save: run('INSERT INTO daily_journal(entry_date,mood,energy,successes,improvements,tomorrow_priorities) VALUES(?,?,?,?,?,?) ON CONFLICT(entry_date) DO UPDATE SET mood=excluded.mood,energy=excluded.energy,successes=excluded.successes,improvements=excluded.improvements,tomorrow_priorities=excluded.tomorrow_priorities',(today,mood,int(energy),successes.strip(),improvements.strip(),priorities.strip())); st.success('Journal quotidien sauvegardé.'); st.rerun()
+        if save: _ = run('INSERT INTO daily_journal(entry_date,mood,energy,successes,improvements,tomorrow_priorities) VALUES(?,?,?,?,?,?) ON CONFLICT(entry_date) DO UPDATE SET mood=excluded.mood,energy=excluded.energy,successes=excluded.successes,improvements=excluded.improvements,tomorrow_priorities=excluded.tomorrow_priorities',(today,mood,int(energy),successes.strip(),improvements.strip(),priorities.strip())); st.success('Journal quotidien sauvegardé.'); st.rerun()
         journals=read_df('SELECT * FROM daily_journal ORDER BY entry_date DESC');
-        if not journals.empty: st.dataframe(journals,use_container_width=True,hide_index=True); export_csv(journals,'le journal quotidien','daily_journal')
+        if not journals.empty: st.dataframe(journals,use_container_width=True,hide_index=True); _ = export_csv(journals,'le journal quotidien','daily_journal')
     with tabs[6]:
         with st.form('central_meeting_form'):
             title=st.text_input('Objet de la réunion / rencontre *'); meeting_date=st.date_input('Date',value=date.today()); participants=st.text_input('Participants'); summary=st.text_area('Compte rendu'); decisions=st.text_area('Décisions prises'); actions=st.text_area('Actions à mener'); status=st.selectbox('Suivi',['À suivre','En cours','Terminé']); save=st.form_submit_button('Enregistrer le compte rendu')
         if save:
             if not title.strip(): st.error('Indique l’objet de la rencontre.')
-            else: run('INSERT INTO meeting_minutes(title,meeting_date,participants,summary,decisions,actions,status) VALUES(?,?,?,?,?,?,?)',(title.strip(),meeting_date.isoformat(),participants.strip(),summary.strip(),decisions.strip(),actions.strip(),status)); st.success('Compte rendu enregistré.'); st.rerun()
+            else: _ = run('INSERT INTO meeting_minutes(title,meeting_date,participants,summary,decisions,actions,status) VALUES(?,?,?,?,?,?,?)',(title.strip(),meeting_date.isoformat(),participants.strip(),summary.strip(),decisions.strip(),actions.strip(),status)); st.success('Compte rendu enregistré.'); st.rerun()
         meetings=read_df('SELECT * FROM meeting_minutes ORDER BY meeting_date DESC,id DESC')
-        if not meetings.empty: st.dataframe(meetings,use_container_width=True,hide_index=True); export_csv(meetings,'les comptes rendus','meeting_minutes')
+        if not meetings.empty: st.dataframe(meetings,use_container_width=True,hide_index=True); _ = export_csv(meetings,'les comptes rendus','meeting_minutes')
     with tabs[7]:
         with st.form('central_life_form'):
             title=st.text_input('Rendez-vous, démarche ou course *'); kind=st.selectbox('Type',['Rendez-vous','Démarche administrative','Courses','Échéance','Autre']); a,b=st.columns(2); event_date=a.date_input('Date',value=date.today()); event_time=b.time_input('Heure',value=time(9,0)); priority=st.selectbox('Priorité',['Basse','Normale','Haute','Urgente']); status=st.selectbox('État',['À faire','En cours','Terminé','Annulé']); notes=st.text_area('Notes'); save=st.form_submit_button('Ajouter à l’organisateur')
         if save:
             if not title.strip(): st.error('Le titre est obligatoire.')
-            else: run('INSERT INTO life_organizer(title,kind,event_date,event_time,priority,status,notes) VALUES(?,?,?,?,?,?,?)',(title.strip(),kind,event_date.isoformat(),event_time.strftime('%H:%M'),priority,status,notes.strip())); st.success('Élément ajouté à l’organisateur.'); st.rerun()
+            else: _ = run('INSERT INTO life_organizer(title,kind,event_date,event_time,priority,status,notes) VALUES(?,?,?,?,?,?,?)',(title.strip(),kind,event_date.isoformat(),event_time.strftime('%H:%M'),priority,status,notes.strip())); st.success('Élément ajouté à l’organisateur.'); st.rerun()
         organizer=read_df('SELECT * FROM life_organizer ORDER BY event_date,event_time,id DESC')
-        if not organizer.empty: st.dataframe(organizer,use_container_width=True,hide_index=True); export_csv(organizer,'les éléments de l’organisateur','life_organizer')
+        if not organizer.empty: st.dataframe(organizer,use_container_width=True,hide_index=True); _ = export_csv(organizer,'les éléments de l’organisateur','life_organizer')
         else: st.info('Aucun rendez-vous ou démarche enregistré.')
 
 elif page=="Paramètres & sauvegarde":
-    header('PARAMÈTRES & DONNÉES','Paramètres & sauvegarde','Les données sont enregistrées dans Supabase PostgreSQL ; les tables sont créées automatiquement sans supprimer les tables déjà présentes.')
+    _ = header('PARAMÈTRES & DONNÉES','Paramètres & sauvegarde','Les données sont enregistrées dans Supabase PostgreSQL ; les tables sont créées automatiquement sans supprimer les tables déjà présentes.')
     st.success(f'Base active : Supabase PostgreSQL · { _SUPABASE_DB_HOST } · base { _SUPABASE_DB_NAME }. Les tables de l’application sont créées automatiquement au démarrage ; les autres tables Supabase sont conservées.')
     tables={'Matières':'subjects','Emploi du temps':'events','Tâches':'tasks','Ressources archivées (ancien espace)':'documents','Journal d’étude':'study_logs','Objectifs':'goals','Habitudes':'habits','Historique habitudes':'habit_logs','Budget':'budgets','Notes personnelles':'life_notes','Contacts':'contacts','Compétences':'career_skills','Formations':'career_training','Opportunités professionnelles':'career_opportunities','Rappels e-mail':'reminders','Projets du Central':'productivity_projects','Flashcards':'flashcards','Séances de concentration':'focus_sessions','Journal quotidien':'daily_journal','Comptes rendus':'meeting_minutes','Organisateur de vie':'life_organizer'}
     for label,table in tables.items():
         df=read_df(f'SELECT * FROM {table}')
         with st.expander(f'{label} — {len(df)} enregistrement(s)'):
-            export_csv(df,label,table)
+            _ = export_csv(df,label,table)
     st.info('Pour une sauvegarde complète de Supabase, utilise le tableau de bord Supabase ou exporte les tables depuis les options CSV ci-dessus. Les exports CSV restent disponibles pour chaque module.')
     st.markdown('### Dépendances facultatives')
     st.code('streamlit\npandas\npsycopg2-binary>=2.9.9\nSpeechRecognition>=3.10.0\nstreamlit-mic-recorder>=0.0.8\nopenpyxl\nPyMuPDF\npython-docx',language='text')
