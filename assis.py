@@ -155,7 +155,8 @@ def init_db():
             "content": "TEXT DEFAULT ''",
             "reminder_date": "TEXT DEFAULT ''",
             "reminder_time": "TEXT DEFAULT '08:00'",
-            "created_at": "TEXT DEFAULT CURRENT_TIMESTAMP",
+            # SQLite n'autorise pas DEFAULT CURRENT_TIMESTAMP dans certains ALTER TABLE.
+            "created_at": "TEXT DEFAULT ''",
         }
         for _column, _definition in _life_notes_migrations.items():
             if _column not in _life_notes_columns:
@@ -651,8 +652,31 @@ def sync_existing_entries_to_reminders():
         remind = datetime.combine(today, time(8,0))
         if remind < datetime.now(): remind = datetime.now() + timedelta(minutes=1)
         _ = upsert_auto_reminder('habit', r.id, f"Habitude du jour : {r.title}", f"Fréquence : {r.frequency}. {r.notes or ''}", remind.strftime('%Y-%m-%d %H:%M:%S'), 'Quotidien')
-    # Notes classées « Rappel » : une date et une heure sont demandées dans la rubrique Notes personnelles.
-    for r in read_df("SELECT id,title,content,reminder_date,reminder_time FROM life_notes WHERE category='Rappel' AND reminder_date <> ''").itertuples():
+    # Notes classées « Rappel » : vérifier à nouveau le schéma juste avant la lecture.
+    # Cela protège aussi les bases anciennes ou restaurées après l'initialisation Streamlit.
+    try:
+        with connect() as c:
+            _ln_cols = {row["name"] for row in c.execute("PRAGMA table_info(life_notes)").fetchall()}
+            _ln_migrations = {
+                "title": "TEXT DEFAULT 'Note importée'",
+                "category": "TEXT DEFAULT 'Personnel'",
+                "content": "TEXT DEFAULT ''",
+                "reminder_date": "TEXT DEFAULT ''",
+                "reminder_time": "TEXT DEFAULT '08:00'",
+            }
+            for _ln_col, _ln_def in _ln_migrations.items():
+                if _ln_col not in _ln_cols:
+                    c.execute(f'ALTER TABLE life_notes ADD COLUMN "{_ln_col}" {_ln_def}')
+                    _ln_cols.add(_ln_col)
+        _life_notes_reminders = read_df(
+            "SELECT id,title,content,reminder_date,reminder_time FROM life_notes "
+            "WHERE COALESCE(category,'Personnel')='Rappel' AND COALESCE(reminder_date,'') <> ''"
+        )
+    except sqlite3.OperationalError as _ln_error:
+        # Ne pas faire tomber toute l'application à cause d'une ancienne table de notes.
+        _life_notes_reminders = pd.DataFrame(columns=["id", "title", "content", "reminder_date", "reminder_time"])
+        _NONE_RUNTIME_LOG.append({"table": "life_notes", "column": "rappels", "count": 1, "source": f"SQLite: {_ln_error}"})
+    for r in _life_notes_reminders.itertuples():
         try:
             dt = datetime.strptime(f"{r.reminder_date} {r.reminder_time or '08:00'}", '%Y-%m-%d %H:%M')
             _ = upsert_auto_reminder('note', r.id, f"Note à ne pas oublier : {r.title}", r.content or '', dt.strftime('%Y-%m-%d %H:%M:%S'))
