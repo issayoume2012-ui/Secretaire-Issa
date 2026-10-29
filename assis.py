@@ -533,6 +533,36 @@ def _clean_missing_value(value, fallback=""):
     return value
 
 
+def ensure_reminders_schema():
+    """Répare à la demande le schéma des rappels avant les requêtes du tableau de bord."""
+    with connect() as c:
+        c.execute("CREATE TABLE IF NOT EXISTS reminders (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT DEFAULT 'Rappel importé', details TEXT DEFAULT '', remind_at TEXT DEFAULT '', phone TEXT DEFAULT '', repeat_rule TEXT DEFAULT 'Aucun', enabled INTEGER DEFAULT 1, status TEXT DEFAULT 'En attente', last_sent_at TEXT DEFAULT '', last_error TEXT DEFAULT '', source_type TEXT DEFAULT '', source_id INTEGER, created_at TEXT DEFAULT '')")
+        columns = {row['name'] for row in c.execute('PRAGMA table_info(reminders)').fetchall()}
+        migrations = {
+            'title': "TEXT DEFAULT 'Rappel importé'",
+            'details': "TEXT DEFAULT ''",
+            'remind_at': "TEXT DEFAULT ''",
+            'phone': "TEXT DEFAULT ''",
+            'repeat_rule': "TEXT DEFAULT 'Aucun'",
+            'enabled': 'INTEGER DEFAULT 1',
+            'status': "TEXT DEFAULT 'En attente'",
+            'last_sent_at': "TEXT DEFAULT ''",
+            'last_error': "TEXT DEFAULT ''",
+            'source_type': "TEXT DEFAULT ''",
+            'source_id': 'INTEGER',
+            'created_at': "TEXT DEFAULT ''",
+        }
+        for column, definition in migrations.items():
+            if column not in columns:
+                c.execute(f'ALTER TABLE reminders ADD COLUMN "{column}" {definition}')
+                columns.add(column)
+        # Normalise les valeurs NULL qui peuvent perturber l'affichage.
+        c.execute("UPDATE reminders SET title='Rappel importé' WHERE title IS NULL OR TRIM(title)=''")
+        c.execute("UPDATE reminders SET details='' WHERE details IS NULL")
+        c.execute("UPDATE reminders SET remind_at='' WHERE remind_at IS NULL")
+        c.execute("UPDATE reminders SET enabled=1 WHERE enabled IS NULL")
+        c.execute("UPDATE reminders SET status='En attente' WHERE status IS NULL OR TRIM(status)=''")
+
 def read_df(sql, params=()):
     """Lit les données SQLite et normalise les valeurs manquantes dans toutes les requêtes."""
     with connect() as c:
@@ -865,7 +895,14 @@ if page=="Vue d’ensemble":
     if _sync_now - _sync_last >= 120:
         _ = sync_existing_entries_to_reminders()
         st.session_state["issa_reminder_sync_last"] = _sync_now
-    soon=read_df("SELECT title,details,remind_at,status FROM reminders WHERE enabled=1 AND status='En attente' ORDER BY remind_at LIMIT 6")
+    try:
+        ensure_reminders_schema()
+        soon=read_df("SELECT title,details,remind_at,status FROM reminders WHERE enabled=1 AND status='En attente' ORDER BY remind_at LIMIT 6")
+    except sqlite3.OperationalError as _reminders_dashboard_error:
+        # Ne pas faire tomber tout le tableau de bord si une base déployée est encore incompatible.
+        _NONE_RUNTIME_LOG.append({"where": "dashboard_reminders", "error": str(_reminders_dashboard_error)[:300]})
+        soon = pd.DataFrame(columns=["title", "details", "remind_at", "status"])
+        st.warning("Les rappels ne peuvent pas être chargés pour le moment. Le reste du tableau de bord reste disponible. Vérifie les logs SQLite de l’application.")
     st.subheader('🔔 Ce que tu dois faire bientôt')
     if soon.empty:
         st.info('Aucun rappel en attente. Les rappels apparaîtront automatiquement dès que tu enregistres une tâche, un cours, un objectif, une formation, une opportunité ou une note de type « Rappel ».')
