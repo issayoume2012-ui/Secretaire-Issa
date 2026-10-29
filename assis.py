@@ -69,10 +69,12 @@ def secret_value(name, default=""):
 # Les noms YOUAGRONOME_* sont conservés tels que fournis ; les anciens APP_* restent acceptés.
 _AUTH_USER = secret_value("YOUAGRONOME_OWNER_EMAIL") or secret_value("APP_USERNAME")
 _AUTH_PASS = secret_value("YOUAGRONOME_OWNER_PASS") or secret_value("APP_PASSWORD")
-_SUPABASE_DB_HOST = secret_value("SUPABASE_DB_HOST")
+# Le projet Supabase fourni est prérempli pour éviter les erreurs de référence.
+# Le mot de passe reste dans Streamlit Secrets / variable d’environnement, jamais dans le code.
+_SUPABASE_DB_HOST = secret_value("SUPABASE_DB_HOST", "aws-1-eu-west-1.pooler.supabase.com")
 _SUPABASE_DB_PORT = secret_value("SUPABASE_DB_PORT", "5432")
 _SUPABASE_DB_NAME = secret_value("SUPABASE_DB_NAME", "postgres")
-_SUPABASE_DB_USER = secret_value("SUPABASE_DB_USER")
+_SUPABASE_DB_USER = secret_value("SUPABASE_DB_USER", "postgres.lqqctacgbknzytikeuya")
 _SUPABASE_DB_PASSWORD = secret_value("SUPABASE_DB_PASSWORD")
 _USE_SUPABASE = all((_SUPABASE_DB_HOST, _SUPABASE_DB_PORT, _SUPABASE_DB_NAME, _SUPABASE_DB_USER, _SUPABASE_DB_PASSWORD))
 if not _AUTH_USER or not _AUTH_PASS:
@@ -80,7 +82,8 @@ if not _AUTH_USER or not _AUTH_PASS:
     st.code('YOUAGRONOME_OWNER_EMAIL = "identifiant_prive"\nYOUAGRONOME_OWNER_PASS = "mot_de_passe_long_et_unique"', language="toml")
     st.stop()
 if not _USE_SUPABASE:
-    st.error("La connexion Supabase n'est pas configurée. Ajoute les cinq secrets SUPABASE_DB_HOST, SUPABASE_DB_PORT, SUPABASE_DB_NAME, SUPABASE_DB_USER et SUPABASE_DB_PASSWORD. Pour éviter de stocker les données uniquement localement, cette version exige Supabase PostgreSQL.")
+    st.error("Le projet Supabase est préconfiguré (hôte, port, base et utilisateur), mais le mot de passe PostgreSQL manque. Dans Streamlit Cloud → Manage app → Settings → Secrets, ajoute uniquement SUPABASE_DB_PASSWORD avec le mot de passe PostgreSQL de ce projet, puis redémarre l’application. Le mot de passe n’est volontairement pas écrit en clair dans le fichier Python.")
+    st.code('SUPABASE_DB_PASSWORD = "COLLE_ICI_LE_MOT_DE_PASSE_POSTGRESQL"', language="toml")
     st.stop()
 try:
     import psycopg2
