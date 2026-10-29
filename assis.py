@@ -129,6 +129,12 @@ def init_db():
         );
         CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY, value TEXT DEFAULT '');
         CREATE TABLE IF NOT EXISTS assistant_docs(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,content TEXT NOT NULL,uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS productivity_projects(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,domain TEXT DEFAULT 'Personnel',status TEXT DEFAULT 'À faire',progress INTEGER DEFAULT 0,start_date TEXT DEFAULT '',due_date TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS flashcards(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,front TEXT NOT NULL,back TEXT NOT NULL,category TEXT DEFAULT 'Études',mastery INTEGER DEFAULT 0,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS focus_sessions(id INTEGER PRIMARY KEY AUTOINCREMENT,session_date TEXT NOT NULL,duration_minutes INTEGER NOT NULL,activity TEXT DEFAULT 'Étude',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS daily_journal(id INTEGER PRIMARY KEY AUTOINCREMENT,entry_date TEXT NOT NULL UNIQUE,mood TEXT DEFAULT '',energy INTEGER DEFAULT 3,successes TEXT DEFAULT '',improvements TEXT DEFAULT '',tomorrow_priorities TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS meeting_minutes(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,meeting_date TEXT DEFAULT '',participants TEXT DEFAULT '',summary TEXT DEFAULT '',decisions TEXT DEFAULT '',actions TEXT DEFAULT '',status TEXT DEFAULT 'À suivre',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS life_organizer(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,kind TEXT DEFAULT 'Rendez-vous',event_date TEXT DEFAULT '',event_time TEXT DEFAULT '',priority TEXT DEFAULT 'Normale',status TEXT DEFAULT 'À faire',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         """)
 init_db()
 with connect() as _conn:
@@ -514,11 +520,11 @@ def subject_choices():
     for r in df.itertuples(): opts[f"{r.title} · {r.semester} · {r.ue}"]=int(r.id)
     return df,opts
 
-PAGES=["Vue d’ensemble","Maquettes & matières","Emploi du temps","Programmes de révision","Suivi & progression","Assistant de vie","Rappels automatiques","Assistant e-mail & documents","Compétences & Carrière","Paramètres & sauvegarde"]
+PAGES=["Vue d’ensemble","Maquettes & matières","Emploi du temps","Programmes de révision","Suivi & progression","Assistant de vie","Rappels automatiques","Assistant e-mail & documents","Compétences & Carrière","Centre de productivité XXL","Paramètres & sauvegarde"]
 PAGE_SHORT={
     "Vue d’ensemble":"🏠 Accueil XXL", "Maquettes & matières":"🎓 Académie", "Emploi du temps":"🗓️ Planning",
     "Programmes de révision":"🎯 Révisions", "Suivi & progression":"📈 Progression",
-    "Assistant de vie":"👤 Vie personnelle", "Rappels automatiques":"📧 Rappels e-mail", "Assistant e-mail & documents":"✉️ Assistant complet", "Compétences & Carrière":"🚀 Carrière",
+    "Assistant de vie":"👤 Vie personnelle", "Rappels automatiques":"📧 Rappels e-mail", "Assistant e-mail & documents":"✉️ Assistant complet", "Compétences & Carrière":"🚀 Carrière", "Centre de productivité XXL":"🧠 Central XXL",
     "Paramètres & sauvegarde":"⚙️ Paramètres"
 }
 PAGE_ROLE={
@@ -531,6 +537,7 @@ PAGE_ROLE={
     "Rappels automatiques":"Secrétaire chargé des rappels et échéances par e-mail",
     "Assistant e-mail & documents":"Assistant de rédaction, messagerie, voix et consultation documentaire",
     "Compétences & Carrière":"Secrétaire chargé du développement des compétences et de l’insertion professionnelle",
+    "Centre de productivité XXL":"Centre centralisé : recherche globale, capture rapide, projets, flashcards, concentration, journal et organisation quotidienne",
     "Paramètres & sauvegarde":"Secrétaire chargé des paramètres, des exports et de la sauvegarde des données"
 }
 st.markdown('''<div class="issa-brand"><span class="issa-badge">Organisation · Pédagogie · Assistance</span><h1>🗂️ Secrétaire Issa</h1><p>Votre espace de secrétariat intelligent : chaque espace correspond à un secrétaire chargé d’une mission précise.</p></div>''',unsafe_allow_html=True)
@@ -1412,10 +1419,102 @@ elif page=="Compétences & Carrière":
         st.markdown('- Choisis 3 compétences prioritaires à développer ce mois-ci.\n- Ajoute les formations réellement commencées ou envisagées.\n- Enregistre les liens officiels des stages et opportunités pour retrouver facilement les annonces.')
 
 # ---------- Sauvegarde ----------
+elif page=="Centre de productivité XXL":
+    header('CENTRE DE PRODUCTIVITÉ XXL','🧠 Le Central — tout piloter au même endroit','Recherche transversale, capture rapide, projets, mémorisation, concentration, journal quotidien, réunions et organisation de vie. Les autres modules restent inchangés.')
+    tabs=st.tabs(['🔎 Recherche globale','⚡ Capture rapide','📌 Projets','🧠 Flashcards','⏱️ Concentration','📔 Journal quotidien','🤝 Réunions','🗓️ Organisateur de vie'])
+    with tabs[0]:
+        query=st.text_input('Rechercher dans les données de l’application',placeholder='Ex. agronomie, examen, stage, budget…',key='central_global_search')
+        if query.strip():
+            q=f'%{query.strip()}%'; found=0
+            searches=[('Matières','SELECT title AS Titre, code AS Détail FROM subjects WHERE title LIKE ? OR code LIKE ? OR ue LIKE ?', (q,q,q)),('Tâches','SELECT title AS Titre, notes AS Détail FROM tasks WHERE title LIKE ? OR notes LIKE ? OR category LIKE ?', (q,q,q)),('Événements','SELECT title AS Titre, notes AS Détail FROM events WHERE title LIKE ? OR notes LIKE ? OR kind LIKE ?', (q,q,q)),('Notes personnelles','SELECT title AS Titre, content AS Détail FROM life_notes WHERE title LIKE ? OR content LIKE ? OR category LIKE ?', (q,q,q)),('Compétences','SELECT name AS Titre, notes AS Détail FROM career_skills WHERE name LIKE ? OR notes LIKE ? OR category LIKE ?', (q,q,q)),('Formations','SELECT title AS Titre, notes AS Détail FROM career_training WHERE title LIKE ? OR notes LIKE ? OR provider LIKE ?', (q,q,q)),('Opportunités','SELECT title AS Titre, notes AS Détail FROM career_opportunities WHERE title LIKE ? OR notes LIKE ? OR organization LIKE ?', (q,q,q)),('Projets','SELECT title AS Titre, notes AS Détail FROM productivity_projects WHERE title LIKE ? OR notes LIKE ? OR domain LIKE ?', (q,q,q)),('Flashcards','SELECT title AS Titre, front AS Détail FROM flashcards WHERE title LIKE ? OR front LIKE ? OR back LIKE ?', (q,q,q)),('Réunions','SELECT title AS Titre, summary AS Détail FROM meeting_minutes WHERE title LIKE ? OR summary LIKE ? OR decisions LIKE ?', (q,q,q)),('Organisateur','SELECT title AS Titre, notes AS Détail FROM life_organizer WHERE title LIKE ? OR notes LIKE ? OR kind LIKE ?', (q,q,q))]
+            for label,sql,args in searches:
+                try:
+                    df=read_df(sql,args)
+                    if not df.empty:
+                        found+=len(df); st.markdown(f'**{label} — {len(df)} résultat(s)**'); st.dataframe(df,use_container_width=True,hide_index=True)
+                except Exception: pass
+            if not found: st.info('Aucun résultat trouvé dans les modules indexés. Essaie un autre mot-clé.')
+    with tabs[1]:
+        st.caption('Capture une idée en quelques secondes et transforme-la directement en tâche.')
+        with st.form('central_capture_form'):
+            idea=st.text_input('Idée / action à capturer *'); domain=st.selectbox('Domaine',['Études','Carrière','Finances','Administratif','Personnel','Projet','Autre']); priority=st.selectbox('Priorité',['Basse','Normale','Haute','Urgente']); due=st.date_input('Échéance (facultative)',value=None); details=st.text_area('Détails')
+            submitted=st.form_submit_button('⚡ Capturer et créer la tâche',type='primary')
+        if submitted:
+            if not idea.strip(): st.error('Saisis une idée avant de l’enregistrer.')
+            else:
+                run('INSERT INTO tasks(title,due_date,priority,status,category,notes) VALUES(?,?,?,?,?,?)',(idea.strip(),due.isoformat() if due else '',priority,'À faire',domain,details.strip()))
+                st.success('Idée enregistrée comme tâche.'); st.rerun()
+        quick=read_df('SELECT id,title,due_date,priority,status,category,notes FROM tasks ORDER BY id DESC LIMIT 20')
+        if not quick.empty: st.dataframe(quick,use_container_width=True,hide_index=True)
+    with tabs[2]:
+        with st.form('central_project_form'):
+            title=st.text_input('Nom du projet *'); domain=st.selectbox('Domaine du projet',['Études','Carrière','Finances','Agronomie','Personnel','Association','Entreprise','Autre']); status=st.selectbox('Statut',['À faire','En cours','En pause','Terminé','Abandonné']); progress=st.slider('Progression',0,100,0); a,b=st.columns(2); start=a.date_input('Début',value=date.today()); due=b.date_input('Échéance',value=date.today()+timedelta(days=30)); notes=st.text_area('Description / prochaines étapes'); save=st.form_submit_button('Enregistrer le projet')
+        if save:
+            if not title.strip(): st.error('Le nom du projet est obligatoire.')
+            else: run('INSERT INTO productivity_projects(title,domain,status,progress,start_date,due_date,notes) VALUES(?,?,?,?,?,?,?)',(title.strip(),domain,status,progress,start.isoformat(),due.isoformat(),notes.strip())); st.success('Projet enregistré.'); st.rerun()
+        projects=read_df('SELECT * FROM productivity_projects ORDER BY due_date,id DESC')
+        if not projects.empty:
+            for r in projects.itertuples():
+                with st.container(border=True):
+                    st.markdown(f'**{r.title}** · {r.domain} · {r.status}'); st.progress(max(0,min(100,int(r.progress)))/100,text=f'{r.progress}% terminé'); st.caption(f'Début : {r.start_date or "—"} · Échéance : {r.due_date or "—"}'); st.write(r.notes or '')
+                    a,b=st.columns(2)
+                    with a:
+                        newp=st.slider('Mettre à jour la progression',0,100,int(r.progress),key=f'proj_prog_{r.id}')
+                        if st.button('Actualiser',key=f'proj_update_{r.id}'): run('UPDATE productivity_projects SET progress=?,status=? WHERE id=?',(newp,'Terminé' if newp==100 else ('En cours' if newp>0 else 'À faire'),int(r.id))); st.rerun()
+                    with b:
+                        if st.button('Supprimer le projet',key=f'proj_del_{r.id}'): run('DELETE FROM productivity_projects WHERE id=?',(int(r.id),)); st.rerun()
+            export_csv(projects,'les projets','productivity_projects')
+        else: st.info('Aucun projet enregistré.')
+    with tabs[3]:
+        with st.form('central_flashcard_form'):
+            title=st.text_input('Titre de la fiche *'); category=st.text_input('Catégorie / matière',value='Études'); front=st.text_area('Recto — question ou notion *'); back=st.text_area('Verso — réponse ou explication *'); save=st.form_submit_button('Créer la flashcard')
+        if save:
+            if not title.strip() or not front.strip() or not back.strip(): st.error('Complète le titre, le recto et le verso.')
+            else: run('INSERT INTO flashcards(title,front,back,category) VALUES(?,?,?,?)',(title.strip(),front.strip(),back.strip(),category.strip())); st.success('Fiche créée.'); st.rerun()
+        cards=read_df('SELECT * FROM flashcards ORDER BY id DESC')
+        if not cards.empty:
+            selected=st.selectbox('Choisir une fiche',cards['id'].tolist(),format_func=lambda i: f"#{i} · {cards.loc[cards.id==i,'title'].iloc[0]}")
+            row=cards[cards.id==selected].iloc[0]; st.markdown(f'**{row["title"]}** · {row["category"]}'); st.info('RECTO — '+str(row['front']))
+            if st.button('Afficher le verso',key='flash_show_back'): st.success('VERSO — '+str(row['back']))
+            mastery=st.radio('Auto-évaluation', ['À revoir','En cours d’acquisition','Maîtrisée'],horizontal=True,key=f'flash_mastery_{selected}')
+            if st.button('Enregistrer mon niveau',key='flash_save_mastery'): run('UPDATE flashcards SET mastery=? WHERE id=?',({'À revoir':0,'En cours d’acquisition':1,'Maîtrisée':2}[mastery],int(selected))); st.success('Auto-évaluation enregistrée.'); st.rerun()
+            export_csv(cards,'les flashcards','flashcards')
+        else: st.info('Crée tes premières fiches recto/verso.')
+    with tabs[4]:
+        with st.form('central_focus_form'):
+            activity=st.text_input('Activité de concentration',value='Étude'); duration=st.number_input('Durée (minutes)',min_value=1,max_value=600,value=25); notes=st.text_area('Bilan de la séance'); save=st.form_submit_button('Enregistrer la séance')
+        if save: run('INSERT INTO focus_sessions(session_date,duration_minutes,activity,notes) VALUES(?,?,?,?)',(date.today().isoformat(),int(duration),activity.strip(),notes.strip())); st.success('Séance de concentration enregistrée.'); st.rerun()
+        focus=read_df('SELECT * FROM focus_sessions ORDER BY id DESC'); total=int(focus.duration_minutes.sum()) if not focus.empty else 0; a,b=st.columns(2); a.metric('Minutes cumulées',total); b.metric('Heures cumulées',round(total/60,1))
+        if not focus.empty: st.dataframe(focus,use_container_width=True,hide_index=True); export_csv(focus,'les séances de concentration','focus_sessions')
+    with tabs[5]:
+        today=date.today().isoformat(); existing=read_df('SELECT * FROM daily_journal WHERE entry_date=?',(today,)); default=existing.iloc[0] if not existing.empty else None
+        with st.form('central_daily_journal_form'):
+            mood=st.selectbox('Humeur',['Très bonne','Bonne','Neutre','Difficile','Très difficile'],index=['Très bonne','Bonne','Neutre','Difficile','Très difficile'].index(default['mood']) if default is not None and default['mood'] in ['Très bonne','Bonne','Neutre','Difficile','Très difficile'] else 2); energy=st.slider('Énergie',1,5,int(default['energy']) if default is not None else 3); successes=st.text_area('Réussites du jour',value=str(default['successes']) if default is not None else ''); improvements=st.text_area('À améliorer',value=str(default['improvements']) if default is not None else ''); priorities=st.text_area('Priorités pour demain',value=str(default['tomorrow_priorities']) if default is not None else ''); save=st.form_submit_button('Enregistrer le journal du jour')
+        if save: run('INSERT INTO daily_journal(entry_date,mood,energy,successes,improvements,tomorrow_priorities) VALUES(?,?,?,?,?,?) ON CONFLICT(entry_date) DO UPDATE SET mood=excluded.mood,energy=excluded.energy,successes=excluded.successes,improvements=excluded.improvements,tomorrow_priorities=excluded.tomorrow_priorities',(today,mood,int(energy),successes.strip(),improvements.strip(),priorities.strip())); st.success('Journal quotidien sauvegardé.'); st.rerun()
+        journals=read_df('SELECT * FROM daily_journal ORDER BY entry_date DESC');
+        if not journals.empty: st.dataframe(journals,use_container_width=True,hide_index=True); export_csv(journals,'le journal quotidien','daily_journal')
+    with tabs[6]:
+        with st.form('central_meeting_form'):
+            title=st.text_input('Objet de la réunion / rencontre *'); meeting_date=st.date_input('Date',value=date.today()); participants=st.text_input('Participants'); summary=st.text_area('Compte rendu'); decisions=st.text_area('Décisions prises'); actions=st.text_area('Actions à mener'); status=st.selectbox('Suivi',['À suivre','En cours','Terminé']); save=st.form_submit_button('Enregistrer le compte rendu')
+        if save:
+            if not title.strip(): st.error('Indique l’objet de la rencontre.')
+            else: run('INSERT INTO meeting_minutes(title,meeting_date,participants,summary,decisions,actions,status) VALUES(?,?,?,?,?,?,?)',(title.strip(),meeting_date.isoformat(),participants.strip(),summary.strip(),decisions.strip(),actions.strip(),status)); st.success('Compte rendu enregistré.'); st.rerun()
+        meetings=read_df('SELECT * FROM meeting_minutes ORDER BY meeting_date DESC,id DESC')
+        if not meetings.empty: st.dataframe(meetings,use_container_width=True,hide_index=True); export_csv(meetings,'les comptes rendus','meeting_minutes')
+    with tabs[7]:
+        with st.form('central_life_form'):
+            title=st.text_input('Rendez-vous, démarche ou course *'); kind=st.selectbox('Type',['Rendez-vous','Démarche administrative','Courses','Échéance','Autre']); a,b=st.columns(2); event_date=a.date_input('Date',value=date.today()); event_time=b.time_input('Heure',value=time(9,0)); priority=st.selectbox('Priorité',['Basse','Normale','Haute','Urgente']); status=st.selectbox('État',['À faire','En cours','Terminé','Annulé']); notes=st.text_area('Notes'); save=st.form_submit_button('Ajouter à l’organisateur')
+        if save:
+            if not title.strip(): st.error('Le titre est obligatoire.')
+            else: run('INSERT INTO life_organizer(title,kind,event_date,event_time,priority,status,notes) VALUES(?,?,?,?,?,?,?)',(title.strip(),kind,event_date.isoformat(),event_time.strftime('%H:%M'),priority,status,notes.strip())); st.success('Élément ajouté à l’organisateur.'); st.rerun()
+        organizer=read_df('SELECT * FROM life_organizer ORDER BY event_date,event_time,id DESC')
+        if not organizer.empty: st.dataframe(organizer,use_container_width=True,hide_index=True); export_csv(organizer,'les éléments de l’organisateur','life_organizer')
+        else: st.info('Aucun rendez-vous ou démarche enregistré.')
+
 elif page=="Paramètres & sauvegarde":
     header('PARAMÈTRES & DONNÉES','Paramètres & sauvegarde','Télécharge tes données pour garder une copie. Fais régulièrement une sauvegarde du fichier SQLite.')
     st.warning(f'Base active : {DB_PATH}. Cette application utilise une base distincte ; ne la remplace pas par la base d’une autre application.')
-    tables={'Matières':'subjects','Emploi du temps':'events','Tâches':'tasks','Ressources archivées (ancien espace)':'documents','Journal d’étude':'study_logs','Objectifs':'goals','Habitudes':'habits','Historique habitudes':'habit_logs','Budget':'budgets','Notes personnelles':'life_notes','Contacts':'contacts','Compétences':'career_skills','Formations':'career_training','Opportunités professionnelles':'career_opportunities','Rappels e-mail':'reminders'}
+    tables={'Matières':'subjects','Emploi du temps':'events','Tâches':'tasks','Ressources archivées (ancien espace)':'documents','Journal d’étude':'study_logs','Objectifs':'goals','Habitudes':'habits','Historique habitudes':'habit_logs','Budget':'budgets','Notes personnelles':'life_notes','Contacts':'contacts','Compétences':'career_skills','Formations':'career_training','Opportunités professionnelles':'career_opportunities','Rappels e-mail':'reminders','Projets du Central':'productivity_projects','Flashcards':'flashcards','Séances de concentration':'focus_sessions','Journal quotidien':'daily_journal','Comptes rendus':'meeting_minutes','Organisateur de vie':'life_organizer'}
     for label,table in tables.items():
         df=read_df(f'SELECT * FROM {table}')
         with st.expander(f'{label} — {len(df)} enregistrement(s)'):
@@ -1432,7 +1531,7 @@ st.markdown('<div class="issa-footer"><strong>🗂️ Secrétaire Issa</strong><
 role_icons={
     "Vue d’ensemble":"🏠", "Maquettes & matières":"🎓", "Emploi du temps":"🗓️",
     "Programmes de révision":"🎯", "Suivi & progression":"📈", "Assistant de vie":"👤", "Rappels automatiques":"🔔", "Assistant e-mail & documents":"✉️",
-    "Compétences & Carrière":"🚀", "Paramètres & sauvegarde":"⚙️"
+    "Compétences & Carrière":"🚀", "Centre de productivité XXL":"🧠", "Paramètres & sauvegarde":"⚙️"
 }
 roles_html=''.join(f'<span class="issa-role-pill">{role_icons[p]} {PAGE_ROLE[p]}</span>' for p in PAGES)
 st.markdown(f'<div class="issa-roles"><div class="issa-roles-title">Les rôles de vos secrétaires spécialisés</div><div class="issa-role-pills">{roles_html}</div></div>',unsafe_allow_html=True)
