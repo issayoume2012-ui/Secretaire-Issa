@@ -58,7 +58,7 @@ div[role="radiogroup"] label:has(input:checked){{background:#eaf2ff;border-color
 @media(max-width:700px){{.issa-brand{{padding:20px;border-radius:18px}}.cc-hero{{padding:18px}}.block-container{{padding-left:1rem;padding-right:1rem}}div[role="radiogroup"] label{{padding:6px 8px!important;font-size:.8rem}}}}
 </style>""", unsafe_allow_html=True)
 
-# ---------- Secrets : connexion Supabase PostgreSQL et authentification ----------
+# ---------- Secrets : authentification uniquement (base SQLite locale) ----------
 def secret_value(name, default=""):
     try:
         value = st.secrets.get(name, default)
@@ -66,30 +66,11 @@ def secret_value(name, default=""):
         value = os.getenv(name, default)
     return str(value or default).strip()
 
-# Les noms YOUAGRONOME_* sont conservés tels que fournis ; les anciens APP_* restent acceptés.
 _AUTH_USER = secret_value("YOUAGRONOME_OWNER_EMAIL") or secret_value("APP_USERNAME")
 _AUTH_PASS = secret_value("YOUAGRONOME_OWNER_PASS") or secret_value("APP_PASSWORD")
-# Le projet Supabase fourni est prérempli pour éviter les erreurs de référence.
-# Le mot de passe reste dans Streamlit Secrets / variable d’environnement, jamais dans le code.
-_SUPABASE_DB_HOST = secret_value("SUPABASE_DB_HOST", "aws-0-eu-west-1.pooler.supabase.com")
-_SUPABASE_DB_PORT = secret_value("SUPABASE_DB_PORT", "5432")
-_SUPABASE_DB_NAME = secret_value("SUPABASE_DB_NAME", "postgres")
-_SUPABASE_DB_USER = secret_value("SUPABASE_DB_USER", "postgres.sruhwwoaasctnzeckrct")
-_SUPABASE_DB_PASSWORD = secret_value("SUPABASE_DB_PASSWORD")
-_USE_SUPABASE = all((_SUPABASE_DB_HOST, _SUPABASE_DB_PORT, _SUPABASE_DB_NAME, _SUPABASE_DB_USER, _SUPABASE_DB_PASSWORD))
 if not _AUTH_USER or not _AUTH_PASS:
-    st.error("🔐 Accès non configuré. Ajoute YOUAGRONOME_OWNER_EMAIL et YOUAGRONOME_OWNER_PASS (ou APP_USERNAME et APP_PASSWORD) dans Streamlit → Settings → Secrets.")
+    st.error("🔐 Accès non configuré. Ajoute YOUAGRONOME_OWNER_EMAIL et YOUAGRONOME_OWNER_PASS (ou APP_USERNAME et APP_PASSWORD) dans les Secrets de l’application.")
     st.code('YOUAGRONOME_OWNER_EMAIL = "identifiant_prive"\nYOUAGRONOME_OWNER_PASS = "mot_de_passe_long_et_unique"', language="toml")
-    st.stop()
-if not _USE_SUPABASE:
-    st.error("Le projet Supabase est préconfiguré (hôte, port, base et utilisateur), mais le mot de passe PostgreSQL manque. Dans Streamlit Cloud → Manage app → Settings → Secrets, ajoute uniquement SUPABASE_DB_PASSWORD avec le mot de passe PostgreSQL de ce projet, puis redémarre l’application. Le mot de passe n’est volontairement pas écrit en clair dans le fichier Python.")
-    st.code('SUPABASE_DB_PASSWORD = "COLLE_ICI_LE_MOT_DE_PASSE_POSTGRESQL"', language="toml")
-    st.stop()
-try:
-    import psycopg2
-    import psycopg2.extras
-except ImportError:
-    st.error("Dépendance manquante : ajoute psycopg2-binary à requirements.txt puis redéploie l'application.")
     st.stop()
 if "issa_authenticated" not in st.session_state:
     st.session_state["issa_authenticated"] = False
@@ -107,83 +88,37 @@ if not st.session_state["issa_authenticated"]:
             st.error("Identifiant ou mot de passe incorrect.")
     st.stop()
 
-# ---------- Base Supabase PostgreSQL : connexion et création automatique des tables ----------
-DB_PATH = APP_DIR / "campus_clair.db"  # conservé uniquement pour compatibilité d'affichage/anciennes sauvegardes
+# ---------- Base SQLite locale : connexion et création automatique des tables ----------
+DB_PATH = APP_DIR / "campus_clair.db"
 
-class _PgCursor:
-    def __init__(self, cursor=None, rows=None, rowcount=-1):
-        self._cursor, self._rows, self.rowcount = cursor, rows, rowcount
-    @property
-    def description(self):
-        return self._cursor.description if self._cursor is not None else None
-    def fetchall(self):
-        return self._rows if self._rows is not None else self._cursor.fetchall()
-    def fetchone(self):
-        if self._rows is not None:
-            return self._rows.pop(0) if self._rows else None
-        return self._cursor.fetchone()
-    def __iter__(self):
-        return iter(self._rows if self._rows is not None else self._cursor)
-
-@st.cache_resource(show_spinner=False)
-def _get_pg_pool():
-    """Réutilise les connexions PostgreSQL pour réduire le temps de chargement."""
-    from psycopg2.pool import ThreadedConnectionPool
-    return ThreadedConnectionPool(
-        minconn=1, maxconn=8, host=_SUPABASE_DB_HOST,
-        port=int(_SUPABASE_DB_PORT), dbname=_SUPABASE_DB_NAME,
-        user=_SUPABASE_DB_USER, password=_SUPABASE_DB_PASSWORD,
-        sslmode="require", connect_timeout=8, application_name="SecretaireIssa"
-    )
-
-class _PgConnection:
+class _SQLiteConnection:
+    """Connexion SQLite avec commit/rollback et fermeture automatique."""
     def __init__(self):
-        self.pool = _get_pg_pool()
-        self.raw = self.pool.getconn()
-        self._returned = False
-        try:
-            with self.raw.cursor() as cur:
-                cur.execute("SET search_path TO public")
-        except Exception:
-            self.pool.putconn(self.raw, close=True)
-            self._returned = True
-            raise
-    def __enter__(self): return self
+        self.raw = sqlite3.connect(str(DB_PATH), timeout=30, check_same_thread=False)
+        self.raw.row_factory = sqlite3.Row
+        self.raw.execute("PRAGMA foreign_keys=ON")
+        self.raw.execute("PRAGMA journal_mode=WAL")
+        self.raw.execute("PRAGMA busy_timeout=30000")
+    def __enter__(self):
+        return self
     def __exit__(self, typ, value, tb):
         try:
-            self.raw.commit() if typ is None else self.raw.rollback()
+            if typ is None:
+                self.raw.commit()
+            else:
+                self.raw.rollback()
         finally:
-            if not self._returned:
-                self.pool.putconn(self.raw)
-                self._returned = True
+            self.raw.close()
         return False
     def execute(self, sql, params=()):
-        sql = sql.strip()
-        if sql.upper() == "PRAGMA FOREIGN_KEYS=ON": return _PgCursor(rows=[])
-        m = re.match(r"PRAGMA table_info\((\w+)\)", sql, re.I)
-        if m:
-            with self.raw.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute("SELECT ordinal_position-1 AS cid, column_name AS name, data_type AS type, (is_nullable='NO') AS notnull, column_default AS dflt_value, (CASE WHEN column_name='id' THEN 1 ELSE 0 END) AS pk FROM information_schema.columns WHERE table_schema='public' AND table_name=%s ORDER BY ordinal_position", (m.group(1).lower(),))
-                return _PgCursor(rows=cur.fetchall())
-        ignore = bool(re.search(r"INSERT\s+OR\s+IGNORE\s+INTO", sql, re.I))
-        sql = re.sub(r"INSERT\s+OR\s+IGNORE\s+INTO", "INSERT INTO", sql, flags=re.I)
-        replace = bool(re.search(r"INSERT\s+OR\s+REPLACE\s+INTO\s+habit_logs", sql, re.I))
-        sql = re.sub(r"INSERT\s+OR\s+REPLACE\s+INTO", "INSERT INTO", sql, flags=re.I)
-        sql = sql.replace("?", "%s")
-        if replace: sql += " ON CONFLICT (habit_id, log_date) DO UPDATE SET done=EXCLUDED.done"
-        elif ignore: sql += " ON CONFLICT DO NOTHING"
-        cur = self.raw.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute(sql, params or ())
-        return _PgCursor(cur, rowcount=cur.rowcount)
+        return self.raw.execute(sql, params or ())
     def executescript(self, script):
-        script = re.sub(r"INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT", "BIGSERIAL PRIMARY KEY", script, flags=re.I)
-        script = re.sub(r"REAL\b", "DOUBLE PRECISION", script, flags=re.I)
-        for statement in script.split(';'):
-            statement = statement.strip()
-            if statement: self.execute(statement)
+        return self.raw.executescript(script)
+    def __getattr__(self, name):
+        return getattr(self.raw, name)
 
 def connect():
-    return _PgConnection()
+    return _SQLiteConnection()
 
 def init_db():
     with connect() as c:
@@ -249,118 +184,59 @@ def _migration_fallback(table, column, definition):
     return ""
 
 # Journal de diagnostic : indique en rouge les valeurs NULL/"None" repérées
-# dans Supabase ou normalisées par le code. Il ne contient aucune donnée personnelle.
+# dans SQLite ou normalisées par le code. Il ne contient aucune donnée personnelle.
 _NONE_REPAIR_LOG = []
 _NONE_RUNTIME_LOG = []
 
 def _ensure_app_schema():
-    """Crée les tables requises et complète le schéma sans perdre les anciennes lignes.
-
-    PostgreSQL refuse d'ajouter directement une colonne NOT NULL à une table qui
-    contient déjà des lignes. On l'ajoute donc d'abord nullable, on remplit les
-    valeurs manquantes, puis on applique NOT NULL seulement si c'est sans risque.
-    """
-    definitions = {}
-    for statement in _APP_SCHEMA_DDL.split(";"):
-        match = re.search(r"CREATE TABLE IF NOT EXISTS\s+(\w+)\s*\((.*)\)\s*$", statement.strip(), re.I | re.S)
-        if not match:
-            continue
-        table, body = match.group(1), match.group(2)
-        columns = []
-        for part in _split_schema_columns(body):
-            tokens = part.split(None, 1)
-            if not tokens:
-                continue
-            name = tokens[0].strip('"')
-            if name.upper() in {"PRIMARY", "FOREIGN", "UNIQUE", "CONSTRAINT", "CHECK"}:
-                continue
-            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
-                continue
-            definition = re.sub(r"INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT", "BIGSERIAL PRIMARY KEY", part, flags=re.I)
-            definition = re.sub(r"REAL\b", "DOUBLE PRECISION", definition, flags=re.I)
-            columns.append((name, definition))
-        definitions[table] = columns
-
+    """Vérifie et complète les tables SQLite de l'application sans en supprimer."""
+    init_db()
+    _NONE_REPAIR_LOG.clear()
     with connect() as c:
-        for table, columns in definitions.items():
-            present_rows = c.execute(f"PRAGMA table_info({table})").fetchall()
-            present = {row["name"] for row in present_rows}
-            for column, definition in columns:
-                if column not in present:
-                    # Ajout initial nullable pour éviter l'erreur « contains null values ».
-                    safe_definition = re.sub(r"\s+NOT\s+NULL\b", "", definition, flags=re.I)
-                    safe_definition = re.sub(r"\s+PRIMARY\s+KEY\b", "", safe_definition, flags=re.I)
-                    c.execute(f"ALTER TABLE {table} ADD COLUMN {safe_definition}")
-                    if re.search(r"\bNOT\s+NULL\b", definition, re.I):
-                        fallback = _migration_fallback(table, column, definition)
-                        c.execute(f'UPDATE {table} SET "{column}"=%s WHERE "{column}" IS NULL', (fallback,))
-                        # Contrainte appliquée seulement à une nouvelle colonne
-                        # après remplissage ; si un schéma atypique l'empêche,
-                        # l'initialisation ne doit pas interrompre toute l'application.
-                        try:
-                            c.execute(f'ALTER TABLE {table} ALTER COLUMN "{column}" SET NOT NULL')
-                        except Exception:
-                            pass
-                elif re.search(r"\bNOT\s+NULL\b", definition, re.I):
-                    # Corrige les NULL des anciennes lignes, sans imposer une
-                    # contrainte plus stricte sur une table déjà utilisée.
-                    fallback = _migration_fallback(table, column, definition)
-                    c.execute(f'UPDATE {table} SET "{column}"=%s WHERE "{column}" IS NULL', (fallback,))
-                    # Ne pas forcer SET NOT NULL sur les colonnes existantes :
-                    # les données historiques et les dépendances restent intactes.
-        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_reminders_source ON reminders(source_type, source_id) WHERE source_type <> '' AND source_id IS NOT NULL")
-
-        # Nettoyage durable de TOUTES les tables gérées par l'application.
-        # Les champs texte NULL ou contenant littéralement None/null/nan
-        # deviennent vides. Aucun enregistrement n'est supprimé.
-        text_types = {"text", "character varying", "character", "varchar", "char", "name"}
-        for table in definitions:
-            col_rows = c.execute(
-                "SELECT column_name, data_type FROM information_schema.columns "
-                "WHERE table_schema='public' AND table_name=%s",
-                (table,),
-            ).fetchall()
-            for col_row in col_rows:
-                column_name = col_row["column_name"]
-                data_type = str(col_row["data_type"] or "").lower()
-                if data_type not in text_types:
+        tables = [r["name"] for r in c.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()]
+        for table in tables:
+            # Le nom provient directement de sqlite_master et est échappé avant PRAGMA.
+            safe_table = table.replace('"', '""')
+            columns = c.execute(f'PRAGMA table_info("{safe_table}")').fetchall()
+            for column in columns:
+                column_name = column["name"]
+                data_type = str(column["type"] or "").lower()
+                if not any(t in data_type for t in ("text", "char", "clob", "varchar")):
                     continue
-                # Les noms viennent du schéma de l'application, puis sont sécurisés.
-                safe_table = re.sub(r"[^A-Za-z0-9_]", "", table)
-                safe_column = re.sub(r"[^A-Za-z0-9_]", "", column_name)
-                cleanup_cursor = c.execute(
-                    f"UPDATE \"{safe_table}\" SET \"{safe_column}\"='' "
-                    f"WHERE \"{safe_column}\" IS NULL OR LOWER(BTRIM(\"{safe_column}\")) IN ('none','null','nan','<na>','nat','undefined')"
+                safe_column = str(column_name).replace('"', '""')
+                cursor = c.execute(
+                    f'UPDATE "{safe_table}" SET "{safe_column}"=? '
+                    f'WHERE "{safe_column}" IS NULL OR LOWER(TRIM("{safe_column}")) IN '
+                    "('none','null','nan','<na>','nat','undefined')",
+                    ("",),
                 )
-                repaired_count = max(0, int(getattr(cleanup_cursor, "rowcount", 0) or 0))
+                repaired_count = max(0, int(cursor.rowcount or 0))
                 if repaired_count:
-                    _NONE_REPAIR_LOG.append({"table": table, "column": column_name, "count": repaired_count, "source": "Supabase/PostgreSQL"})
-
-    expected = set(definitions)
-    with connect() as c:
-        found = {r["name"] for r in c.execute("SELECT table_name AS name FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'").fetchall()}
+                    _NONE_REPAIR_LOG.append({"table": table, "column": column_name, "count": repaired_count, "source": "SQLite locale"})
+        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_reminders_source ON reminders(source_type, source_id) WHERE source_type <> '' AND source_id IS NOT NULL")
+        found = {r["name"] for r in c.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()}
+    expected = {"subjects", "events", "tasks", "documents", "study_logs", "goals", "habits", "habit_logs", "budgets", "life_notes", "contacts", "career_skills", "career_training", "career_opportunities", "reminders", "app_settings", "assistant_docs", "productivity_projects", "flashcards", "focus_sessions", "daily_journal", "meeting_minutes", "life_organizer"}
     missing = sorted(expected - found)
     if missing:
-        raise RuntimeError("Tables absentes après initialisation : " + ", ".join(missing))
+        raise RuntimeError("Tables SQLite absentes après initialisation : " + ", ".join(missing))
     return expected
 
 @st.cache_resource(show_spinner=False)
 def _initialize_schema_once():
-    """Initialise le schéma une seule fois par version du processus Streamlit.
-
-    L'ancienne version reparcourait et contrôlait toutes les tables à chaque
-    interaction utilisateur, ce qui pouvait ralentir fortement le site.
-    Le cache est invalidé automatiquement quand le code de cette fonction change.
-    """
+    """Initialise le schéma SQLite une fois par processus Streamlit."""
     _ = init_db()
     return sorted(_ensure_app_schema())
 
-with st.spinner("Connexion à Supabase et vérification initiale des tables…"):
+with st.spinner("Initialisation de la base SQLite locale…"):
     try:
         _expected_app_tables = _initialize_schema_once()
-        st.session_state["issa_supabase_tables_ready"] = _expected_app_tables
+        st.session_state["issa_sqlite_tables_ready"] = _expected_app_tables
     except Exception as exc:
-        st.error("Initialisation Supabase impossible. Vérifie les Secrets, les droits PostgreSQL et les journaux. Aucune table n'est supprimée par cette version. Détail technique : " + str(exc)[:500])
+        st.error("Initialisation SQLite impossible. Vérifie les droits d'écriture dans le dossier de l'application. Détail technique : " + str(exc)[:500])
         st.stop()
 
 DEFAULT_REMINDER_PHONE = "+221777473170"  # conservé pour compatibilité avec les anciennes bases
@@ -604,7 +480,7 @@ def start_reminder_worker():
     return stop_event
 
 def _clean_missing_value(value, fallback=""):
-    """Normalise les NULL venant de PostgreSQL/Pandas avant tout affichage."""
+    """Normalise les valeurs manquantes avant tout affichage."""
     if value is None:
         return fallback
     try:
@@ -621,10 +497,10 @@ def _clean_missing_value(value, fallback=""):
 
 
 def read_df(sql, params=()):
-    """Lit les données Supabase et normalise les valeurs manquantes dans toutes les requêtes."""
+    """Lit les données SQLite et normalise les valeurs manquantes dans toutes les requêtes."""
     with connect() as c:
         cur = c.execute(sql, params)
-        columns = [d.name for d in cur.description] if cur.description else []
+        columns = [d[0] for d in cur.description] if cur.description else []
         rows = cur.fetchall()
 
     df = pd.DataFrame([dict(r) for r in rows], columns=columns)
@@ -1174,7 +1050,7 @@ elif page=="Suivi & progression":
 
 # ---------- Assistant de vie avec sous-onglets ----------
 elif page=="Assistant de vie":
-    _ = header('ESPACE PERSONNEL XXL','Assistant de vie 🧭','Un espace central pour tes objectifs, habitudes, budget, tâches, routines, notes et contacts. Les informations sont enregistrées dans Supabase PostgreSQL.')
+    _ = header('ESPACE PERSONNEL XXL','Assistant de vie 🧭','Un espace central pour tes objectifs, habitudes, budget, tâches, routines, notes et contacts. Les informations sont enregistrées dans SQLite.')
     tabs=st.tabs(['🎯 Objectifs','✅ Habitudes','💰 Budget','📝 Tâches & démarches','📓 Notes personnelles','👥 Contacts','🌿 Bien-être & routines'])
     with tabs[0]:
         with st.form('goal_form'):
@@ -1353,7 +1229,7 @@ elif page=="Rappels automatiques":
         st.warning('Les rappels sont préparés automatiquement, mais l’envoi nécessite les identifiants Gmail SMTP dans les Secrets Streamlit.')
     with st.expander('⚙️ Configuration Gmail gratuite (à faire une seule fois)', expanded=not bool(get_config('SMTP_PASSWORD'))):
         st.markdown('Utilise ton adresse Gmail et un **mot de passe d’application Google de 16 caractères**. Ne mets jamais ton mot de passe Gmail habituel et ne partage pas ce secret.')
-        st.code('SMTP_HOST = \"smtp.gmail.com\"\nSMTP_PORT = \"587\"\nSMTP_USERNAME = \"ton_adresse_gmail@gmail.com\"\nSMTP_PASSWORD = \"mot_de_passe_application_google\"\nSMTP_SENDER_NAME = \"Secrétaire Issa\"\nAPP_USERNAME = \"identifiant_de_connexion\"\nAPP_PASSWORD = \"mot_de_passe_de_connexion\"\n\nSUPABASE_DB_HOST = \"aws-0-eu-west-1.pooler.supabase.com\"\nSUPABASE_DB_PORT = \"5432\"\nSUPABASE_DB_NAME = \"postgres\"\nSUPABASE_DB_USER = \"postgres.sruhwwoaasctnzeckrct\"\nSUPABASE_DB_PASSWORD = \"mot_de_passe_supabase\"\n\nYOUAGRONOME_OWNER_EMAIL = \"identifiant_proprietaire\"\nYOUAGRONOME_OWNER_PASS = \"mot_de_passe_proprietaire\"', language='toml')
+        st.code('SMTP_HOST = "smtp.gmail.com"\nSMTP_PORT = 587\nSMTP_USERNAME = "ton_adresse_gmail@gmail.com"\nSMTP_PASSWORD = "mot_de_passe_application_google"\nSMTP_SENDER_NAME = "Secrétaire Issa"\nAPP_USERNAME = "identifiant_de_connexion"\nAPP_PASSWORD = "mot_de_passe_de_connexion"\n\nYOUAGRONOME_OWNER_EMAIL = "identifiant_proprietaire"\nYOUAGRONOME_OWNER_PASS = "mot_de_passe_proprietaire"', language="toml")
         st.caption('Dans Streamlit Cloud : Manage app → Settings → Secrets. L’adresse d’expédition est lue depuis SMTP_USERNAME. L’adresse de réception des rappels se règle ci-dessus. Le code essaie STARTTLS sur le port 587 puis SSL sur le port 465 si nécessaire.')
     if st.button('🧪 Envoyer un e-mail de test', disabled=not (get_config('SMTP_PASSWORD') and get_recipient_email())):
         try:
@@ -1822,23 +1698,23 @@ elif page=="Centre de productivité XXL":
         else: st.info('Aucun rendez-vous ou démarche enregistré.')
 
 elif page=="Paramètres & sauvegarde":
-    _ = header('PARAMÈTRES & DONNÉES','Paramètres & sauvegarde','Les données sont enregistrées dans Supabase PostgreSQL ; les tables sont créées automatiquement sans supprimer les tables déjà présentes.')
-    st.success(f'Base active : Supabase PostgreSQL · { _SUPABASE_DB_HOST } · base { _SUPABASE_DB_NAME }. Les tables de l’application sont créées automatiquement au démarrage ; les autres tables Supabase sont conservées.')
+    _ = header('PARAMÈTRES & DONNÉES','Paramètres & sauvegarde','Les données sont enregistrées dans une base SQLite locale ; les tables nécessaires sont créées automatiquement.')
+    st.success(f'Base active : SQLite locale · {DB_PATH.name}. Les tables de l’application sont créées automatiquement au démarrage ; aucune table existante n’est supprimée.')
     tables={'Matières':'subjects','Emploi du temps':'events','Tâches':'tasks','Ressources archivées (ancien espace)':'documents','Journal d’étude':'study_logs','Objectifs':'goals','Habitudes':'habits','Historique habitudes':'habit_logs','Budget':'budgets','Notes personnelles':'life_notes','Contacts':'contacts','Compétences':'career_skills','Formations':'career_training','Opportunités professionnelles':'career_opportunities','Rappels e-mail':'reminders','Projets du Central':'productivity_projects','Flashcards':'flashcards','Séances de concentration':'focus_sessions','Journal quotidien':'daily_journal','Comptes rendus':'meeting_minutes','Organisateur de vie':'life_organizer'}
     for label,table in tables.items():
         df=read_df(f'SELECT * FROM {table}')
         with st.expander(f'{label} — {len(df)} enregistrement(s)'):
             _ = export_csv(df,label,table)
-    st.info('Pour une sauvegarde complète de Supabase, utilise le tableau de bord Supabase ou exporte les tables depuis les options CSV ci-dessus. Les exports CSV restent disponibles pour chaque module.')
-    # Diagnostic visible en rouge : distingue les réparations faites dans Supabase
+    st.info('Pour sauvegarder toutes les données, copie le fichier campus_clair.db après avoir arrêté l’application. Les exports CSV restent disponibles pour chaque module.')
+    # Diagnostic visible en rouge : distingue les réparations faites dans SQLite
     # des valeurs détectées à la lecture et neutralisées par le code Python.
     st.markdown("### Diagnostic des valeurs `None` / `NULL`")
     if _NONE_REPAIR_LOG or _NONE_RUNTIME_LOG:
         st.error("Des valeurs manquantes ont été repérées. Le détail ci-dessous indique leur origine et les colonnes concernées.")
         if _NONE_REPAIR_LOG:
-            st.markdown("**Origine : Supabase / PostgreSQL (valeurs corrigées au démarrage)**")
+            st.markdown("**Origine : SQLite locale (valeurs corrigées au démarrage)**")
             for item in _NONE_REPAIR_LOG:
-                st.markdown(f'<div style="color:#b91c1c;font-weight:700;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:8px;margin:4px 0">Supabase · table <code>{item["table"]}</code> · colonne <code>{item["column"]}</code> · {item["count"]} ligne(s) corrigée(s)</div>', unsafe_allow_html=True)
+                st.markdown(f'<div style="color:#b91c1c;font-weight:700;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:8px;margin:4px 0">SQLite · table <code>{item["table"]}</code> · colonne <code>{item["column"]}</code> · {item["count"]} ligne(s) corrigée(s)</div>', unsafe_allow_html=True)
         if _NONE_RUNTIME_LOG:
             st.markdown("**Origine : lecture SQL / code Python (valeurs neutralisées avant affichage)**")
             for item in _NONE_RUNTIME_LOG:
@@ -1846,10 +1722,10 @@ elif page=="Paramètres & sauvegarde":
     else:
         st.success("Aucune valeur None/NULL suspecte n’a été détectée pendant cette session.")
     st.markdown('### Dépendances facultatives')
-    st.code('streamlit\npandas\npsycopg2-binary>=2.9.9\nSpeechRecognition>=3.10.0\nstreamlit-mic-recorder>=0.0.8\nopenpyxl\nPyMuPDF\npython-docx',language='text')
+    st.code('streamlit\npandas\nSpeechRecognition>=3.10.0\nstreamlit-mic-recorder>=0.0.8\nopenpyxl\nPyMuPDF\npython-docx',language='text')
     st.caption('openpyxl permet les imports Excel. PyMuPDF permet de lire le texte des PDF. L’application reste utilisable sans ces deux dépendances si tu utilises CSV et la saisie manuelle.')
 
-st.markdown('<div class="issa-footer"><strong>🗂️ Secrétaire Issa</strong><br><small>Un espace personnel de secrétariat, de suivi et d’organisation · Données stockées dans Supabase PostgreSQL.</small></div>',unsafe_allow_html=True)
+st.markdown('<div class="issa-footer"><strong>🗂️ Secrétaire Issa</strong><br><small>Un espace personnel de secrétariat, de suivi et d’organisation · Données stockées localement avec SQLite.</small></div>',unsafe_allow_html=True)
 role_icons={
     "Vue d’ensemble":"🏠", "Maquettes & matières":"🎓", "Emploi du temps":"🗓️",
     "Programmes de révision":"🎯", "Suivi & progression":"📈", "Assistant de vie":"👤", "Rappels automatiques":"🔔", "Assistant e-mail & documents":"✉️",
@@ -1857,4 +1733,4 @@ role_icons={
 }
 roles_html=''.join(f'<span class="issa-role-pill">{role_icons[p]} {PAGE_ROLE[p]}</span>' for p in PAGES)
 st.markdown(f'<div class="issa-roles"><div class="issa-roles-title">Les rôles de vos secrétaires spécialisés</div><div class="issa-role-pills">{roles_html}</div></div>',unsafe_allow_html=True)
-st.caption('Navigation disponible dans le menu supérieur · Base de données : Supabase PostgreSQL · tables créées automatiquement')
+st.caption('Navigation disponible dans le menu supérieur · Base de données : SQLite locale · tables créées automatiquement')
