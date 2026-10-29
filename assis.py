@@ -13,38 +13,49 @@ import streamlit as st
 APP_DIR = Path(__file__).resolve().parent
 DB_PATH = APP_DIR / "campus_clair.db"
 st.set_page_config(page_title="Secrétaire Issa", page_icon="🗂️", layout="wide", initial_sidebar_state="collapsed")
-st.markdown("""
+# Photo d'Issa Youme utilisée comme arrière-plan global. Le fichier im1.jpeg doit
+# accompagner ce script dans le déploiement ; un fond de secours est prévu.
+_BACKGROUND_IMAGE = APP_DIR / "im1.jpeg"
+try:
+    _BACKGROUND_B64 = base64.b64encode(_BACKGROUND_IMAGE.read_bytes()).decode("ascii") if _BACKGROUND_IMAGE.exists() else ""
+except Exception:
+    _BACKGROUND_B64 = ""
+_BACKGROUND_CSS = (f"url('data:image/jpeg;base64,{_BACKGROUND_B64}')" if _BACKGROUND_B64 else "none")
+st.markdown(f"""
 <style>
-:root{--issa-navy:#10213c;--issa-blue:#2457a7;--issa-cyan:#3bb7c9;--issa-gold:#f0b84b;--issa-muted:#64748b}
-.block-container{max-width:1550px;padding-top:1rem;padding-bottom:2rem}
-[data-testid="stAppViewContainer"]{background:linear-gradient(180deg,#f4f8ff 0%,#f8fafc 38%,#f3f7fb 100%)}
-[data-testid="stSidebar"]{background:#fff;border-right:1px solid #e1e8f2}
-[data-testid="stSidebar"]{visibility:hidden;width:0;min-width:0}
-.issa-brand{background:linear-gradient(115deg,#10213c 0%,#1c4b88 62%,#267d9d 100%);color:white;border-radius:24px;padding:24px 28px;margin:0 0 15px;box-shadow:0 12px 28px rgba(16,33,60,.16);position:relative;overflow:hidden}
-.issa-brand:after{content:'✦';position:absolute;right:34px;top:-27px;font-size:130px;color:rgba(255,255,255,.08)}
-.issa-brand h1{font-size:clamp(1.7rem,3vw,2.55rem);font-weight:850;letter-spacing:-.04em;margin:0;color:#fff}
-.issa-brand p{margin:7px 0 0;color:#e0efff;font-size:.98rem;max-width:900px}
-.issa-badge{display:inline-block;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.25);border-radius:999px;padding:5px 11px;font-size:.75rem;font-weight:800;letter-spacing:.09em;text-transform:uppercase;margin-bottom:9px}
-.cc-hero{background:linear-gradient(120deg,#fff,#edf5ff);border:1px solid #dce7f7;border-radius:20px;padding:22px 25px;margin:12px 0 18px;box-shadow:0 4px 15px rgba(30,64,120,.04)}
-.cc-eyebrow{font-size:.75rem;letter-spacing:.12em;text-transform:uppercase;color:#3868a8;font-weight:850}
-.cc-title{font-size:clamp(1.45rem,2.3vw,2rem);font-weight:850;color:#152640;margin:.2rem 0}
-.cc-sub{color:#60728c;margin:0}
-.cc-card{background:#fff;border:1px solid #e0e8f3;border-radius:18px;padding:18px;height:100%;box-shadow:0 5px 18px rgba(25,45,80,.045)}
-.cc-label{font-size:.88rem;color:#64748b}.cc-value{font-size:1.9rem;font-weight:850;color:#18243a;margin-top:7px}.cc-note{font-size:.8rem;color:#64748b;margin-top:4px}
-.stButton>button{border-radius:11px;font-weight:700;min-height:2.55rem;border:1px solid #dbe5f2;transition:all .18s ease}
-.stButton>button:hover{border-color:#3b73c4;transform:translateY(-1px);box-shadow:0 5px 14px rgba(36,87,167,.12)}
-[data-testid="stDataFrame"]{border:1px solid #e4e8f0;border-radius:12px}
-div[role="radiogroup"]{gap:.35rem;flex-wrap:wrap}
-div[role="radiogroup"] label{background:#fff;border:1px solid #dce6f3;border-radius:12px;padding:8px 12px!important;font-weight:700;box-shadow:0 2px 7px rgba(16,33,60,.035)}
-div[role="radiogroup"] label:has(input:checked){background:#eaf2ff;border-color:#7ca8e6;color:#164b93}
-.issa-nav-title{font-size:.72rem;font-weight:850;text-transform:uppercase;letter-spacing:.12em;color:#52709a;margin:8px 0 5px}
-.issa-footer{background:#10213c;color:#eaf2ff;border-radius:18px;padding:16px 20px;margin-top:24px}
-.issa-footer strong{color:#fff}.issa-footer small{color:#bfd2eb}
-.issa-roles{background:linear-gradient(110deg,#10213c,#1c4b88);border-radius:16px;padding:15px 17px;margin-top:16px;color:#fff;box-shadow:0 7px 20px rgba(16,33,60,.12)}
-.issa-roles-title{font-size:.75rem;font-weight:850;letter-spacing:.1em;text-transform:uppercase;color:#cfe5ff;margin-bottom:10px}
-.issa-role-pills{display:flex;gap:8px;flex-wrap:wrap}
-.issa-role-pill{display:inline-flex;align-items:center;gap:6px;border:1px solid rgba(255,255,255,.24);background:rgba(255,255,255,.1);border-radius:999px;padding:7px 11px;font-size:.78rem;color:#f4f8ff}
-@media(max-width:700px){.issa-brand{padding:20px;border-radius:18px}.cc-hero{padding:18px}.block-container{padding-left:1rem;padding-right:1rem}div[role="radiogroup"] label{padding:6px 8px!important;font-size:.8rem}}
+:root{{--issa-navy:#10213c;--issa-blue:#2457a7;--issa-cyan:#3bb7c9;--issa-gold:#f0b84b;--issa-muted:#64748b}}
+.block-container{{max-width:1550px;padding-top:1rem;padding-bottom:2rem;position:relative;z-index:1}}
+[data-testid="stAppViewContainer"]{{background-color:#eaf0f8;background-image:linear-gradient(rgba(245,249,255,.70),rgba(245,249,255,.76)),{_BACKGROUND_CSS};background-size:cover;background-position:center top;background-attachment:fixed;background-repeat:no-repeat}}
+[data-testid="stAppViewContainer"]::before{{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;background-image:{_BACKGROUND_CSS};background-size:cover;background-position:center 15%;background-repeat:no-repeat;opacity:.20;filter:saturate(.82)}}
+[data-testid="stMain"]{{background:transparent;position:relative;z-index:1}}
+[data-testid="stHeader"]{{background:rgba(245,249,255,.72)}}
+[data-testid="stSidebar"]{{background:#fff;border-right:1px solid #e1e8f2}}
+[data-testid="stSidebar"]{{visibility:hidden;width:0;min-width:0}}
+.issa-brand{{background:linear-gradient(115deg,#10213c 0%,#1c4b88 62%,#267d9d 100%);color:white;border-radius:24px;padding:24px 28px;margin:0 0 15px;box-shadow:0 12px 28px rgba(16,33,60,.16);position:relative;overflow:hidden}}
+.issa-brand:after{{content:'✦';position:absolute;right:34px;top:-27px;font-size:130px;color:rgba(255,255,255,.08)}}
+.issa-brand h1{{font-size:clamp(1.7rem,3vw,2.55rem);font-weight:850;letter-spacing:-.04em;margin:0;color:#fff}}
+.issa-brand p{{margin:7px 0 0;color:#e0efff;font-size:.98rem;max-width:900px}}
+.issa-badge{{display:inline-block;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.25);border-radius:999px;padding:5px 11px;font-size:.75rem;font-weight:800;letter-spacing:.09em;text-transform:uppercase;margin-bottom:9px}}
+.cc-hero{{background:linear-gradient(120deg,#fff,#edf5ff);border:1px solid #dce7f7;border-radius:20px;padding:22px 25px;margin:12px 0 18px;box-shadow:0 4px 15px rgba(30,64,120,.04)}}
+.cc-eyebrow{{font-size:.75rem;letter-spacing:.12em;text-transform:uppercase;color:#3868a8;font-weight:850}}
+.cc-title{{font-size:clamp(1.45rem,2.3vw,2rem);font-weight:850;color:#152640;margin:.2rem 0}}
+.cc-sub{{color:#60728c;margin:0}}
+.cc-card{{background:#fff;border:1px solid #e0e8f3;border-radius:18px;padding:18px;height:100%;box-shadow:0 5px 18px rgba(25,45,80,.045)}}
+.cc-label{{font-size:.88rem;color:#64748b}}.cc-value{{font-size:1.9rem;font-weight:850;color:#18243a;margin-top:7px}}.cc-note{{font-size:.8rem;color:#64748b;margin-top:4px}}
+.stButton>button{{border-radius:11px;font-weight:700;min-height:2.55rem;border:1px solid #dbe5f2;transition:all .18s ease}}
+.stButton>button:hover{{border-color:#3b73c4;transform:translateY(-1px);box-shadow:0 5px 14px rgba(36,87,167,.12)}}
+[data-testid="stDataFrame"]{{border:1px solid #e4e8f0;border-radius:12px}}
+div[role="radiogroup"]{{gap:.35rem;flex-wrap:wrap}}
+div[role="radiogroup"] label{{background:#fff;border:1px solid #dce6f3;border-radius:12px;padding:8px 12px!important;font-weight:700;box-shadow:0 2px 7px rgba(16,33,60,.035)}}
+div[role="radiogroup"] label:has(input:checked){{background:#eaf2ff;border-color:#7ca8e6;color:#164b93}}
+.issa-nav-title{{font-size:.72rem;font-weight:850;text-transform:uppercase;letter-spacing:.12em;color:#52709a;margin:8px 0 5px}}
+.issa-footer{{background:#10213c;color:#eaf2ff;border-radius:18px;padding:16px 20px;margin-top:24px}}
+.issa-footer strong{{color:#fff}}.issa-footer small{{color:#bfd2eb}}
+.issa-roles{{background:linear-gradient(110deg,#10213c,#1c4b88);border-radius:16px;padding:15px 17px;margin-top:16px;color:#fff;box-shadow:0 7px 20px rgba(16,33,60,.12)}}
+.issa-roles-title{{font-size:.75rem;font-weight:850;letter-spacing:.1em;text-transform:uppercase;color:#cfe5ff;margin-bottom:10px}}
+.issa-role-pills{{display:flex;gap:8px;flex-wrap:wrap}}
+.issa-role-pill{{display:inline-flex;align-items:center;gap:6px;border:1px solid rgba(255,255,255,.24);background:rgba(255,255,255,.1);border-radius:999px;padding:7px 11px;font-size:.78rem;color:#f4f8ff}}
+@media(max-width:700px){{.issa-brand{{padding:20px;border-radius:18px}}.cc-hero{{padding:18px}}.block-container{{padding-left:1rem;padding-right:1rem}}div[role="radiogroup"] label{{padding:6px 8px!important;font-size:.8rem}}}}
 </style>""", unsafe_allow_html=True)
 
 # ---------- Verrouillage par identifiants stockés dans Streamlit Secrets ----------
@@ -266,18 +277,41 @@ def fetch_recent_emails(limit=15):
     return items
 
 def transcribe_audio(uploaded_audio):
-    """Transcrit un enregistrement vocal en français ; nécessite SpeechRecognition et Internet."""
-    if uploaded_audio is None: return ""
+    """Transcrit un enregistrement vocal en français avec des messages d'erreur utiles."""
+    if uploaded_audio is None:
+        return ""
     try:
         import speech_recognition as sr
         recognizer = sr.Recognizer()
-        with sr.AudioFile(io.BytesIO(uploaded_audio.getvalue())) as source:
+        # Évite de traiter les silences comme une commande et tolère mieux les voix faibles.
+        recognizer.energy_threshold = 250
+        recognizer.dynamic_energy_threshold = True
+        recognizer.pause_threshold = 0.8
+        audio_bytes = uploaded_audio.getvalue()
+        if not audio_bytes:
+            raise RuntimeError("Aucun son n’a été enregistré. Relance l’enregistrement et parle pendant quelques secondes.")
+        with sr.AudioFile(io.BytesIO(audio_bytes)) as source:
+            recognizer.adjust_for_ambient_noise(source, duration=min(0.5, max(0.1, source.DURATION / 4)))
+        # Réouvre le flux depuis le début après le calibrage du bruit ambiant.
+        with sr.AudioFile(io.BytesIO(audio_bytes)) as source:
             audio_data = recognizer.record(source)
-        return recognizer.recognize_google(audio_data, language="fr-FR")
+        if getattr(audio_data, "frame_data", b"") == b"":
+            raise RuntimeError("L’enregistrement est vide. Vérifie le microphone puis recommence.")
+        try:
+            text = recognizer.recognize_google(audio_data, language="fr-FR")
+        except sr.UnknownValueError:
+            raise RuntimeError("Aucune parole claire n’a été reconnue. Parle distinctement en français, près du microphone, dans un endroit calme. Enregistre une phrase courte (2 à 6 secondes), puis réessaie.") from None
+        except sr.RequestError:
+            raise RuntimeError("Le service de reconnaissance vocale est momentanément inaccessible. Vérifie la connexion Internet puis réessaie.") from None
+        if not text or not text.strip():
+            raise RuntimeError("Aucun mot n’a été détecté. Parle après avoir lancé l’enregistrement, puis arrête-le pour envoyer la commande.")
+        return text.strip()
     except ImportError:
-        raise RuntimeError("Module SpeechRecognition absent. Vérifie que requirements.txt est à la racine du dépôt GitHub et contient speechrecognition>=3.10.0, puis fais un commit et attends le redéploiement complet de Streamlit Cloud. Si le module reste absent, consulte Manage app → Logs pour vérifier l’installation des dépendances.")
+        raise RuntimeError("Module SpeechRecognition absent. Vérifie que requirements.txt est à la racine du dépôt GitHub et contient speechrecognition>=3.10.0, puis fais un commit et attends le redéploiement complet de Streamlit Cloud. Si le module reste absent, consulte Manage app → Logs pour vérifier l’installation des dépendances.") from None
+    except RuntimeError:
+        raise
     except Exception as exc:
-        raise RuntimeError(f"Transcription vocale impossible ({type(exc).__name__}). Vérifie la qualité audio et la connexion Internet.") from None
+        raise RuntimeError(f"Lecture de l’enregistrement impossible ({type(exc).__name__}). Recommence avec un enregistrement court. Si le problème persiste, vérifie le format audio produit par le microphone.") from None
 
 def extract_document_text(uploaded_file):
     name = uploaded_file.name.lower()
