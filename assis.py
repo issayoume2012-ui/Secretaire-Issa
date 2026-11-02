@@ -75,6 +75,14 @@ div[role="radiogroup"] label:has(input:checked){{background:#eaf2ff;border-color
 .issa-role-pills{{display:flex;gap:8px;flex-wrap:wrap}}
 .issa-role-pill{{display:inline-flex;align-items:center;gap:6px;border:1px solid rgba(255,255,255,.24);background:rgba(255,255,255,.1);border-radius:999px;padding:7px 11px;font-size:.78rem;color:#f4f8ff}}
 @media(max-width:700px){{.issa-brand{{padding:20px;border-radius:18px}}.cc-hero{{padding:18px}}.block-container{{padding-left:1rem;padding-right:1rem}}div[role="radiogroup"] label{{padding:6px 8px!important;font-size:.8rem}}}}
+
+.issa-main-menu-head{margin:22px 0 12px;padding:20px 24px;border-radius:22px;background:linear-gradient(115deg,#10213c 0%,#1b4b83 58%,#087e91 100%);box-shadow:0 12px 28px rgba(16,33,60,.16);color:#fff}
+.issa-main-menu-kicker{font-size:.72rem;font-weight:850;letter-spacing:.16em;color:#a9dff0;margin-bottom:5px}
+.issa-main-menu-title{font-size:clamp(1.45rem,2.5vw,2.15rem);font-weight:900;letter-spacing:-.035em;line-height:1.12}
+.issa-main-menu-subtitle{font-size:.94rem;color:#e1efff;margin-top:7px}
+.issa-subnav-label{font-size:.72rem;font-weight:850;letter-spacing:.13em;color:#54749c;margin:16px 0 7px}
+/* Les grands espaces sont volontairement plus hauts et plus visibles que les sous-onglets. */
+
 </style>""", unsafe_allow_html=True)
 
 # ---------- Secrets : authentification uniquement (base SQLite locale) ----------
@@ -890,10 +898,54 @@ with st.container(border=True):
         st.link_button("🚀 Continuer vers " + st.session_state["issa_custom_site_validated"], st.session_state["issa_custom_site_validated"], use_container_width=True)
     st.caption("Les liens ouvrent des services web dans un nouvel onglet selon le navigateur. Pour des logiciels installés sur le téléphone/PC, le navigateur exige une intégration native et une autorisation : aucun site Streamlit ne peut lancer librement toutes les applications locales.")
 
-st.markdown('<div class="issa-nav-title">🧭 MENU PRINCIPAL · Accédez facilement à chaque espace</div>',unsafe_allow_html=True)
-if 'top_nav' not in st.session_state: st.session_state['top_nav']=PAGES[0]
-st.selectbox('Tànnal barab bi nga bëgg / Aller à une rubrique',PAGES,format_func=lambda x:PAGE_SHORT[x],key='top_nav')
-page=st.session_state['top_nav']
+st.markdown('''
+<div class="issa-main-menu-head">
+  <div class="issa-main-menu-kicker">🧭 ESPACE DE NAVIGATION</div>
+  <div class="issa-main-menu-title">MENU PRINCIPAL</div>
+  <div class="issa-main-menu-subtitle">Choisissez un grand espace, puis son sous-espace juste en dessous.</div>
+</div>''',unsafe_allow_html=True)
+
+# Navigation en deux niveaux : grands onglets principaux, puis sous-onglets dédiés.
+_NAV_GROUPS = {
+    "🏠 ACCUEIL": ["Vue d’ensemble"],
+    "🎓 ESPACE ACADÉMIQUE": ["Maquettes & matières", "Emploi du temps", "Programmes de révision", "Suivi & progression"],
+    "👤 VIE & ASSISTANCE": ["Assistant de vie", "Rappels automatiques", "Assistant e-mail & documents"],
+    "🚀 CARRIÈRE & PRODUCTIVITÉ": ["Compétences & Carrière", "Centre de productivité XXL"],
+    "⚙️ CONFIGURATION": ["Paramètres & sauvegarde"],
+}
+_GROUP_FOR_PAGE = {item: group for group, items in _NAV_GROUPS.items() for item in items}
+_current_page = st.session_state.get("top_nav", PAGES[0])
+_default_group = _GROUP_FOR_PAGE.get(_current_page, next(iter(_NAV_GROUPS)))
+if st.session_state.get("issa_nav_group") not in _NAV_GROUPS:
+    st.session_state["issa_nav_group"] = _default_group
+
+st.radio(
+    "Grands espaces",
+    list(_NAV_GROUPS.keys()),
+    horizontal=True,
+    key="issa_nav_group",
+    label_visibility="collapsed",
+)
+_active_group = st.session_state["issa_nav_group"]
+_subpages = _NAV_GROUPS[_active_group]
+if st.session_state.get("issa_nav_subpage") not in _subpages:
+    st.session_state["issa_nav_subpage"] = _current_page if _current_page in _subpages else _subpages[0]
+
+if len(_subpages) > 1:
+    st.markdown('<div class="issa-subnav-label">SOUS-ONGLETS · Choisissez une rubrique</div>', unsafe_allow_html=True)
+    st.radio(
+        "Sous-espaces",
+        _subpages,
+        horizontal=True,
+        format_func=lambda x: PAGE_SHORT[x],
+        key="issa_nav_subpage",
+        label_visibility="collapsed",
+    )
+else:
+    st.session_state["issa_nav_subpage"] = _subpages[0]
+
+page = st.session_state["issa_nav_subpage"]
+st.session_state["top_nav"] = page
 _logout_col, _empty_col = st.columns([1, 8])
 if _logout_col.button('🔒 Déconnexion', key='issa_logout'):
     st.session_state['issa_authenticated'] = False
