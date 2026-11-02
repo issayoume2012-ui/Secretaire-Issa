@@ -795,7 +795,7 @@ st.markdown('<div class="issa-nav-title">🎙️ Seugn bi · Navigation vocale i
 _NAV_APPS = {
     "Gmail": ("https://mail.google.com/", ("gmail", "mail", "e mail", "email", "courriel", "saññ email", "email yi")),
     "Google Calendar": ("https://calendar.google.com/", ("calendar", "google calendar", "agenda google", "calendrier google", "waxtu yi", "sama agenda")),
-    "Google Drive": ("https://drive.google.com/", ("drive", "google drive", "fichiers google", "sama dokimaan", "documents yi")),
+    "Google Drive": ("https://drive.google.com/", ("drive", "google drive", "fichiers google", "sama dokimaan", "documents yi", "ubbi drive")),
     "WhatsApp Web": ("https://web.whatsapp.com/", ("whatsapp", "wati", "waatsapp", "messages whatsapp")),
     "YouTube": ("https://www.youtube.com/", ("youtube", "video", "vidéos", "wone video")),
     "Google Maps": ("https://maps.google.com/", ("maps", "google maps", "itineraire", "carte", "yoon wi")),
@@ -811,6 +811,29 @@ _NAV_APPS = {
     "Canva": ("https://www.canva.com/", ("canva", "design canva")),
     "Microsoft Word en ligne": ("https://www.office.com/launch/word", ("word", "microsoft word", "traitement de texte")),
     "Google Docs": ("https://docs.google.com/", ("google docs", "docs", "document google")),
+    "Google Sheets": ("https://sheets.google.com/", ("sheets", "google sheets", "tableur")),
+    "Google Slides": ("https://slides.google.com/", ("slides", "google slides", "presentation")),
+    "Google Search": ("https://www.google.com/", ("google", "recherche google", "moteur de recherche")),
+    "Google Photos": ("https://photos.google.com/", ("google photos", "photos")),
+    "Google Meet": ("https://meet.google.com/", ("google meet", "meet", "reunion google")),
+    "Microsoft 365": ("https://www.office.com/", ("office 365", "microsoft 365", "office")),
+    "OneDrive": ("https://onedrive.live.com/", ("onedrive", "one drive")),
+    "Microsoft Excel en ligne": ("https://www.office.com/launch/excel", ("excel", "microsoft excel")),
+    "PowerPoint en ligne": ("https://www.office.com/launch/powerpoint", ("powerpoint", "microsoft powerpoint")),
+    "Telegram Web": ("https://web.telegram.org/", ("telegram", "telegrame")),
+    "LinkedIn": ("https://www.linkedin.com/", ("linkedin", "linkdin")),
+    "X": ("https://x.com/", ("twitter", "x.com", "reseau x")),
+    "Discord": ("https://discord.com/app", ("discord", "discor")),
+    "Reddit": ("https://www.reddit.com/", ("reddit", "redit")),
+    "Amazon": ("https://www.amazon.com/", ("amazon", "amazone")),
+    "Wikipedia": ("https://www.wikipedia.org/", ("wikipedia", "encyclopedie")),
+    "DeepL": ("https://www.deepl.com/translator", ("deepl", "traduction")),
+    "Google Translate": ("https://translate.google.com/", ("google translate", "traducteur google")),
+    "GitHub": ("https://github.com/", ("github", "git hub")),
+    "Coursera": ("https://www.coursera.org/", ("coursera", "cours en ligne")),
+    "Moodle": ("https://moodle.org/", ("moodle", "plateforme de cours")),
+    "Khan Academy": ("https://www.khanacademy.org/", ("khan academy", "khan")),
+    "ChatGPT": ("https://chatgpt.com/", ("chatgpt", "assistant ia", "intelligence artificielle", "seugn bi ak ia")),
 }
 with st.container(border=True):
     _vcol1, _vcol2 = st.columns([3, 2])
@@ -855,7 +878,8 @@ with st.container(border=True):
                 (("email", "e mail", "messagerie", "documents", "assistant email", "assistant mail", "bataaxal", "sama email"), "Assistant e-mail & documents"),
                 (("carriere", "competence", "competences", "formation", "formations", "certification", "stage", "opportunite", "portfolio", "liggey", "sama liggey"), "Compétences & Carrière"),
                 (("productivite", "productivite xxl", "central xxl", "concentration", "projet", "projets", "organisation", "sama projet"), "Centre de productivité XXL"),
-                (("parametre", "parametres", "sauvegarde", "export", "configuration", "tann", "defar"), "Paramètres & sauvegarde"),
+                (("parametre", "parametres", "sauvegarde", "export", "configuration", "tann", "defar", "reglages"), "Paramètres & sauvegarde"),
+                (("recherche globale", "chercher partout", "capture rapide"), "Centre de productivité XXL"),
             ]
             _route = next((r for r in _nav_routes if any(unicodedata.normalize("NFKD", term.lower()).encode("ascii", "ignore").decode("ascii") in _spoken_norm for term in r[0])), None)
             if _route:
@@ -889,7 +913,45 @@ if st.session_state.get("global_voice_nav_message"):
         _speech_lang_js = json.dumps(st.session_state.get("global_voice_nav_speech_lang", "fr-FR"))
         _auto_repeat_js = json.dumps(bool(st.session_state.get("global_voice_nav_auto_repeat", True)))
         _repeat_count_js = json.dumps(int(str(st.session_state.get("global_voice_nav_repeat_count", "2 fois")).split()[0]))
-        st.components.v1.html(f"""<div style='font:14px sans-serif;padding:4px 0;color:#17345c'>🔊 Réponse vocale de Seugn bi <button id='issa-speak-again' type='button' style='margin-left:8px;padding:8px 12px;border-radius:8px;border:1px solid #b8c9e3;background:#edf5ff;cursor:pointer'>▶ Répéter la réponse</button><span id='issa-speech-status' aria-live='polite' style='margin-left:8px'></span></div><script>(function(){{const text={_reply_js};const lang={_speech_lang_js};const autoRepeat={_auto_repeat_js};const repeatCount={_repeat_count_js};let runId=0;function speak(){{if(!('speechSynthesis' in window)){{document.getElementById('issa-speech-status').textContent='La lecture vocale n’est pas prise en charge par ce navigateur.';return;}}runId++;const thisRun=runId;window.speechSynthesis.cancel();let n=0;function sayNext(){{if(thisRun!==runId)return;if(n >= (autoRepeat ? repeatCount : 1)){{document.getElementById('issa-speech-status').textContent='✓ Réponse terminée';return;}}n++;const u=new SpeechSynthesisUtterance(text);u.lang=lang;u.rate=0.92;u.onend=()=>{{if(thisRun===runId)setTimeout(sayNext,450);}};u.onerror=()=>{{document.getElementById('issa-speech-status').textContent='Utilisez le bouton pour relancer la lecture.';}};window.speechSynthesis.speak(u);document.getElementById('issa-speech-status').textContent='Lecture '+n+'/'+(autoRepeat ? repeatCount : 1);}}sayNext();}}document.getElementById('issa-speak-again').addEventListener('click',speak);speak();}})();</script>""", height=65)
+        st.components.v1.html(f"""<div style='font:14px sans-serif;padding:4px 0;color:#17345c'>🔊 Réponse vocale de Seugn bi <button id='issa-speak-again' type='button' style='margin-left:8px;padding:8px 12px;border-radius:8px;border:1px solid #b8c9e3;background:#edf5ff;cursor:pointer'>▶ Répéter la réponse</button><span id='issa-speech-status' aria-live='polite' style='margin-left:8px'></span></div><script>(function(){{const text={_reply_js};const lang={_speech_lang_js};const autoRepeat={_auto_repeat_js};const repeatCount={_repeat_count_js};let runId=0;function speak(){{if(!('speechSynthesis' in window)){{document.getElementById('issa-speech-status').textContent='La lecture vocale n’est pas prise en charge par ce navigateur.';return;}}runId++;const thisRun=runId;window.speechSynthesis.cancel();let n=0;function sayNext(){{if(thisRun!==runId)return;if(n >= (autoRepeat ? repeatCount : 1)){{document.getElementById('issa-speech-status').textContent='✓ Réponse terminée';return;}}n++;const u=new SpeechSynthesisUtterance(text);u.lang=lang;u.rate=0.88;u.pitch=1.02;u.volume=0.92;const voices=window.speechSynthesis.getVoices();const preferred=voices.find(v=>v.lang.toLowerCase()===lang.toLowerCase())||voices.find(v=>v.lang.toLowerCase().startsWith(lang.split('-')[0].toLowerCase()));if(preferred)u.voice=preferred;u.onend=()=>{{if(thisRun===runId)setTimeout(sayNext,450);}};u.onerror=()=>{{document.getElementById('issa-speech-status').textContent='Utilisez le bouton pour relancer la lecture.';}};window.speechSynthesis.speak(u);document.getElementById('issa-speech-status').textContent='Lecture '+n+'/'+(autoRepeat ? repeatCount : 1);}}sayNext();}}document.getElementById('issa-speak-again').addEventListener('click',speak);speak();}})();</script>""", height=65)
+
+# ---------- Centre de lancement XXL : sites, applications web et fonctions internes ----------
+st.markdown('<div class="issa-nav-title">🚀 Lanceur universel XXL · Applications, sites et outils</div>', unsafe_allow_html=True)
+with st.container(border=True):
+    st.markdown("**Ouvrir rapidement un service**")
+    _launcher_categories = {
+        "Communication": ["Gmail", "WhatsApp Web", "Telegram Web", "Outlook", "Microsoft Teams", "Zoom", "Google Meet", "Discord"],
+        "Google & Microsoft": ["Google Drive", "Google Calendar", "Google Docs", "Google Sheets", "Google Slides", "Google Photos", "Microsoft 365", "OneDrive", "Microsoft Word en ligne", "Microsoft Excel en ligne", "PowerPoint en ligne"],
+        "Réseaux & médias": ["YouTube", "Facebook", "Instagram", "TikTok", "Spotify", "LinkedIn", "X", "Reddit"],
+        "Études & création": ["ChatGPT", "Canva", "Notion", "Coursera", "Moodle", "Khan Academy", "Wikipedia", "DeepL", "Google Translate", "GitHub"],
+        "Web & achats": ["Google Search", "Google Maps", "Amazon"],
+    }
+    _launch_tab_names = list(_launcher_categories)
+    _launch_tabs = st.tabs(_launch_tab_names)
+    for _tab, _category in zip(_launch_tabs, _launch_tab_names):
+        with _tab:
+            _names = _launcher_categories[_category]
+            _cols = st.columns(4)
+            for _idx, _app in enumerate(_names):
+                _app_url = _NAV_APPS[_app][0]
+                with _cols[_idx % 4]:
+                    st.link_button("↗ " + _app, _app_url, use_container_width=True)
+    st.markdown("**Ouvrir n’importe quel site**")
+    _custom_site = st.text_input("Adresse du site ou nom de domaine", placeholder="Ex. : https://www.senegalservices.sn ou wikipedia.org", key="issa_custom_site")
+    if st.button("🌐 Ouvrir ce site", key="issa_open_custom_site", disabled=not _custom_site.strip(), use_container_width=True):
+        from urllib.parse import urlparse
+        _candidate = _custom_site.strip()
+        if not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", _candidate):
+            _candidate = "https://" + _candidate
+        _parsed = urlparse(_candidate)
+        if _parsed.scheme in ("http", "https") and _parsed.netloc and "." in _parsed.netloc and not any(ch.isspace() for ch in _candidate):
+            st.session_state["issa_custom_site_validated"] = _candidate
+        else:
+            st.error("Adresse invalide. Entre un domaine comme exemple.com ou une adresse commençant par https://.")
+    if st.session_state.get("issa_custom_site_validated"):
+        st.link_button("🚀 Continuer vers " + st.session_state["issa_custom_site_validated"], st.session_state["issa_custom_site_validated"], use_container_width=True)
+    st.caption("Les liens ouvrent des services web dans un nouvel onglet selon le navigateur. Pour des logiciels installés sur le téléphone/PC, le navigateur exige une intégration native et une autorisation : aucun site Streamlit ne peut lancer librement toutes les applications locales.")
+
 st.markdown('<div class="issa-nav-title">Menu principal · Choisissez aussi par clic</div>',unsafe_allow_html=True)
 if 'top_nav' not in st.session_state: st.session_state['top_nav']=PAGES[0]
 st.radio('Navigation principale',PAGES,format_func=lambda x:PAGE_SHORT[x],horizontal=True,label_visibility='collapsed',key='top_nav')
