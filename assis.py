@@ -88,6 +88,50 @@ div[role="radiogroup"] label:has(input:checked){{background:#eaf2ff;border-color
 .issa-role-pill{{display:inline-flex;align-items:center;gap:6px;border:1px solid rgba(255,255,255,.24);background:rgba(255,255,255,.1);border-radius:999px;padding:7px 11px;font-size:.78rem;color:#f4f8ff}}
 @media(max-width:700px){{.issa-brand{{padding:20px;border-radius:18px}}.cc-hero{{padding:18px}}.block-container{{padding-left:1rem;padding-right:1rem}}div[role="radiogroup"] label{{padding:6px 8px!important;font-size:.8rem}}}}
 
+/* Nettoyage de l'en-tête Streamlit : masque uniquement les commandes de la plateforme
+   (Stop/Share/favori/édition/GitHub/menu), sans toucher au contenu de l'application. */
+header[data-testid="stHeader"],
+[data-testid="stToolbar"],
+[data-testid="stDecoration"],
+[data-testid="stStatusWidget"],
+[data-testid="stAppDeployButton"],
+#MainMenu,
+footer{{display:none!important;visibility:hidden!important;height:0!important;min-height:0!important;pointer-events:none!important}}
+[data-testid="stMainBlockContainer"]{{padding-top:1.15rem!important}}
+
+/* Mise en page adaptative XXL : ordinateur, tablette et téléphone. */
+@media (min-width:769px) and (max-width:1100px){{
+  .block-container{{padding-left:1.25rem!important;padding-right:1.25rem!important}}
+  [data-testid="stHorizontalBlock"]{{flex-wrap:wrap!important;gap:.8rem!important}}
+  [data-testid="stHorizontalBlock"]>[data-testid="column"]{{flex:1 1 calc(50% - .8rem)!important;min-width:calc(50% - .8rem)!important}}
+  .issa-brand{{padding:24px!important}}
+}}
+@media (max-width:768px){{
+  html,body,[data-testid="stAppViewContainer"]{{overflow-x:hidden!important}}
+  [data-testid="stAppViewContainer"]{{background-attachment:scroll!important}}
+  .block-container,[data-testid="stMainBlockContainer"]{{padding-left:.75rem!important;padding-right:.75rem!important;padding-top:.65rem!important}}
+  [data-testid="stHorizontalBlock"]{{display:flex!important;flex-wrap:wrap!important;gap:.7rem!important}}
+  [data-testid="stHorizontalBlock"]>[data-testid="column"]{{flex:1 1 100%!important;min-width:100%!important;width:100%!important}}
+  .issa-brand{{padding:19px 17px!important;border-radius:18px!important;margin-bottom:12px!important}}
+  .issa-brand h1{{font-size:1.65rem!important;line-height:1.15!important}}
+  .issa-brand p,.cc-sub{{font-size:.9rem!important}}
+  .cc-hero{{padding:16px!important;border-radius:17px!important}}
+  .cc-title{{font-size:1.4rem!important}}
+  .cc-card{{padding:14px!important}}
+  .issa-main-menu-head{{padding:17px!important;border-radius:17px!important;margin-top:12px!important}}
+  .issa-main-menu-title{{font-size:1.45rem!important}}
+  [data-testid="stTabs"] [data-baseweb="tab-list"]{{overflow-x:auto!important;flex-wrap:nowrap!important;scrollbar-width:thin!important}}
+  [data-testid="stTabs"] button[role="tab"]{{white-space:nowrap!important;min-height:42px!important;padding:8px 11px!important}}
+  div[role="radiogroup"]{{gap:.4rem!important}}
+  div[role="radiogroup"] label{{padding:8px 10px!important;font-size:.82rem!important;min-height:40px!important}}
+  .stButton>button,[data-testid="stLinkButton"] a,[data-testid="stDownloadButton"] button{{width:100%!important;min-height:44px!important;white-space:normal!important;line-height:1.2!important}}
+  [data-testid="stTextInput"] input,[data-testid="stTextArea"] textarea,[data-testid="stSelectbox"] input{{font-size:16px!important}}
+  [data-testid="stDataFrame"],[data-testid="stTable"]{{max-width:100%!important;overflow-x:auto!important}}
+  [data-testid="stImage"] img{{max-width:100%!important;height:auto!important}}
+  .issa-footer{{padding:14px!important;border-radius:15px!important}}
+}}
+@media (prefers-reduced-motion:reduce){{*,*::before,*::after{{scroll-behavior:auto!important;animation:none!important;transition:none!important}}}}
+
 .issa-main-menu-head{{margin:22px 0 12px;padding:20px 24px;border-radius:22px;background:linear-gradient(115deg,#10213c 0%,#1b4b83 58%,#087e91 100%);box-shadow:0 12px 28px rgba(16,33,60,.16);color:#fff}}
 .issa-main-menu-kicker{{font-size:.72rem;font-weight:850;letter-spacing:.16em;color:#a9dff0;margin-bottom:5px}}
 .issa-main-menu-title{{font-size:clamp(1.45rem,2.5vw,2.15rem);font-weight:900;letter-spacing:-.035em;line-height:1.12}}
@@ -1249,6 +1293,27 @@ if _logout_col.button('🔒 Déconnexion', key='issa_logout'):
     st.session_state['issa_authenticated'] = False
     st.rerun()
 st.markdown(f'<div class="cc-card" style="padding:12px 16px;margin:10px 0 16px"><div class="cc-eyebrow">Votre secrétaire spécialisé</div><div style="font-size:1.05rem;font-weight:800;color:#17345c;margin-top:4px">🧭 {PAGE_ROLE[page]}</div></div>',unsafe_allow_html=True)
+
+# Assistance XXL : raccourcis d'aide utilisables sur ordinateur, tablette et mobile.
+with st.expander("🆘 Assistance XXL — aide rapide", expanded=False):
+    st.markdown("""
+    **Besoin d'aide ?** Choisis l'assistant adapté à ta tâche. Les raccourcis changent directement de rubrique.
+    - **Assistant de vie** : organisation personnelle, objectifs, habitudes et tâches.
+    - **Assistant e-mail & documents** : rédaction, messagerie et documents.
+    - **Centre de productivité XXL** : concentration, projets, notes et outils de travail.
+    """)
+    _help_cols = st.columns(3)
+    _help_targets = [
+        ("👤 Assistant de vie", "Assistant de vie", "👤 VIE & ASSISTANCE"),
+        ("✉️ E-mails & documents", "Assistant e-mail & documents", "👤 VIE & ASSISTANCE"),
+        ("🧠 Productivité XXL", "Centre de productivité XXL", "🚀 CARRIÈRE & PRODUCTIVITÉ"),
+    ]
+    for _help_col, (_help_label, _help_page, _help_group) in zip(_help_cols, _help_targets):
+        with _help_col:
+            if st.button(_help_label, key="help_xxl_" + _help_page, use_container_width=True):
+                st.session_state["issa_nav_group"] = _help_group
+                st.session_state["issa_nav_subpage"] = _help_page
+                st.rerun()
 
 # RAPPELS TRANSVERSAUX : visibles depuis TOUS les onglets, sans ressaisie.
 try:
