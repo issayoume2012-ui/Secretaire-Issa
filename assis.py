@@ -445,26 +445,34 @@ def _auto_migrate_local_sqlite_to_supabase():
 
 
 @st.cache_resource(show_spinner=False)
-def _initialize_schema_once():
-    """Crée les tables Supabase puis importe automatiquement l'ancienne base SQLite."""
+def _initialize_schema_once(config_fingerprint):
+    """Initialise le schéma une seule fois par configuration Supabase et par processus."""
     expected = _ensure_app_schema()
     migration_result = _auto_migrate_local_sqlite_to_supabase()
     return {"tables": sorted(expected), "migration": migration_result}
 
-with st.spinner("Connexion et initialisation de Supabase PostgreSQL…" if DB_BACKEND in {"postgres", "postgresql", "supabase"} else "Initialisation de la base SQLite locale…"):
+# Streamlit réexécute le fichier à chaque interaction. Le garde-fou de session
+# évite de relancer la connexion, les CREATE TABLE et le contrôle de migration
+# à chaque clic. Le cache global évite aussi de répéter l'initialisation entre
+# plusieurs sessions du même processus.
+if "issa_database_tables_ready" not in st.session_state:
     try:
-        _db_init_result = _initialize_schema_once()
-        _expected_app_tables = _db_init_result["tables"]
-        st.session_state["issa_database_tables_ready"] = _expected_app_tables
+        _db_config_for_cache = _postgres_config() if DB_BACKEND in {"postgres", "postgresql", "supabase"} else {"backend": "sqlite", "path": str(DB_PATH)}
+        _db_config_fingerprint = hashlib.sha256(
+            json.dumps(_db_config_for_cache, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()
+        _db_init_result = _initialize_schema_once(_db_config_fingerprint)
+        st.session_state["issa_database_tables_ready"] = _db_init_result["tables"]
         _migration_info = _db_init_result.get("migration", {})
+        # Message uniquement après une véritable première migration ; aucun
+        # message de connexion n'est imprimé pendant les reruns ordinaires.
         if _migration_info.get("status") == "migrated":
-            st.success(f"Migration automatique SQLite → Supabase terminée : {_migration_info.get('rows', 0)} ligne(s) importée(s) dans {_migration_info.get('tables', 0)} table(s). La base locale d’origine est conservée.")
-        elif _migration_info.get("status") == "already_done":
-            st.caption("Migration SQLite → Supabase déjà effectuée : aucune réimportation, aucun doublon ajouté.")
-        elif _migration_info.get("status") in {"absent", "empty"}:
-            st.info("Les tables Supabase sont prêtes. Pour transférer tes anciennes données, place le fichier campus_clair.db à côté de ce fichier Python puis redémarre l’application.")
+            st.toast(
+                f"Migration terminée : {_migration_info.get('rows', 0)} ligne(s) importée(s).",
+                icon="✅"
+            )
     except Exception as exc:
-        st.error("Initialisation de la base impossible. Vérifie les paramètres Supabase, le mot de passe et la dépendance psycopg2-binary. Détail technique : " + str(exc)[:500])
+        st.error("La base de données n'a pas pu être initialisée. Vérifie les secrets Supabase et la dépendance psycopg2-binary. Détail : " + str(exc)[:350])
         st.stop()
 
 
@@ -2217,12 +2225,9 @@ elif page=="Paramètres & sauvegarde":
     _ = header('PARAMÈTRES & DONNÉES','Paramètres & sauvegarde','Les données sont centralisées dans Supabase PostgreSQL ; les tables nécessaires sont créées automatiquement.' if DB_BACKEND in {'postgres','postgresql','supabase'} else 'Les données sont enregistrées dans une base SQLite locale.')
     st.success('Base active : Supabase PostgreSQL · projet ubxfgbneqmvrblgcyiqi. Les tables sont créées automatiquement ; aucune table existante n’est supprimée.' if DB_BACKEND in {'postgres','postgresql','supabase'} else f'Base active : SQLite locale · {DB_PATH.name}.')
     tables={'Matières':'subjects','Emploi du temps':'events','Tâches':'tasks','Ressources archivées (ancien espace)':'documents','Journal d’étude':'study_logs','Objectifs':'goals','Habitudes':'habits','Historique habitudes':'habit_logs','Budget':'budgets','Notes personnelles':'life_notes','Contacts':'contacts','Compétences':'career_skills','Formations':'career_training','Opportunités professionnelles':'career_opportunities','Rappels e-mail':'reminders','Projets du Central':'productivity_projects','Flashcards':'flashcards','Séances de concentration':'focus_sessions','Journal quotidien':'daily_journal','Comptes rendus':'meeting_minutes','Organisateur de vie':'life_organizer'}
-    # Vérification défensive : une base ancienne ou partiellement déployée ne doit
-    # jamais faire planter toute la page de sauvegarde.
-    try:
-        _ensure_app_schema()
-    except Exception as schema_exc:
-        st.warning('Certaines tables n’ont pas pu être initialisées. Les exports disponibles restent accessibles. Détail : ' + str(schema_exc)[:250])
+    # Le schéma a déjà été initialisé une fois au démarrage de la session.
+    # Ne pas rappeler _ensure_app_schema() ici : cette page se rerend à chaque
+    # interaction et cela provoquerait des connexions PostgreSQL inutiles.
     with connect() as _db_check:
         if DB_BACKEND in {"postgres", "postgresql", "supabase"}:
             _available_tables = {row['name'] for row in _db_check.execute("SELECT table_name AS name FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'").fetchall()}
@@ -2239,21 +2244,8 @@ elif page=="Paramètres & sauvegarde":
         except Exception as db_exc:
             st.warning(f'Export temporairement indisponible pour « {label} » : {str(db_exc)[:200]}')
     st.info('Les données sont stockées dans Supabase PostgreSQL. Utilise les exports CSV ci-dessus et les sauvegardes automatiques de Supabase pour les restaurer.' if DB_BACKEND in {'postgres','postgresql','supabase'} else 'Pour sauvegarder toutes les données, copie le fichier campus_clair.db après avoir arrêté l’application. Les exports CSV restent disponibles.')
-    # Diagnostic visible en rouge : distingue les réparations faites dans SQLite
-    # des valeurs détectées à la lecture et neutralisées par le code Python.
-    st.markdown("### Diagnostic des valeurs `None` / `NULL`")
-    if _NONE_REPAIR_LOG or _NONE_RUNTIME_LOG:
-        st.error("Des valeurs manquantes ont été repérées. Le détail ci-dessous indique leur origine et les colonnes concernées.")
-        if _NONE_REPAIR_LOG:
-            st.markdown("**Origine : SQLite locale (valeurs corrigées au démarrage)**")
-            for item in _NONE_REPAIR_LOG:
-                st.markdown(f'<div style="color:#b91c1c;font-weight:700;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:8px;margin:4px 0">SQLite · table <code>{item["table"]}</code> · colonne <code>{item["column"]}</code> · {item["count"]} ligne(s) corrigée(s)</div>', unsafe_allow_html=True)
-        if _NONE_RUNTIME_LOG:
-            st.markdown("**Origine : lecture SQL / code Python (valeurs neutralisées avant affichage)**")
-            for item in _NONE_RUNTIME_LOG:
-                st.markdown(f'<div style="color:#b91c1c;font-weight:700;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:8px;margin:4px 0">Code / SQL · table <code>{item["table"]}</code> · colonne <code>{item["column"]}</code> · {item["count"]} valeur(s) détectée(s)</div>', unsafe_allow_html=True)
-    else:
-        st.success("Aucune valeur None/NULL suspecte n’a été détectée pendant cette session.")
+    # Les valeurs manquantes sont nettoyées silencieusement avant affichage.
+    # Le diagnostic technique est volontairement masqué pour garder une interface propre.
     st.markdown('### Dépendances facultatives')
     st.code('streamlit\npandas\nSpeechRecognition>=3.10.0\nstreamlit-mic-recorder>=0.0.8\nopenpyxl\nPyMuPDF\npython-docx',language='text')
     st.caption('openpyxl permet les imports Excel. PyMuPDF permet de lire le texte des PDF. L’application reste utilisable sans ces deux dépendances si tu utilises CSV et la saisie manuelle.')
