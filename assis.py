@@ -76,11 +76,11 @@ div[role="radiogroup"] label:has(input:checked){{background:#eaf2ff;border-color
 .issa-role-pill{{display:inline-flex;align-items:center;gap:6px;border:1px solid rgba(255,255,255,.24);background:rgba(255,255,255,.1);border-radius:999px;padding:7px 11px;font-size:.78rem;color:#f4f8ff}}
 @media(max-width:700px){{.issa-brand{{padding:20px;border-radius:18px}}.cc-hero{{padding:18px}}.block-container{{padding-left:1rem;padding-right:1rem}}div[role="radiogroup"] label{{padding:6px 8px!important;font-size:.8rem}}}}
 
-.issa-main-menu-head{margin:22px 0 12px;padding:20px 24px;border-radius:22px;background:linear-gradient(115deg,#10213c 0%,#1b4b83 58%,#087e91 100%);box-shadow:0 12px 28px rgba(16,33,60,.16);color:#fff}
-.issa-main-menu-kicker{font-size:.72rem;font-weight:850;letter-spacing:.16em;color:#a9dff0;margin-bottom:5px}
-.issa-main-menu-title{font-size:clamp(1.45rem,2.5vw,2.15rem);font-weight:900;letter-spacing:-.035em;line-height:1.12}
-.issa-main-menu-subtitle{font-size:.94rem;color:#e1efff;margin-top:7px}
-.issa-subnav-label{font-size:.72rem;font-weight:850;letter-spacing:.13em;color:#54749c;margin:16px 0 7px}
+.issa-main-menu-head{{margin:22px 0 12px;padding:20px 24px;border-radius:22px;background:linear-gradient(115deg,#10213c 0%,#1b4b83 58%,#087e91 100%);box-shadow:0 12px 28px rgba(16,33,60,.16);color:#fff}}
+.issa-main-menu-kicker{{font-size:.72rem;font-weight:850;letter-spacing:.16em;color:#a9dff0;margin-bottom:5px}}
+.issa-main-menu-title{{font-size:clamp(1.45rem,2.5vw,2.15rem);font-weight:900;letter-spacing:-.035em;line-height:1.12}}
+.issa-main-menu-subtitle{{font-size:.94rem;color:#e1efff;margin-top:7px}}
+.issa-subnav-label{{font-size:.72rem;font-weight:850;letter-spacing:.13em;color:#54749c;margin:16px 0 7px}}
 /* Les grands espaces sont volontairement plus hauts et plus visibles que les sous-onglets. */
 
 </style>""", unsafe_allow_html=True)
