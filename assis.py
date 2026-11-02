@@ -47,6 +47,26 @@ st.markdown(f"""
 div[role="radiogroup"]{{gap:.35rem;flex-wrap:wrap}}
 div[role="radiogroup"] label{{background:#fff;border:1px solid #dce6f3;border-radius:12px;padding:8px 12px!important;font-weight:700;box-shadow:0 2px 7px rgba(16,33,60,.035)}}
 div[role="radiogroup"] label:has(input:checked){{background:#eaf2ff;border-color:#7ca8e6;color:#164b93}}
+/* Habillage premium : surfaces nettes, hiérarchie visuelle et navigation lisible. */
+[data-testid="stAppViewContainer"]{{background-color:#edf3fb;background-image:linear-gradient(135deg,rgba(247,250,255,.82),rgba(235,243,253,.88)),{_BACKGROUND_CSS};background-size:cover;background-position:center;background-attachment:fixed;background-repeat:no-repeat}}
+[data-testid="stMainBlockContainer"]{{padding-top:1.35rem}}
+.issa-brand{{background:linear-gradient(118deg,#0b1830 0%,#173d70 48%,#087e91 100%);border:1px solid rgba(255,255,255,.18);border-radius:26px;padding:30px 32px;margin-bottom:20px;box-shadow:0 18px 42px rgba(13,38,75,.22)}}
+.issa-brand:before{{content:"";position:absolute;width:270px;height:270px;right:-65px;bottom:-190px;border:1px solid rgba(255,255,255,.17);border-radius:50%;box-shadow:0 0 0 28px rgba(255,255,255,.035),0 0 0 58px rgba(255,255,255,.025)}}
+.issa-brand h1{{letter-spacing:-.045em;text-shadow:0 2px 12px rgba(0,0,0,.12)}}
+.cc-hero{{background:linear-gradient(125deg,rgba(255,255,255,.97),rgba(239,246,255,.96));border:1px solid rgba(190,210,237,.8);border-radius:22px;padding:24px 27px;box-shadow:0 10px 28px rgba(26,55,96,.065)}}
+.cc-card{{border:1px solid rgba(206,219,237,.9);border-radius:20px;background:rgba(255,255,255,.96);box-shadow:0 9px 25px rgba(25,45,80,.055);transition:transform .18s ease,box-shadow .18s ease}}
+.cc-card:hover{{transform:translateY(-2px);box-shadow:0 14px 30px rgba(25,45,80,.09)}}
+[data-testid="stVerticalBlockBorderWrapper"]{{border:1px solid rgba(197,213,235,.9)!important;border-radius:20px!important;background:rgba(255,255,255,.88)!important;box-shadow:0 8px 24px rgba(25,45,80,.045)}}
+[data-testid="stTabs"] [data-baseweb="tab-list"]{{gap:8px;border-bottom:1px solid #dce6f3;padding:4px 2px 10px}}
+[data-testid="stTabs"] button[role="tab"]{{border:1px solid #dce6f3;border-radius:12px;background:#f8fbff;padding:9px 14px;font-weight:750}}
+[data-testid="stTabs"] button[role="tab"][aria-selected="true"]{{background:#e9f2ff;border-color:#8fb4e6;color:#174b8e}}
+.stButton>button,[data-testid="stLinkButton"] a{{border-radius:13px!important;font-weight:750!important;min-height:2.7rem;box-shadow:0 3px 10px rgba(20,55,100,.045)}}
+.stButton>button[kind="primary"]{{background:linear-gradient(110deg,#174b8e,#087e91);border:0;color:white}}
+[data-testid="stTextInput"] input,[data-testid="stTextArea"] textarea,[data-testid="stSelectbox"] [data-baseweb="select"]>div{{border-radius:12px!important;border-color:#d4e0ef!important;background:#fff}}
+[data-testid="stAlert"]{{border-radius:14px}}
+.issa-nav-title{{display:flex;align-items:center;gap:9px;margin:22px 0 10px;color:#244d7e;font-size:.78rem;letter-spacing:.105em}}
+.issa-footer{{box-shadow:0 10px 26px rgba(16,33,60,.14)}}
+@media(max-width:700px){{.issa-brand{{padding:22px 20px}}[data-testid="stTabs"] [data-baseweb="tab-list"]{{overflow-x:auto}}}}
 .issa-nav-title{{font-size:.72rem;font-weight:850;text-transform:uppercase;letter-spacing:.12em;color:#52709a;margin:8px 0 5px}}
 .issa-footer{{background:#10213c;color:#eaf2ff;border-radius:18px;padding:16px 20px;margin-top:24px}}
 .issa-footer strong{{color:#fff}}.issa-footer small{{color:#bfd2eb}}
@@ -789,7 +809,6 @@ PAGE_ROLE={
     "Paramètres & sauvegarde":"Secrétaire chargé des paramètres, des exports et de la sauvegarde des données"
 }
 st.markdown('''<div class="issa-brand"><span class="issa-badge">Organisation · Pédagogie · Assistance</span><h1>🗂️ Secrétaire Issa</h1><p>Votre espace de secrétariat intelligent : chaque espace correspond à un secrétaire chargé d’une mission précise.</p></div>''',unsafe_allow_html=True)
-st.markdown('<div class="issa-nav-title">🎙️ Seugn bi · Navigation vocale intelligente — Parlez français ou wolof</div>',unsafe_allow_html=True)
 # Navigation vocale bilingue + lanceur d'applications externes. Les applications s'ouvrent dans un nouvel onglet via des liens explicites.
 _NAV_APPS = {
     "Gmail": ("https://mail.google.com/", ("gmail", "mail", "e mail", "email", "courriel", "saññ email", "email yi")),
@@ -834,70 +853,6 @@ _NAV_APPS = {
     "Khan Academy": ("https://www.khanacademy.org/", ("khan academy", "khan")),
     "ChatGPT": ("https://chatgpt.com/", ("chatgpt", "assistant ia", "intelligence artificielle", "seugn bi ak ia")),
 }
-with st.container(border=True):
-    _vcol1, _vcol2 = st.columns([3, 2])
-    with _vcol1:
-        _nav_language_label = st.selectbox("Làkk bu ndigal / Langue de commande", ["Wolof", "Français"], key="global_voice_nav_language", help="Tontu yi dañuy nekk ci Wolof ci bind. Waxal walla bind sa ndigal.")
-        _nav_lang_code = "fr-FR" if _nav_language_label == "Français" else "wo-SN"
-        _nav_audio = st.audio_input("🎙️ Enregistrez votre commande / Waxal sa ndigal", key="global_voice_navigation_audio")
-        _nav_text = st.text_input("⌨️ Ou tapez votre demande / Wallaa nga bind", placeholder="Ex. : Ouvre l’emploi du temps · Ubbi sama emploi du temps · Ouvre Gmail", key="global_voice_navigation_text")
-        _nav_go = st.button("✨ Seugn bi, déggal te defal", key="global_voice_navigation_go", use_container_width=True, type="primary", disabled=(_nav_audio is None and not _nav_text.strip()))
-        st.caption("Seugn bi man na ubbi ay site ci web. Ngir ay application yu nekk ci sa telefon walla ordinateur, dafay aju ci sa appareil ak sa ndigal.")
-    with _vcol2:
-        st.markdown("**Jéemal ndigal yii**")
-        st.markdown("- « Ubbi sama planning » · « Demal ci révisions » · « Ubbi Gmail »")
-        st.markdown("- « Ubbi WhatsApp » · « Demal ci carrière » · « Ubbi sama tableau de bord »")
-        st.caption("Tontu yi ci Wolof lañu, ci bind rekk. Seugn bi du jàng leen ci baat.")
-    if _nav_go and (_nav_audio is not None or _nav_text.strip()):
-        try:
-            _spoken_nav = transcribe_audio(_nav_audio, language=_nav_lang_code) if _nav_audio is not None else _nav_text.strip()
-            _spoken_norm = unicodedata.normalize("NFKD", _spoken_nav.lower()).encode("ascii", "ignore").decode("ascii")
-            _spoken_norm = re.sub(r"[^a-z0-9 ]+", " ", _spoken_norm)
-            _app_match = next(((name, url) for name, (url, terms) in _NAV_APPS.items() if any(unicodedata.normalize("NFKD", term.lower()).encode("ascii", "ignore").decode("ascii") in _spoken_norm for term in terms)), None)
-            if _app_match:
-                _app_name, _app_url = _app_match
-                _reply = f"Seugn bi: Waaw, maa ngi lay won yoon wi ngir nga ubbi {_app_name}. Cuqal ci butoŋ bi ci suuf."
-
-                st.session_state["global_voice_nav_app"] = _app_name
-                st.session_state["global_voice_nav_app_url"] = _app_url
-                st.session_state["global_voice_nav_message"] = _reply
-                st.session_state["global_voice_nav_speak"] = _reply
-                st.rerun()
-            _nav_routes = [
-                (("accueil", "vue d ensemble", "vue ensemble", "home", "tableau de bord general", "kaay ci kanam", "dalal ak jamm"), "Vue d’ensemble"),
-                (("matiere", "matieres", "maquette", "maquettes", "academie", "ue", "jàng", "njàng"), "Maquettes & matières"),
-                (("emploi du temps", "planning", "agenda", "calendrier", "cours", "sama waxtu", "waxtu yi", "cours yi"), "Emploi du temps"),
-                (("revision", "revisions", "programme de revision", "programmes de revision", "jàngaat", "jàngaat yi"), "Programmes de révision"),
-                (("progression", "suivi", "resultats", "heures etude", "sama progrès", "ñu tollu"), "Suivi & progression"),
-                (("vie personnelle", "assistant de vie", "budget", "contacts", "habitudes", "objectifs", "sama dund", "sama xaalis"), "Assistant de vie"),
-                (("rappel", "rappels", "echeance", "rappels automatiques", "fàttali", "fàttalil ma"), "Rappels automatiques"),
-                (("email", "e mail", "messagerie", "documents", "assistant email", "assistant mail", "bataaxal", "sama email"), "Assistant e-mail & documents"),
-                (("carriere", "competence", "competences", "formation", "formations", "certification", "stage", "opportunite", "portfolio", "liggey", "sama liggey"), "Compétences & Carrière"),
-                (("productivite", "productivite xxl", "central xxl", "concentration", "projet", "projets", "organisation", "sama projet"), "Centre de productivité XXL"),
-                (("parametre", "parametres", "sauvegarde", "export", "configuration", "tann", "defar", "reglages"), "Paramètres & sauvegarde"),
-                (("recherche globale", "chercher partout", "capture rapide"), "Centre de productivité XXL"),
-            ]
-            _route = next((r for r in _nav_routes if any(unicodedata.normalize("NFKD", term.lower()).encode("ascii", "ignore").decode("ascii") in _spoken_norm for term in r[0])), None)
-            if _route:
-                st.session_state["top_nav"] = _route[1]
-                _reply = f"Seugn bi dégg na la: « {_spoken_nav} ». Maa ngi lay yóbbu ci {_route[1]}."
-                st.session_state["global_voice_nav_message"] = _reply
-                st.session_state["global_voice_nav_speak"] = _reply
-                st.session_state.pop("global_voice_nav_app", None)
-                st.session_state.pop("global_voice_nav_app_url", None)
-                st.rerun()
-            _unknown_reply = f"Seugn bi dégg na la: « {_spoken_nav} ». Xamuma ndigal li. Waxal turu barab bi nga bëgg ubbi, walla nga bind turu app bi: Gmail, Drive, WhatsApp, YouTube walla ChatGPT."
-            st.session_state["global_voice_nav_message"] = _unknown_reply
-            st.session_state["global_voice_nav_speak"] = _unknown_reply
-            st.rerun()
-        except Exception as _nav_err:
-            st.error(f"Commande vocale indisponible : {_nav_err}")
-if st.session_state.get("global_voice_nav_message"):
-    st.success(st.session_state["global_voice_nav_message"])
-    if st.session_state.get("global_voice_nav_app_url"):
-        st.link_button(f"🚀 Ubbi {st.session_state.get('global_voice_nav_app', 'app bi')}", st.session_state["global_voice_nav_app_url"], use_container_width=True)
-    st.caption("Tontu yi dañuy ñëw ci bind rekk. Seugn bi du jàng tontu yi ci baat.")
-
 # ---------- Centre de lancement XXL : sites, applications web et fonctions internes ----------
 st.markdown('<div class="issa-nav-title">🚀 Lanceur universel XXL · Applications, sites et outils</div>', unsafe_allow_html=True)
 with st.container(border=True):
@@ -935,7 +890,7 @@ with st.container(border=True):
         st.link_button("🚀 Continuer vers " + st.session_state["issa_custom_site_validated"], st.session_state["issa_custom_site_validated"], use_container_width=True)
     st.caption("Les liens ouvrent des services web dans un nouvel onglet selon le navigateur. Pour des logiciels installés sur le téléphone/PC, le navigateur exige une intégration native et une autorisation : aucun site Streamlit ne peut lancer librement toutes les applications locales.")
 
-st.markdown('<div class="issa-nav-title">Menu principal · Choisissez aussi par clic</div>',unsafe_allow_html=True)
+st.markdown('<div class="issa-nav-title">🧭 MENU PRINCIPAL · Accédez facilement à chaque espace</div>',unsafe_allow_html=True)
 if 'top_nav' not in st.session_state: st.session_state['top_nav']=PAGES[0]
 st.selectbox('Tànnal barab bi nga bëgg / Aller à une rubrique',PAGES,format_func=lambda x:PAGE_SHORT[x],key='top_nav')
 page=st.session_state['top_nav']
