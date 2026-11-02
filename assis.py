@@ -872,6 +872,95 @@ _NAV_APPS = {
     "Khan Academy": ("https://www.khanacademy.org/", ("khan academy", "khan")),
     "ChatGPT": ("https://chatgpt.com/", ("chatgpt", "assistant ia", "intelligence artificielle", "seugn bi ak ia")),
 }
+# ---------- Mode concentration renforcé : verrouillage de la navigation dans le site ----------
+# Le verrouillage est volontairement limité à cette application web. Un site Streamlit
+# ne peut pas bloquer Windows/macOS, Alt+Tab, le gestionnaire des tâches ou les autres apps.
+_focus_until = float(st.session_state.get("issa_focus_until", 0) or 0)
+_focus_active = bool(st.session_state.get("issa_focus_active", False))
+if _focus_active and _focus_until and time_module.time() >= _focus_until:
+    if not st.session_state.get("issa_focus_logged", False):
+        _elapsed = max(1, int((time_module.time() - float(st.session_state.get("issa_focus_started", time_module.time()))) / 60))
+        try:
+            run(
+                'INSERT INTO focus_sessions(session_date,duration_minutes,activity,notes) VALUES(?,?,?,?)',
+                (date.today().isoformat(), _elapsed, str(st.session_state.get("issa_focus_activity", "Étude")), str(st.session_state.get("issa_focus_notes", "Séance chronométrée")))
+            )
+        except Exception:
+            pass
+        st.session_state["issa_focus_logged"] = True
+    st.session_state["issa_focus_active"] = False
+    st.session_state["issa_focus_until"] = 0
+    st.session_state["issa_focus_expired"] = True
+    _focus_active = False
+
+if _focus_active:
+    _remaining = max(0, int(_focus_until - time_module.time()))
+    st.markdown('''
+    <div style="padding:26px;border-radius:24px;background:linear-gradient(120deg,#10213c,#174b76,#087e91);color:white;margin:10px 0 20px">
+      <div style="font-size:.78rem;letter-spacing:.15em;font-weight:800;opacity:.85">MODE CONCENTRATION · SESSION EN COURS</div>
+      <h1 style="color:white;margin:.35rem 0">🎯 Reste dans ta zone de travail</h1>
+      <p style="color:#e5f5ff;margin:0">La navigation de Secrétaire Issa est mise en pause jusqu’à la fin du chronomètre.</p>
+    </div>''', unsafe_allow_html=True)
+    st.markdown(f"### {st.session_state.get('issa_focus_activity','Étude')}")
+    st.components.v1.html(f'''<div style="font-family:system-ui;text-align:center;padding:22px;border:1px solid #dbe5f2;border-radius:20px;background:#f8fbff">
+      <div id="issa-countdown" style="font-size:clamp(48px,9vw,82px);font-weight:850;letter-spacing:.04em;color:#12345a">--:--:--</div>
+      <div id="issa-countdown-state" style="color:#53657d;font-size:14px">Temps de concentration restant</div>
+      <script>
+      (function(){{const end={int(_focus_until*1000)};const out=document.getElementById('issa-countdown');const state=document.getElementById('issa-countdown-state');
+      function tick(){{let ms=Math.max(0,end-Date.now());let sec=Math.floor(ms/1000);let h=Math.floor(sec/3600),m=Math.floor((sec%3600)/60),s=sec%60;
+      out.textContent=[h,m,s].map(v=>String(v).padStart(2,'0')).join(':');
+      if(ms<=0){{state.textContent='Temps écoulé — actualisation de la session…';clearInterval(timer);try{{window.parent.location.reload()}}catch(e){{state.textContent='Temps écoulé — actualise la page pour terminer.'}}}}
+      }}tick();const timer=setInterval(tick,500);
+      }})();
+      </script></div>''', height=190)
+    st.info("Pendant cette session, seuls les outils de recherche ci-dessous et ton document de travail sont proposés dans l’application.")
+    _focus_cols = st.columns(2)
+    with _focus_cols[0]:
+        st.link_button("🤖 Ouvrir ChatGPT", "https://chatgpt.com/", use_container_width=True)
+    with _focus_cols[1]:
+        st.link_button("🔎 Recherche Google (dans le navigateur)", "https://www.google.com/", use_container_width=True)
+    st.caption("Ces liens s’ouvrent dans ton navigateur par défaut. Si Chrome est ton navigateur par défaut, ils s’ouvriront dans Chrome ; un site hébergé ne peut pas imposer le lancement d’une application locale.")
+    st.markdown("### 📄 Document de travail")
+    _active_upload = st.file_uploader("Ouvrir un document (TXT, MD, PDF ou DOCX)", type=["txt","md","pdf","docx"], key="issa_focus_active_upload")
+    if _active_upload is not None:
+        _raw = _active_upload.getvalue()
+        _text = ""
+        if _active_upload.name.lower().endswith((".txt", ".md")):
+            _text = _raw.decode("utf-8", errors="replace")
+        elif _active_upload.name.lower().endswith(".pdf"):
+            try:
+                import fitz
+                _pdf = fitz.open(stream=_raw, filetype="pdf")
+                _text = "\\n\\n".join(pg.get_text() for pg in _pdf)
+            except Exception:
+                st.warning("Aperçu PDF indisponible : tu peux tout de même télécharger le fichier ci-dessous.")
+        elif _active_upload.name.lower().endswith(".docx"):
+            try:
+                from docx import Document
+                _doc = Document(io.BytesIO(_raw))
+                _text = "\\n".join(par.text for par in _doc.paragraphs)
+            except Exception:
+                st.warning("Aperçu DOCX indisponible : tu peux tout de même télécharger le fichier ci-dessous.")
+        if _text:
+            st.session_state["issa_focus_document_text"] = _text
+            st.session_state["issa_focus_document_name"] = _active_upload.name
+        st.download_button("⬇️ Télécharger / ouvrir le fichier original", data=_raw, file_name=_active_upload.name, use_container_width=True)
+    _doc_text = st.text_area("Espace de lecture, d’étude ou de saisie", value=st.session_state.get("issa_focus_document_text", ""), height=360, key="issa_focus_document_editor", placeholder="Colle tes notes, rédige ton devoir ou travaille sur le texte extrait du document…")
+    st.session_state["issa_focus_document_text"] = _doc_text
+    st.download_button("💾 Enregistrer mon travail en fichier texte", data=_doc_text.encode("utf-8"), file_name="mon_travail_concentration.txt", mime="text/plain", use_container_width=True, disabled=not bool(_doc_text.strip()))
+    st.caption("Le texte saisi ici reste dans la session de cette application ; télécharge régulièrement ton travail pour en garder une copie.")
+    _left, _right = st.columns([3,1])
+    with _left:
+        st.caption("Le verrouillage empêche de naviguer vers les autres rubriques de Secrétaire Issa pendant le compte à rebours. Il ne bloque pas le système d’exploitation ni les autres applications du PC.")
+    with _right:
+        if st.button("Arrêt d’urgence", type="secondary", use_container_width=True):
+            st.session_state["issa_focus_active"] = False
+            st.session_state["issa_focus_until"] = 0
+            st.session_state["issa_focus_logged"] = True
+            st.warning("Session interrompue manuellement.")
+            st.rerun()
+    st.stop()
+
 # ---------- Centre de lancement XXL : sites, applications web et fonctions internes ----------
 st.markdown('<div class="issa-nav-title">🚀 Lanceur universel XXL · Applications, sites et outils</div>', unsafe_allow_html=True)
 with st.container(border=True):
@@ -925,6 +1014,10 @@ _NAV_GROUPS = {
     "⚙️ CONFIGURATION": ["Paramètres & sauvegarde"],
 }
 _GROUP_FOR_PAGE = {item: group for group, items in _NAV_GROUPS.items() for item in items}
+_focus_navigation_locked = bool(st.session_state.get("issa_focus_active", False)) and float(st.session_state.get("issa_focus_until", 0) or 0) > time_module.time()
+if _focus_navigation_locked:
+    st.session_state["issa_nav_group"] = "🚀 CARRIÈRE & PRODUCTIVITÉ"
+    st.session_state["issa_nav_subpage"] = "Centre de productivité XXL"
 _current_page = st.session_state.get("top_nav", PAGES[0])
 _default_group = _GROUP_FOR_PAGE.get(_current_page, next(iter(_NAV_GROUPS)))
 if st.session_state.get("issa_nav_group") not in _NAV_GROUPS:
@@ -936,6 +1029,7 @@ st.radio(
     horizontal=True,
     key="issa_nav_group",
     label_visibility="collapsed",
+    disabled=_focus_navigation_locked,
 )
 _active_group = st.session_state["issa_nav_group"]
 _subpages = _NAV_GROUPS[_active_group]
@@ -951,6 +1045,7 @@ if len(_subpages) > 1:
         format_func=lambda x: PAGE_SHORT[x],
         key="issa_nav_subpage",
         label_visibility="collapsed",
+        disabled=_focus_navigation_locked,
     )
 else:
     st.session_state["issa_nav_subpage"] = _subpages[0]
@@ -1873,9 +1968,45 @@ elif page=="Centre de productivité XXL":
             _ = export_csv(cards,'les flashcards','flashcards')
         else: st.info('Crée tes premières fiches recto/verso.')
     with tabs[4]:
+        st.markdown("### 🎯 Espace de concentration protégé")
+        st.write("Choisis ton objectif, prépare ton document, puis lance une session. Les autres rubriques du site seront masquées jusqu’à la fin du temps choisi.")
         with st.form('central_focus_form'):
-            activity=st.text_input('Activité de concentration',value='Étude'); duration=st.number_input('Durée (minutes)',min_value=1,max_value=600,value=25); notes=st.text_area('Bilan de la séance'); save=st.form_submit_button('Enregistrer la séance')
-        if save: _ = run('INSERT INTO focus_sessions(session_date,duration_minutes,activity,notes) VALUES(?,?,?,?)',(date.today().isoformat(),int(duration),activity.strip(),notes.strip())); st.success('Séance de concentration enregistrée.'); st.rerun()
+            activity=st.text_input('Objectif de la séance',value='Étude / révision')
+            duration=st.number_input('Durée de concentration (minutes)',min_value=1,max_value=600,value=45,step=5)
+            notes=st.text_area('Consignes ou résultat attendu',placeholder='Ex. : revoir le chapitre 2 et faire 10 exercices…')
+            start_focus=st.form_submit_button('▶️ Démarrer le mode concentration',type='primary',use_container_width=True)
+        if start_focus:
+            st.session_state['issa_focus_activity']=activity.strip() or 'Étude'
+            st.session_state['issa_focus_notes']=notes.strip()
+            st.session_state['issa_focus_started']=time_module.time()
+            st.session_state['issa_focus_until']=time_module.time()+int(duration)*60
+            st.session_state['issa_focus_active']=True
+            st.session_state['issa_focus_logged']=False
+            st.session_state['issa_focus_expired']=False
+            st.rerun()
+        st.markdown("#### 📄 Préparer un document avant de commencer")
+        _prepare_upload=st.file_uploader('Importer un document TXT, MD, PDF ou DOCX',type=['txt','md','pdf','docx'],key='issa_focus_prepare_upload')
+        if _prepare_upload is not None:
+            _prepare_raw=_prepare_upload.getvalue(); _prepare_text=''
+            if _prepare_upload.name.lower().endswith(('.txt','.md')): _prepare_text=_prepare_raw.decode('utf-8',errors='replace')
+            elif _prepare_upload.name.lower().endswith('.pdf'):
+                try:
+                    import fitz
+                    _prepare_pdf=fitz.open(stream=_prepare_raw,filetype='pdf'); _prepare_text="\n\n".join(pg.get_text() for pg in _prepare_pdf)
+                except Exception: st.warning('Aperçu PDF indisponible ; le fichier pourra être téléchargé pendant la session.')
+            elif _prepare_upload.name.lower().endswith('.docx'):
+                try:
+                    from docx import Document
+                    _prepare_doc=Document(io.BytesIO(_prepare_raw)); _prepare_text="\n".join(par.text for par in _prepare_doc.paragraphs)
+                except Exception: st.warning('Aperçu DOCX indisponible ; le fichier pourra être téléchargé pendant la session.')
+            if _prepare_text: st.session_state['issa_focus_document_text']=_prepare_text; st.session_state['issa_focus_document_name']=_prepare_upload.name
+            st.download_button('⬇️ Télécharger le document original',data=_prepare_raw,file_name=_prepare_upload.name)
+        _prepared_text=st.text_area('Notes / document à étudier ou à rédiger',value=st.session_state.get('issa_focus_document_text',''),height=220,key='issa_focus_prepare_editor')
+        st.session_state['issa_focus_document_text']=_prepared_text
+        st.download_button('💾 Télécharger mes notes',data=_prepared_text.encode('utf-8'),file_name='notes_etude.txt',mime='text/plain',disabled=not bool(_prepared_text.strip()))
+        if st.session_state.get('issa_focus_expired'):
+            st.success('⏰ Ta session précédente est terminée. Une nouvelle session peut être lancée.')
+            st.session_state['issa_focus_expired']=False
         focus=read_df('SELECT * FROM focus_sessions ORDER BY id DESC'); total=int(focus.duration_minutes.sum()) if not focus.empty else 0; a,b=st.columns(2); a.metric('Minutes cumulées',total); b.metric('Heures cumulées',round(total/60,1))
         if not focus.empty: st.dataframe(focus,use_container_width=True,hide_index=True); _ = export_csv(focus,'les séances de concentration','focus_sessions')
     with tabs[5]:
