@@ -591,11 +591,22 @@ def ensure_reminders_schema():
         c.execute("UPDATE reminders SET status='En attente' WHERE status IS NULL OR TRIM(status)=''")
 
 def read_df(sql, params=()):
-    """Lit les données SQLite et normalise les valeurs manquantes dans toutes les requêtes."""
-    with connect() as c:
-        cur = c.execute(sql, params)
-        columns = [d[0] for d in cur.description] if cur.description else []
-        rows = cur.fetchall()
+    """Lit SQLite ; si une table manque dans une ancienne base, répare le schéma puis réessaie."""
+    try:
+        with connect() as c:
+            cur = c.execute(sql, params)
+            columns = [d[0] for d in cur.description] if cur.description else []
+            rows = cur.fetchall()
+    except sqlite3.OperationalError as exc:
+        # Cas fréquent après un déploiement : campus_clair.db existe déjà,
+        # mais provient d'une version antérieure qui ne possédait pas toutes les tables.
+        if "no such table" not in str(exc).lower():
+            raise
+        _ensure_app_schema()
+        with connect() as c:
+            cur = c.execute(sql, params)
+            columns = [d[0] for d in cur.description] if cur.description else []
+            rows = cur.fetchall()
 
     df = pd.DataFrame([dict(r) for r in rows], columns=columns)
     if df.empty:
@@ -1896,10 +1907,26 @@ elif page=="Paramètres & sauvegarde":
     _ = header('PARAMÈTRES & DONNÉES','Paramètres & sauvegarde','Les données sont enregistrées dans une base SQLite locale ; les tables nécessaires sont créées automatiquement.')
     st.success(f'Base active : SQLite locale · {DB_PATH.name}. Les tables de l’application sont créées automatiquement au démarrage ; aucune table existante n’est supprimée.')
     tables={'Matières':'subjects','Emploi du temps':'events','Tâches':'tasks','Ressources archivées (ancien espace)':'documents','Journal d’étude':'study_logs','Objectifs':'goals','Habitudes':'habits','Historique habitudes':'habit_logs','Budget':'budgets','Notes personnelles':'life_notes','Contacts':'contacts','Compétences':'career_skills','Formations':'career_training','Opportunités professionnelles':'career_opportunities','Rappels e-mail':'reminders','Projets du Central':'productivity_projects','Flashcards':'flashcards','Séances de concentration':'focus_sessions','Journal quotidien':'daily_journal','Comptes rendus':'meeting_minutes','Organisateur de vie':'life_organizer'}
+    # Vérification défensive : une base ancienne ou partiellement déployée ne doit
+    # jamais faire planter toute la page de sauvegarde.
+    try:
+        _ensure_app_schema()
+    except Exception as schema_exc:
+        st.warning('Certaines tables n’ont pas pu être initialisées. Les exports disponibles restent accessibles. Détail : ' + str(schema_exc)[:250])
+    with connect() as _db_check:
+        _available_tables = {row['name'] for row in _db_check.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()}
     for label,table in tables.items():
-        df=read_df(f'SELECT * FROM {table}')
-        with st.expander(f'{label} — {len(df)} enregistrement(s)'):
-            _ = export_csv(df,label,table)
+        if table not in _available_tables:
+            st.warning(f'La table « {table} » est absente de la base actuelle ; son export sera disponible après réparation de la base.')
+            continue
+        try:
+            df=read_df(f'SELECT * FROM "{table}"')
+            with st.expander(f'{label} — {len(df)} enregistrement(s)'):
+                _ = export_csv(df,label,table)
+        except sqlite3.OperationalError as db_exc:
+            st.warning(f'Export temporairement indisponible pour « {label} » : {str(db_exc)[:200]}')
     st.info('Pour sauvegarder toutes les données, copie le fichier campus_clair.db après avoir arrêté l’application. Les exports CSV restent disponibles pour chaque module.')
     # Diagnostic visible en rouge : distingue les réparations faites dans SQLite
     # des valeurs détectées à la lecture et neutralisées par le code Python.
