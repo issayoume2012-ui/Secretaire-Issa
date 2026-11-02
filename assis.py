@@ -12,7 +12,18 @@ import streamlit as st
 
 APP_DIR = Path(__file__).resolve().parent
 DB_PATH = APP_DIR / "campus_clair.db"
-DB_BACKEND = (os.getenv("DB_BACKEND", "postgres") or "postgres").strip().lower()
+def _startup_secret(name, default=""):
+    """Lit une valeur Streamlit Secrets ou variable d'environnement sans exposer None."""
+    try:
+        value = st.secrets.get(name, default)
+    except Exception:
+        value = os.getenv(name, default)
+    if value is None:
+        return default
+    value = str(value).strip()
+    return default if value.casefold() in {"none", "null", "undefined"} else value
+
+DB_BACKEND = _startup_secret("DB_BACKEND", "postgres").lower()
 st.set_page_config(page_title="Secrétaire Issa", page_icon="🗂️", layout="wide", initial_sidebar_state="collapsed")
 # Photo d'Issa Youme utilisée comme arrière-plan global. Le fichier im1.jpeg doit
 # accompagner ce script dans le déploiement ; un fond de secours est prévu.
@@ -88,10 +99,7 @@ div[role="radiogroup"] label:has(input:checked){{background:#eaf2ff;border-color
 
 # ---------- Secrets : authentification uniquement (base SQLite locale) ----------
 def secret_value(name, default=""):
-    try:
-        value = st.secrets.get(name, default)
-    except Exception:
-        value = os.getenv(name, default)
+    value = _startup_secret(name, default)
     return str(value or default).strip()
 
 _AUTH_USER = secret_value("YOUAGRONOME_OWNER_EMAIL") or secret_value("APP_USERNAME")
@@ -170,9 +178,15 @@ class _PostgresConnection:
 
 
 def _get_secret(name, default=""):
-    try: value = st.secrets.get(name, default)
-    except Exception: value = default
-    return str(os.getenv(name, value) or default).strip()
+    try:
+        value = st.secrets.get(name, default)
+    except Exception:
+        value = default
+    value = os.getenv(name, value)
+    if value is None:
+        return default
+    value = str(value).strip()
+    return default if value.casefold() in {"none", "null", "undefined"} else value
 
 
 def _postgres_config():
@@ -306,6 +320,8 @@ def _ensure_app_schema():
     """Vérifie le schéma actif sans supprimer aucune table ni aucune donnée."""
     init_db()
     if DB_BACKEND in {"postgres", "postgresql", "supabase"}:
+        # Ne pas lancer d'UPDATE global sur toutes les colonnes à chaque démarrage.
+        # Les valeurs NULL/'None' sont neutralisées à la lecture dans read_df().
         _NONE_REPAIR_LOG.clear()
         with connect() as c:
             rows = c.execute("SELECT table_name AS name FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'").fetchall()
@@ -313,39 +329,10 @@ def _ensure_app_schema():
             expected = {"subjects", "events", "tasks", "documents", "study_logs", "goals", "habits", "habit_logs", "budgets", "life_notes", "contacts", "career_skills", "career_training", "career_opportunities", "reminders", "app_settings", "assistant_docs", "productivity_projects", "flashcards", "focus_sessions", "daily_journal", "meeting_minutes", "life_organizer"}
             missing = sorted(expected - found)
             if missing: raise RuntimeError("Tables PostgreSQL absentes : " + ", ".join(missing))
-            for table in expected:
-                cols = c.execute("SELECT column_name AS name, data_type FROM information_schema.columns WHERE table_schema='public' AND table_name=%s", (table,)).fetchall()
-                for col in cols:
-                    if col["data_type"] in ("text", "character varying", "character"):
-                        safe_table = table.replace('"','""'); safe_col = col["name"].replace('"','""')
-                        cur = c.execute(f"UPDATE \"{safe_table}\" SET \"{safe_col}\"=%s WHERE \"{safe_col}\" IS NULL OR LOWER(BTRIM(\"{safe_col}\")) IN ('none','null','nan','<na>','nat','undefined')", ("",))
-                        if cur.rowcount: _NONE_REPAIR_LOG.append({"table": table, "column": col["name"], "count": cur.rowcount, "source": "Supabase PostgreSQL"})
         return expected
     _NONE_REPAIR_LOG.clear()
     with connect() as c:
-        tables = [r["name"] for r in c.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-        ).fetchall()]
-        for table in tables:
-            # Le nom provient directement de sqlite_master et est échappé avant PRAGMA.
-            safe_table = table.replace('"', '""')
-            columns = c.execute(f'PRAGMA table_info("{safe_table}")').fetchall()
-            for column in columns:
-                column_name = column["name"]
-                data_type = str(column["type"] or "").lower()
-                if not any(t in data_type for t in ("text", "char", "clob", "varchar")):
-                    continue
-                safe_column = str(column_name).replace('"', '""')
-                cursor = c.execute(
-                    f'UPDATE "{safe_table}" SET "{safe_column}"=? '
-                    f'WHERE "{safe_column}" IS NULL OR LOWER(TRIM("{safe_column}")) IN '
-                    "('none','null','nan','<na>','nat','undefined')",
-                    ("",),
-                )
-                repaired_count = max(0, int(cursor.rowcount or 0))
-                if repaired_count:
-                    _NONE_REPAIR_LOG.append({"table": table, "column": column_name, "count": repaired_count, "source": "SQLite locale"})
-        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_reminders_source ON reminders(source_type, source_id) WHERE source_type <> '' AND source_id IS NOT NULL")
+        # Vérification du schéma uniquement : aucun balayage/UPDATE de toutes les tables.
         found = {r["name"] for r in c.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
         ).fetchall()}
@@ -355,16 +342,127 @@ def _ensure_app_schema():
         raise RuntimeError("Tables SQLite absentes après initialisation : " + ", ".join(missing))
     return expected
 
+def _auto_migrate_local_sqlite_to_supabase():
+    """Importe automatiquement l'ancienne base SQLite vers Supabase, une seule fois.
+
+    - La base SQLite source n'est jamais modifiée ni supprimée.
+    - Les tables applicatives sont créées par _init_postgres_schema().
+    - Les identifiants sont conservés et les conflits sont ignorés.
+    - Un marqueur PostgreSQL évite les doublons aux redémarrages.
+    """
+    if DB_BACKEND not in {"postgres", "postgresql", "supabase"} or not DB_PATH.exists():
+        return {"status": "absent", "tables": 0, "rows": 0}
+
+    source = None
+    imported_tables = 0
+    imported_rows = 0
+    source_key = str(DB_PATH.resolve())
+    with connect() as dst:
+        dst.execute("""CREATE TABLE IF NOT EXISTS issa_migration_history (
+            source_key TEXT PRIMARY KEY,
+            source_size BIGINT NOT NULL DEFAULT 0,
+            source_mtime DOUBLE PRECISION NOT NULL DEFAULT 0,
+            migrated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            tables_count INTEGER NOT NULL DEFAULT 0,
+            rows_count BIGINT NOT NULL DEFAULT 0
+        )""")
+        already = dst.execute("SELECT source_key FROM issa_migration_history WHERE source_key=?", (source_key,)).fetchone()
+        if already:
+            return {"status": "already_done", "tables": 0, "rows": 0}
+
+    try:
+        source = sqlite3.connect(f"file:{DB_PATH.as_posix()}?mode=ro", uri=True, timeout=20)
+        source.row_factory = sqlite3.Row
+        source_tables = [r["name"] for r in source.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        ).fetchall()]
+        if not source_tables:
+            return {"status": "empty", "tables": 0, "rows": 0}
+
+        # Ne migrer que les tables gérées par cette version de l'application.
+        expected = {
+            "subjects", "events", "tasks", "documents", "study_logs", "goals", "habits",
+            "habit_logs", "budgets", "life_notes", "contacts", "career_skills", "career_training",
+            "career_opportunities", "reminders", "app_settings", "assistant_docs",
+            "productivity_projects", "flashcards", "focus_sessions", "daily_journal",
+            "meeting_minutes", "life_organizer"
+        }
+        source_tables = [t for t in source_tables if t in expected]
+        # Respecter l'ordre des clés étrangères (matières avant événements/journal,
+        # habitudes avant historique des habitudes).
+        import_order = [
+            "subjects", "habits", "tasks", "documents", "goals", "budgets", "life_notes",
+            "contacts", "career_skills", "career_training", "career_opportunities", "app_settings",
+            "assistant_docs", "productivity_projects", "flashcards", "focus_sessions", "daily_journal",
+            "meeting_minutes", "life_organizer", "reminders", "events", "study_logs", "habit_logs"
+        ]
+        source_tables.sort(key=lambda name: import_order.index(name) if name in import_order else len(import_order))
+
+        for table in source_tables:
+            safe_table = table.replace('"', '""')
+            src_cols = [r["name"] for r in source.execute(f'PRAGMA table_info("{safe_table}")').fetchall()]
+            if not src_cols:
+                continue
+            with connect() as dst:
+                dest_cols_rows = dst.execute(
+                    "SELECT column_name AS name FROM information_schema.columns WHERE table_schema='public' AND table_name=? ORDER BY ordinal_position",
+                    (table,)
+                ).fetchall()
+                dest_cols = {r["name"] for r in dest_cols_rows}
+                cols = [col for col in src_cols if col in dest_cols]
+                if not cols:
+                    continue
+                rows = source.execute(f'SELECT {", ".join(chr(34)+c.replace(chr(34), chr(34)*2)+chr(34) for c in cols)} FROM "{safe_table}"').fetchall()
+                if rows:
+                    quoted_cols = ",".join('"' + c.replace('"', '""') + '"' for c in cols)
+                    placeholders = ",".join(["%s"] * len(cols))
+                    insert_sql = f'INSERT INTO "{safe_table}" ({quoted_cols}) VALUES ({placeholders}) ON CONFLICT DO NOTHING'
+                    cur = dst.raw.cursor()
+                    cur.executemany(insert_sql, [tuple(row[c] for c in cols) for row in rows])
+                    imported_rows += len(rows)
+                imported_tables += 1
+
+                # Réaligner les séquences BIGSERIAL sur les identifiants importés.
+                if "id" in cols:
+                    seq_row = dst.execute("SELECT pg_get_serial_sequence(%s, 'id') AS seq", (f"public.{table}",)).fetchone()
+                    seq_name = seq_row["seq"] if seq_row else None
+                    if seq_name:
+                        max_row = dst.execute(f'SELECT COALESCE(MAX(id),0) AS max_id FROM "{safe_table}"').fetchone()
+                        max_id = int(max_row["max_id"] or 0)
+                        if max_id > 0:
+                            dst.execute("SELECT setval(%s::regclass, %s, true)", (seq_name, max_id))
+
+        stat = DB_PATH.stat()
+        with connect() as dst:
+            dst.execute(
+                "INSERT INTO issa_migration_history(source_key,source_size,source_mtime,tables_count,rows_count) VALUES(?,?,?,?,?) ON CONFLICT(source_key) DO NOTHING",
+                (source_key, stat.st_size, stat.st_mtime, imported_tables, imported_rows)
+            )
+        return {"status": "migrated", "tables": imported_tables, "rows": imported_rows}
+    finally:
+        if source is not None:
+            source.close()
+
+
 @st.cache_resource(show_spinner=False)
 def _initialize_schema_once():
-    """Initialise le schéma Supabase PostgreSQL une fois par processus Streamlit."""
-    _ = init_db()
-    return sorted(_ensure_app_schema())
+    """Crée les tables Supabase puis importe automatiquement l'ancienne base SQLite."""
+    expected = _ensure_app_schema()
+    migration_result = _auto_migrate_local_sqlite_to_supabase()
+    return {"tables": sorted(expected), "migration": migration_result}
 
 with st.spinner("Connexion et initialisation de Supabase PostgreSQL…" if DB_BACKEND in {"postgres", "postgresql", "supabase"} else "Initialisation de la base SQLite locale…"):
     try:
-        _expected_app_tables = _initialize_schema_once()
+        _db_init_result = _initialize_schema_once()
+        _expected_app_tables = _db_init_result["tables"]
         st.session_state["issa_database_tables_ready"] = _expected_app_tables
+        _migration_info = _db_init_result.get("migration", {})
+        if _migration_info.get("status") == "migrated":
+            st.success(f"Migration automatique SQLite → Supabase terminée : {_migration_info.get('rows', 0)} ligne(s) importée(s) dans {_migration_info.get('tables', 0)} table(s). La base locale d’origine est conservée.")
+        elif _migration_info.get("status") == "already_done":
+            st.caption("Migration SQLite → Supabase déjà effectuée : aucune réimportation, aucun doublon ajouté.")
+        elif _migration_info.get("status") in {"absent", "empty"}:
+            st.info("Les tables Supabase sont prêtes. Pour transférer tes anciennes données, place le fichier campus_clair.db à côté de ce fichier Python puis redémarre l’application.")
     except Exception as exc:
         st.error("Initialisation de la base impossible. Vérifie les paramètres Supabase, le mot de passe et la dépendance psycopg2-binary. Détail technique : " + str(exc)[:500])
         st.stop()
@@ -390,6 +488,17 @@ def save_setting(key, value):
 
 DEFAULT_SMTP_USERNAME = "issayoume1801@gmail.com"
 
+def get_smtp_username():
+    """Accepte une adresse brute et nettoie les formes Markdown [mail](mailto:mail)."""
+    value = get_config("SMTP_USERNAME", DEFAULT_SMTP_USERNAME) or DEFAULT_SMTP_USERNAME
+    value = re.sub(r"^\[([^\]]+)\]\(mailto:[^)]+\)$", r"\1", value.strip(), flags=re.I)
+    value = value.removeprefix("mailto:").strip().strip("<>")
+    if not re.match(r"^[^\s@]+@[^\s@]+\.[^\s@]+$", value):
+        raise RuntimeError("SMTP_USERNAME doit être une adresse Gmail simple, sans [texte](mailto:...) ni lien Markdown.")
+    return value
+
+FIXED_SENDER_EMAIL = get_smtp_username()
+
 def email_configured():
     """Vérifie les paramètres Gmail SMTP et l'adresse de réception."""
     return bool(get_config("SMTP_PASSWORD")) and bool(get_recipient_email())
@@ -400,7 +509,7 @@ def get_recipient_email():
 def send_email(subject, body, recipient=None):
     """Envoie un e-mail par Gmail SMTP, avec STARTTLS (587) puis SSL (465) en secours."""
     host = get_config("SMTP_HOST", "smtp.gmail.com") or "smtp.gmail.com"
-    username = get_config("SMTP_USERNAME", DEFAULT_SMTP_USERNAME) or DEFAULT_SMTP_USERNAME
+    username = get_smtp_username()
     password = get_config("SMTP_PASSWORD").replace(" ", "")
     sender_name = get_config("SMTP_SENDER_NAME", "Secrétaire Issa") or "Secrétaire Issa"
     recipient = (recipient or get_recipient_email()).strip()
@@ -596,7 +705,7 @@ def _reminder_worker(stop_event):
             _ = process_due_reminders()
         except Exception:
             pass
-        stop_event.wait(30)
+        stop_event.wait(120)
 
 @st.cache_resource
 def start_reminder_worker():
@@ -707,6 +816,17 @@ def read_df(sql, params=()):
         else:
             df[col] = cleaned
     return df
+
+
+def show_dataframe(df, *args, **kwargs):
+    """Affiche un tableau sans valeurs textuelles None/null/nan/undefined."""
+    if isinstance(df, pd.DataFrame):
+        clean = df.copy()
+        for column in clean.columns:
+            clean[column] = clean[column].map(lambda value: _clean_missing_value(value, ""))
+        st.dataframe(clean, *args, **kwargs)
+    else:
+        st.dataframe(df, *args, **kwargs)
 
 def run(sql,params=()):
     with connect() as c: c.execute(sql,params)
@@ -858,7 +978,7 @@ REMINDER_WORKER = start_reminder_worker()
 # de retour None soit affichée par le mécanisme Magic de Streamlit.
 _sync_clock = time_module.time()
 _sync_previous = float(st.session_state.get("issa_global_sync_last", 0) or 0)
-if _sync_clock - _sync_previous >= 300:
+if _sync_clock - _sync_previous >= 900:
     _sync_result = sync_existing_entries_to_reminders()
     st.session_state["issa_global_sync_last"] = _sync_clock
 if not st.session_state.get("issa_initial_reminder_check_done", False):
@@ -1158,11 +1278,6 @@ if page=="Vue d’ensemble":
     with cols[2]: _ = card('Tâches ouvertes',len(open_tasks),'À faire ou en cours')
     with cols[3]: _ = card('Heures étudiées',round(hours,1),'Journal de révision')
     # Résumé des rappels issus des autres rubriques, visible dès l'ouverture de l'application.
-    _sync_now = time_module.time()
-    _sync_last = float(st.session_state.get("issa_reminder_sync_last", 0) or 0)
-    if _sync_now - _sync_last >= 120:
-        _ = sync_existing_entries_to_reminders()
-        st.session_state["issa_reminder_sync_last"] = _sync_now
     try:
         ensure_reminders_schema()
         soon=read_df("SELECT title,details,remind_at,status FROM reminders WHERE enabled=1 AND status='En attente' ORDER BY remind_at LIMIT 6")
@@ -1170,7 +1285,7 @@ if page=="Vue d’ensemble":
         # Ne pas faire tomber tout le tableau de bord si une base déployée est encore incompatible.
         _NONE_RUNTIME_LOG.append({"where": "dashboard_reminders", "error": str(_reminders_dashboard_error)[:300]})
         soon = pd.DataFrame(columns=["title", "details", "remind_at", "status"])
-        st.warning("Les rappels ne peuvent pas être chargés pour le moment. Le reste du tableau de bord reste disponible. Vérifie les logs SQLite de l’application.")
+        st.warning("Les rappels ne peuvent pas être chargés pour le moment. Le reste du tableau de bord reste disponible. Vérifie les logs de l’application et la connexion Supabase.")
     st.subheader('🔔 Ce que tu dois faire bientôt')
     if soon.empty:
         st.info('Aucun rappel en attente. Les rappels apparaîtront automatiquement dès que tu enregistres une tâche, un cours, un objectif, une formation, une opportunité ou une note de type « Rappel ».')
@@ -1180,12 +1295,12 @@ if page=="Vue d’ensemble":
             if rr.details: st.caption(rr.details)
     st.subheader('📅 Prochaines séances')
     if upcoming.empty: st.info('Aucune séance future. Saisis ton emploi du temps dans l’onglet correspondant.')
-    else: st.dataframe(upcoming.sort_values(['event_date','start_time']).head(8)[['event_date','start_time','end_time','title','kind','location']].rename(columns={'event_date':'Date','start_time':'Début','end_time':'Fin','title':'Séance','kind':'Type','location':'Lieu'}),use_container_width=True,hide_index=True)
+    else: show_dataframe(upcoming.sort_values(['event_date','start_time']).head(8)[['event_date','start_time','end_time','title','kind','location']].rename(columns={'event_date':'Date','start_time':'Début','end_time':'Fin','title':'Séance','kind':'Type','location':'Lieu'}),use_container_width=True,hide_index=True)
     a,b=st.columns(2)
     with a:
         st.subheader('🎯 Tâches prioritaires')
         if open_tasks.empty: st.success('Aucune tâche ouverte enregistrée.')
-        else: st.dataframe(open_tasks.head(7)[['title','due_date','priority','status']].rename(columns={'title':'Tâche','due_date':'Échéance','priority':'Priorité','status':'Statut'}),use_container_width=True,hide_index=True)
+        else: show_dataframe(open_tasks.head(7)[['title','due_date','priority','status']].rename(columns={'title':'Tâche','due_date':'Échéance','priority':'Priorité','status':'Statut'}),use_container_width=True,hide_index=True)
     with b:
         st.subheader('🚀 Objectifs personnels')
         if goals.empty: st.info('Ajoute tes objectifs dans Assistant de vie → Objectifs.')
@@ -1217,7 +1332,7 @@ elif page=="Maquettes & matières":
         if upl:
             try:
                 imp=pd.read_csv(upl) if upl.name.lower().endswith('.csv') else pd.read_excel(upl)
-                st.dataframe(imp.head(30),use_container_width=True,hide_index=True)
+                show_dataframe(imp.head(30),use_container_width=True,hide_index=True)
                 if st.button('Importer les lignes affichées',type='primary'):
                     aliases={'intitule':'title','matiere':'title','matiere title':'title','code matiere':'code','semestre':'semester','unite enseignement':'ue','code ue':'ue_code','credits ects':'credits','enseignant':'teacher','heures cm':'cm','heures td':'td','heures tp':'tp'}
                     imp=imp.rename(columns={col:aliases.get(norm(col),norm(col).replace(' ','_')) for col in imp.columns})
@@ -1252,13 +1367,13 @@ elif page=="Maquettes & matières":
         df=read_df('SELECT * FROM subjects ORDER BY semester,ue,title')
         if df.empty: st.info('Aucune matière enregistrée.')
         else:
-            st.dataframe(df.drop(columns=['created_at'],errors='ignore'),use_container_width=True,hide_index=True)
+            show_dataframe(df.drop(columns=['created_at'],errors='ignore'),use_container_width=True,hide_index=True)
             _ = export_csv(df,'la maquette','maquette')
             opts={f"#{r.id} — {r.title} ({r.semester})":int(r.id) for r in df.itertuples()}; chosen=st.selectbox('Fiche à supprimer (si nécessaire)',list(opts),key='del_subject_pick')
             if st.button('Supprimer la matière choisie',key='delete_subject'):
                 _ = run('DELETE FROM subjects WHERE id=?',(opts[chosen],)); st.success('Matière supprimée.'); st.rerun()
             dup=df.assign(n=df.title.map(norm),s=df.semester.map(norm),u=df.ue.map(norm)).groupby(['n','s','u']).filter(lambda g:len(g)>1)
-            if not dup.empty: st.warning('Doublons potentiels détectés : vérifie-les avant suppression.'); st.dataframe(dup[['id','title','semester','ue']],hide_index=True)
+            if not dup.empty: st.warning('Doublons potentiels détectés : vérifie-les avant suppression.'); show_dataframe(dup[['id','title','semester','ue']],hide_index=True)
 
 # ---------- EDT ----------
 elif page=="Emploi du temps":
@@ -1288,7 +1403,7 @@ elif page=="Emploi du temps":
         if up:
             try:
                 imp=pd.read_csv(up) if up.name.lower().endswith('.csv') else pd.read_excel(up)
-                st.dataframe(imp,use_container_width=True,hide_index=True)
+                show_dataframe(imp,use_container_width=True,hide_index=True)
                 if st.button('Enregistrer les séances importées',type='primary'):
                     alias={'intitule':'title','cours':'title','date':'event_date','jour':'event_date','debut':'start_time','heure debut':'start_time','fin':'end_time','heure fin':'end_time','type':'kind','matiere':'subject','salle':'location','lieu':'location','remarques':'notes'}
                     imp=imp.rename(columns={col:alias.get(norm(col),norm(col).replace(' ','_')) for col in imp.columns})
@@ -1327,7 +1442,7 @@ elif page=="Emploi du temps":
             if filt=='À venir': view=view[view.event_date>=date.today().isoformat()]
             if filt=='Passées': view=view[view.event_date<date.today().isoformat()]
             if query.strip(): view=view[view.title.str.contains(query,case=False,na=False)]
-            st.dataframe(view[['id','event_date','start_time','end_time','title','kind','subject_title','location','source']].rename(columns={'id':'ID','event_date':'Date','start_time':'Début','end_time':'Fin','title':'Événement','kind':'Type','subject_title':'Matière','location':'Lieu','source':'Origine'}),use_container_width=True,hide_index=True)
+            show_dataframe(view[['id','event_date','start_time','end_time','title','kind','subject_title','location','source']].rename(columns={'id':'ID','event_date':'Date','start_time':'Début','end_time':'Fin','title':'Événement','kind':'Type','subject_title':'Matière','location':'Lieu','source':'Origine'}),use_container_width=True,hide_index=True)
             _ = export_csv(view,'l’emploi du temps','edt')
             eopts={f"#{r.id} — {r.event_date} {r.title}":int(r.id) for r in ev.itertuples()}; pick=st.selectbox('Séance à supprimer',list(eopts))
             if st.button('Supprimer la séance sélectionnée'): _ = run('DELETE FROM events WHERE id=?',(eopts[pick],)); st.rerun()
@@ -1381,7 +1496,7 @@ elif page=="Programmes de révision":
     st.divider(); st.subheader('Tâches de révision déjà planifiées')
     rt=read_df("SELECT * FROM tasks WHERE category='Révision' ORDER BY due_date")
     if rt.empty: st.caption('Aucune tâche de révision enregistrée pour le moment.')
-    else: st.dataframe(rt[['title','due_date','priority','status','notes']],use_container_width=True,hide_index=True)
+    else: show_dataframe(rt[['title','due_date','priority','status','notes']],use_container_width=True,hide_index=True)
 
 # ---------- Journal et progression ----------
 elif page=="Suivi & progression":
@@ -1408,7 +1523,7 @@ elif page=="Suivi & progression":
         st.subheader('Historique des séances')
         if logs.empty: st.info('Le journal est vide.')
         else:
-            st.dataframe(logs[['study_date','subject','hours','method','confidence','notes']].rename(columns={'study_date':'Date','subject':'Matière','hours':'Heures','method':'Méthode','confidence':'Maîtrise /5','notes':'Notes'}),use_container_width=True,hide_index=True)
+            show_dataframe(logs[['study_date','subject','hours','method','confidence','notes']].rename(columns={'study_date':'Date','subject':'Matière','hours':'Heures','method':'Méthode','confidence':'Maîtrise /5','notes':'Notes'}),use_container_width=True,hide_index=True)
             _ = export_csv(logs,'le journal d’étude','journal_etude')
             choices={f"#{r.id} · {r.study_date} · {r.subject}":int(r.id) for r in logs.itertuples()}; sel=st.selectbox('Entrée à supprimer',list(choices))
             if st.button('Supprimer cette entrée du journal'): _ = run('DELETE FROM study_logs WHERE id=?',(choices[sel],)); st.rerun()
@@ -1476,7 +1591,7 @@ elif page=="Assistant de vie":
             with a: _ = card('Revenus',f'{incomes:,.0f} FCFA')
             with b: _ = card('Dépenses',f'{expenses:,.0f} FCFA')
             with c: _ = card('Solde enregistré',f'{incomes-expenses:,.0f} FCFA')
-            st.dataframe(budget,use_container_width=True,hide_index=True); _ = export_csv(budget,'le budget','budget')
+            show_dataframe(budget,use_container_width=True,hide_index=True); _ = export_csv(budget,'le budget','budget')
             opts={f"#{r.id} · {r.entry_date} · {r.kind} · {r.amount:g} FCFA":int(r.id) for r in budget.itertuples()}; pick=st.selectbox('Mouvement à supprimer',list(opts))
             if st.button('Supprimer le mouvement'): _ = run('DELETE FROM budgets WHERE id=?',(opts[pick],)); st.rerun()
         else: st.info('Aucun mouvement saisi. Le solde est calculé uniquement à partir des mouvements enregistrés ici.')
@@ -1495,7 +1610,7 @@ elif page=="Assistant de vie":
             else: st.error('Saisis le titre de la tâche.')
         tasks=read_df("SELECT * FROM tasks ORDER BY CASE priority WHEN 'Urgente' THEN 1 WHEN 'Haute' THEN 2 WHEN 'Normale' THEN 3 ELSE 4 END, due_date")
         if not tasks.empty:
-            st.dataframe(tasks[['id','title','due_date','priority','status','category','notes']],use_container_width=True,hide_index=True)
+            show_dataframe(tasks[['id','title','due_date','priority','status','category','notes']],use_container_width=True,hide_index=True)
             opts={f"#{r.id} · {r.title}":int(r.id) for r in tasks.itertuples()}; sel=st.selectbox('Tâche à mettre à jour',list(opts)); tid=opts[sel]
             status=st.selectbox('Nouveau statut',['À faire','En cours','Terminée'],key='life_task_status')
             if st.button('Enregistrer le statut',key='life_task_save'): _ = run('UPDATE tasks SET status=? WHERE id=?',(status,tid)); st.rerun()
@@ -1542,7 +1657,7 @@ elif page=="Assistant de vie":
             contacts_view = contacts.drop(columns=['created_at'], errors='ignore').copy()
             for col in contacts_view.select_dtypes(include=['object']).columns:
                 contacts_view[col] = contacts_view[col].map(lambda value: display_text(value, ''))
-            st.dataframe(contacts_view, use_container_width=True, hide_index=True)
+            show_dataframe(contacts_view, use_container_width=True, hide_index=True)
 
             if 'id' in contacts.columns:
                 contacts['_valid_id'] = pd.to_numeric(contacts['id'], errors='coerce')
@@ -1594,7 +1709,7 @@ elif page=="Rappels automatiques":
         st.warning('Les rappels sont préparés automatiquement, mais l’envoi nécessite les identifiants Gmail SMTP dans les Secrets Streamlit.')
     with st.expander('⚙️ Configuration Gmail gratuite (à faire une seule fois)', expanded=not bool(get_config('SMTP_PASSWORD'))):
         st.markdown('Utilise ton adresse Gmail et un **mot de passe d’application Google de 16 caractères**. Ne mets jamais ton mot de passe Gmail habituel et ne partage pas ce secret.')
-        st.code('SMTP_HOST = "smtp.gmail.com"\nSMTP_PORT = 587\nSMTP_USERNAME = "ton_adresse_gmail@gmail.com"\nSMTP_PASSWORD = "mot_de_passe_application_google"\nSMTP_SENDER_NAME = "Secrétaire Issa"\nAPP_USERNAME = "identifiant_de_connexion"\nAPP_PASSWORD = "mot_de_passe_de_connexion"\n\nYOUAGRONOME_OWNER_EMAIL = "identifiant_proprietaire"\nYOUAGRONOME_OWNER_PASS = "mot_de_passe_proprietaire"', language="toml")
+        st.code('SMTP_HOST = "smtp.gmail.com"\nSMTP_PORT = 587\nSMTP_USERNAME = "issayoume1801@gmail.com"\nSMTP_PASSWORD = "mot_de_passe_application_google"\nSMTP_SENDER_NAME = "Secrétaire Issa"\nAPP_USERNAME = "identifiant_de_connexion"\nAPP_PASSWORD = "mot_de_passe_de_connexion"\n\nYOUAGRONOME_OWNER_EMAIL = "identifiant_proprietaire"\nYOUAGRONOME_OWNER_PASS = "mot_de_passe_proprietaire"', language="toml")
         st.caption('Dans Streamlit Cloud : Manage app → Settings → Secrets. L’adresse d’expédition est lue depuis SMTP_USERNAME. L’adresse de réception des rappels se règle ci-dessus. Le code essaie STARTTLS sur le port 587 puis SSL sur le port 465 si nécessaire.')
     if st.button('🧪 Envoyer un e-mail de test', disabled=not (get_config('SMTP_PASSWORD') and get_recipient_email())):
         try:
@@ -1613,7 +1728,7 @@ elif page=="Rappels automatiques":
         with c2: _ = card('À traiter maintenant',len(overdue),'Date/heure du rappel atteinte')
         with c3: _ = card('E-mails envoyés',int((reminders.status=='Envoyé').sum()),'Rappels ponctuels déjà transmis')
         display=reminders.rename(columns={'title':'Rappel automatique','details':'Détails / rubrique','remind_at':'Date et heure','repeat_rule':'Répétition','status':'État e-mail','enabled':'Actif','last_sent_at':'Dernier e-mail','last_error':'Erreur éventuelle','source_type':'Rubrique source','source_id':'N° entrée'})
-        st.dataframe(display[['Rappel automatique','Détails / rubrique','Date et heure','Rubrique source','État e-mail','Actif','Dernier e-mail','Erreur éventuelle']],use_container_width=True,hide_index=True)
+        show_dataframe(display[['Rappel automatique','Détails / rubrique','Date et heure','Rubrique source','État e-mail','Actif','Dernier e-mail','Erreur éventuelle']],use_container_width=True,hide_index=True)
         choices={f"#{int(r.id)} — {r.title} — {r.remind_at}":int(r.id) for r in reminders.itertuples()}
         selected=st.selectbox('Gérer un rappel automatique',list(choices),key='auto_reminder_manage_pick')
         rid=choices[selected]; a,b=st.columns(2)
@@ -1920,7 +2035,7 @@ elif page=="Compétences & Carrière":
         trainings=read_df('SELECT * FROM career_training ORDER BY start_date DESC,id DESC')
         if trainings.empty: st.info('Aucune formation ou certification enregistrée.')
         else:
-            st.dataframe(trainings[['title','provider','kind','start_date','end_date','status','url','notes']].rename(columns={'title':'Formation','provider':'Organisme','kind':'Type','start_date':'Début','end_date':'Fin','status':'État','url':'Lien','notes':'Notes'}),use_container_width=True,hide_index=True)
+            show_dataframe(trainings[['title','provider','kind','start_date','end_date','status','url','notes']].rename(columns={'title':'Formation','provider':'Organisme','kind':'Type','start_date':'Début','end_date':'Fin','status':'État','url':'Lien','notes':'Notes'}),use_container_width=True,hide_index=True)
             opts={f"#{r.id} · {r.title}":int(r.id) for r in trainings.itertuples()}; pick=st.selectbox('Formation à supprimer',list(opts),key='career_training_delete_pick')
             if st.button('Supprimer la formation sélectionnée',key='career_training_delete'): _ = run('DELETE FROM career_training WHERE id=?',(opts[pick],)); st.rerun()
             _ = export_csv(trainings,'les formations','formations_carriere')
@@ -1964,7 +2079,7 @@ elif page=="Compétences & Carrière":
         if not opportunities.empty:
             upcoming=opportunities[opportunities.deadline.astype(str)>=date.today().isoformat()].sort_values('deadline').head(8)
             if upcoming.empty: st.info('Aucune échéance future enregistrée.')
-            else: st.dataframe(upcoming[['deadline','title','organization','kind','status']].rename(columns={'deadline':'Date limite','title':'Opportunité','organization':'Organisation','kind':'Type','status':'Statut'}),use_container_width=True,hide_index=True)
+            else: show_dataframe(upcoming[['deadline','title','organization','kind','status']].rename(columns={'deadline':'Date limite','title':'Opportunité','organization':'Organisation','kind':'Type','status':'Statut'}),use_container_width=True,hide_index=True)
         else: st.info('Les échéances apparaîtront ici dès que tu enregistres des opportunités.')
         st.markdown('#### Conseils de départ')
         st.markdown('- Choisis 3 compétences prioritaires à développer ce mois-ci.\n- Ajoute les formations réellement commencées ou envisagées.\n- Enregistre les liens officiels des stages et opportunités pour retrouver facilement les annonces.')
@@ -1982,7 +2097,7 @@ elif page=="Centre de productivité XXL":
                 try:
                     df=read_df(sql,args)
                     if not df.empty:
-                        found+=len(df); st.markdown(f'**{label} — {len(df)} résultat(s)**'); st.dataframe(df,use_container_width=True,hide_index=True)
+                        found+=len(df); st.markdown(f'**{label} — {len(df)} résultat(s)**'); show_dataframe(df,use_container_width=True,hide_index=True)
                 except Exception: pass
             if not found: st.info('Aucun résultat trouvé dans les modules indexés. Essaie un autre mot-clé.')
     with tabs[1]:
@@ -1996,7 +2111,7 @@ elif page=="Centre de productivité XXL":
                 _ = run('INSERT INTO tasks(title,due_date,priority,status,category,notes) VALUES(?,?,?,?,?,?)',(idea.strip(),due.isoformat() if due else '',priority,'À faire',domain,details.strip()))
                 st.success('Idée enregistrée comme tâche.'); st.rerun()
         quick=read_df('SELECT id,title,due_date,priority,status,category,notes FROM tasks ORDER BY id DESC LIMIT 20')
-        if not quick.empty: st.dataframe(quick,use_container_width=True,hide_index=True)
+        if not quick.empty: show_dataframe(quick,use_container_width=True,hide_index=True)
     with tabs[2]:
         with st.form('central_project_form'):
             title=st.text_input('Nom du projet *'); domain=st.selectbox('Domaine du projet',['Études','Carrière','Finances','Agronomie','Personnel','Association','Entreprise','Autre']); status=st.selectbox('Statut',['À faire','En cours','En pause','Terminé','Abandonné']); progress=st.slider('Progression',0,100,0); a,b=st.columns(2); start=a.date_input('Début',value=date.today()); due=b.date_input('Échéance',value=date.today()+timedelta(days=30)); notes=st.text_area('Description / prochaines étapes'); save=st.form_submit_button('Enregistrer le projet')
@@ -2072,14 +2187,14 @@ elif page=="Centre de productivité XXL":
             st.success('⏰ Ta session précédente est terminée. Une nouvelle session peut être lancée.')
             st.session_state['issa_focus_expired']=False
         focus=read_df('SELECT * FROM focus_sessions ORDER BY id DESC'); total=int(focus.duration_minutes.sum()) if not focus.empty else 0; a,b=st.columns(2); a.metric('Minutes cumulées',total); b.metric('Heures cumulées',round(total/60,1))
-        if not focus.empty: st.dataframe(focus,use_container_width=True,hide_index=True); _ = export_csv(focus,'les séances de concentration','focus_sessions')
+        if not focus.empty: show_dataframe(focus,use_container_width=True,hide_index=True); _ = export_csv(focus,'les séances de concentration','focus_sessions')
     with tabs[5]:
         today=date.today().isoformat(); existing=read_df('SELECT * FROM daily_journal WHERE entry_date=?',(today,)); default=existing.iloc[0] if not existing.empty else None
         with st.form('central_daily_journal_form'):
             mood=st.selectbox('Humeur',['Très bonne','Bonne','Neutre','Difficile','Très difficile'],index=['Très bonne','Bonne','Neutre','Difficile','Très difficile'].index(default['mood']) if default is not None and default['mood'] in ['Très bonne','Bonne','Neutre','Difficile','Très difficile'] else 2); energy=st.slider('Énergie',1,5,int(default['energy']) if default is not None else 3); successes=st.text_area('Réussites du jour',value=str(default['successes']) if default is not None else ''); improvements=st.text_area('À améliorer',value=str(default['improvements']) if default is not None else ''); priorities=st.text_area('Priorités pour demain',value=str(default['tomorrow_priorities']) if default is not None else ''); save=st.form_submit_button('Enregistrer le journal du jour')
         if save: _ = run('INSERT INTO daily_journal(entry_date,mood,energy,successes,improvements,tomorrow_priorities) VALUES(?,?,?,?,?,?) ON CONFLICT(entry_date) DO UPDATE SET mood=excluded.mood,energy=excluded.energy,successes=excluded.successes,improvements=excluded.improvements,tomorrow_priorities=excluded.tomorrow_priorities',(today,mood,int(energy),successes.strip(),improvements.strip(),priorities.strip())); st.success('Journal quotidien sauvegardé.'); st.rerun()
         journals=read_df('SELECT * FROM daily_journal ORDER BY entry_date DESC');
-        if not journals.empty: st.dataframe(journals,use_container_width=True,hide_index=True); _ = export_csv(journals,'le journal quotidien','daily_journal')
+        if not journals.empty: show_dataframe(journals,use_container_width=True,hide_index=True); _ = export_csv(journals,'le journal quotidien','daily_journal')
     with tabs[6]:
         with st.form('central_meeting_form'):
             title=st.text_input('Objet de la réunion / rencontre *'); meeting_date=st.date_input('Date',value=date.today()); participants=st.text_input('Participants'); summary=st.text_area('Compte rendu'); decisions=st.text_area('Décisions prises'); actions=st.text_area('Actions à mener'); status=st.selectbox('Suivi',['À suivre','En cours','Terminé']); save=st.form_submit_button('Enregistrer le compte rendu')
@@ -2087,7 +2202,7 @@ elif page=="Centre de productivité XXL":
             if not title.strip(): st.error('Indique l’objet de la rencontre.')
             else: _ = run('INSERT INTO meeting_minutes(title,meeting_date,participants,summary,decisions,actions,status) VALUES(?,?,?,?,?,?,?)',(title.strip(),meeting_date.isoformat(),participants.strip(),summary.strip(),decisions.strip(),actions.strip(),status)); st.success('Compte rendu enregistré.'); st.rerun()
         meetings=read_df('SELECT * FROM meeting_minutes ORDER BY meeting_date DESC,id DESC')
-        if not meetings.empty: st.dataframe(meetings,use_container_width=True,hide_index=True); _ = export_csv(meetings,'les comptes rendus','meeting_minutes')
+        if not meetings.empty: show_dataframe(meetings,use_container_width=True,hide_index=True); _ = export_csv(meetings,'les comptes rendus','meeting_minutes')
     with tabs[7]:
         with st.form('central_life_form'):
             title=st.text_input('Rendez-vous, démarche ou course *'); kind=st.selectbox('Type',['Rendez-vous','Démarche administrative','Courses','Échéance','Autre']); a,b=st.columns(2); event_date=a.date_input('Date',value=date.today()); event_time=b.time_input('Heure',value=time(9,0)); priority=st.selectbox('Priorité',['Basse','Normale','Haute','Urgente']); status=st.selectbox('État',['À faire','En cours','Terminé','Annulé']); notes=st.text_area('Notes'); save=st.form_submit_button('Ajouter à l’organisateur')
@@ -2095,7 +2210,7 @@ elif page=="Centre de productivité XXL":
             if not title.strip(): st.error('Le titre est obligatoire.')
             else: _ = run('INSERT INTO life_organizer(title,kind,event_date,event_time,priority,status,notes) VALUES(?,?,?,?,?,?,?)',(title.strip(),kind,event_date.isoformat(),event_time.strftime('%H:%M'),priority,status,notes.strip())); st.success('Élément ajouté à l’organisateur.'); st.rerun()
         organizer=read_df('SELECT * FROM life_organizer ORDER BY event_date,event_time,id DESC')
-        if not organizer.empty: st.dataframe(organizer,use_container_width=True,hide_index=True); _ = export_csv(organizer,'les éléments de l’organisateur','life_organizer')
+        if not organizer.empty: show_dataframe(organizer,use_container_width=True,hide_index=True); _ = export_csv(organizer,'les éléments de l’organisateur','life_organizer')
         else: st.info('Aucun rendez-vous ou démarche enregistré.')
 
 elif page=="Paramètres & sauvegarde":
@@ -2143,7 +2258,7 @@ elif page=="Paramètres & sauvegarde":
     st.code('streamlit\npandas\nSpeechRecognition>=3.10.0\nstreamlit-mic-recorder>=0.0.8\nopenpyxl\nPyMuPDF\npython-docx',language='text')
     st.caption('openpyxl permet les imports Excel. PyMuPDF permet de lire le texte des PDF. L’application reste utilisable sans ces deux dépendances si tu utilises CSV et la saisie manuelle.')
 
-st.markdown('<div class="issa-footer"><strong>🗂️ Secrétaire Issa</strong><br><small>Un espace personnel de secrétariat, de suivi et d’organisation · Données stockées localement avec SQLite.</small></div>',unsafe_allow_html=True)
+st.markdown('<div class="issa-footer"><strong>🗂️ Secrétaire Issa</strong><br><small>Un espace personnel de secrétariat, de suivi et d’organisation · Données stockées dans Supabase PostgreSQL.</small></div>',unsafe_allow_html=True)
 role_icons={
     "Vue d’ensemble":"🏠", "Maquettes & matières":"🎓", "Emploi du temps":"🗓️",
     "Programmes de révision":"🎯", "Suivi & progression":"📈", "Assistant de vie":"👤", "Rappels automatiques":"🔔", "Assistant e-mail & documents":"✉️",
@@ -2151,4 +2266,4 @@ role_icons={
 }
 roles_html=''.join(f'<span class="issa-role-pill">{role_icons[p]} {PAGE_ROLE[p]}</span>' for p in PAGES)
 st.markdown(f'<div class="issa-roles"><div class="issa-roles-title">Les rôles de vos secrétaires spécialisés</div><div class="issa-role-pills">{roles_html}</div></div>',unsafe_allow_html=True)
-st.caption('Navigation disponible dans le menu supérieur · Base de données : SQLite locale · tables créées automatiquement')
+st.caption('Navigation disponible dans le menu supérieur · Base de données : Supabase PostgreSQL · tables créées automatiquement')
