@@ -1368,12 +1368,12 @@ if page=="Vue d’ensemble":
             if rr.details: st.caption(rr.details)
     st.subheader('📅 Prochaines séances')
     if upcoming.empty: st.info('Aucune séance future. Saisis ton emploi du temps dans l’onglet correspondant.')
-    else: show_dataframe(upcoming.sort_values(['event_date','start_time']).head(8)[['event_date','start_time','end_time','title','kind','location']].rename(columns={'event_date':'Date','start_time':'Début','end_time':'Fin','title':'Séance','kind':'Type','location':'Lieu'}),use_container_width=True,hide_index=True)
+    else: _ = show_dataframe(upcoming.sort_values(['event_date','start_time']).head(8)[['event_date','start_time','end_time','title','kind','location']].rename(columns={'event_date':'Date','start_time':'Début','end_time':'Fin','title':'Séance','kind':'Type','location':'Lieu'}),use_container_width=True,hide_index=True)
     a,b=st.columns(2)
     with a:
         st.subheader('🎯 Tâches prioritaires')
         if open_tasks.empty: st.success('Aucune tâche ouverte enregistrée.')
-        else: show_dataframe(open_tasks.head(7)[['title','due_date','priority','status']].rename(columns={'title':'Tâche','due_date':'Échéance','priority':'Priorité','status':'Statut'}),use_container_width=True,hide_index=True)
+        else: _ = show_dataframe(open_tasks.head(7)[['title','due_date','priority','status']].rename(columns={'title':'Tâche','due_date':'Échéance','priority':'Priorité','status':'Statut'}),use_container_width=True,hide_index=True)
     with b:
         st.subheader('🚀 Objectifs personnels')
         if goals.empty: st.info('Ajoute tes objectifs dans Assistant de vie → Objectifs.')
@@ -1405,7 +1405,7 @@ elif page=="Maquettes & matières":
         if upl:
             try:
                 imp=pd.read_csv(upl) if upl.name.lower().endswith('.csv') else pd.read_excel(upl)
-                show_dataframe(imp.head(30),use_container_width=True,hide_index=True)
+                _ = show_dataframe(imp.head(30),use_container_width=True,hide_index=True)
                 if st.button('Importer les lignes affichées',type='primary'):
                     aliases={'intitule':'title','matiere':'title','matiere title':'title','code matiere':'code','semestre':'semester','unite enseignement':'ue','code ue':'ue_code','credits ects':'credits','enseignant':'teacher','heures cm':'cm','heures td':'td','heures tp':'tp'}
                     imp=imp.rename(columns={col:aliases.get(norm(col),norm(col).replace(' ','_')) for col in imp.columns})
@@ -1440,13 +1440,13 @@ elif page=="Maquettes & matières":
         df=read_df('SELECT * FROM subjects ORDER BY semester,ue,title')
         if df.empty: st.info('Aucune matière enregistrée.')
         else:
-            show_dataframe(df.drop(columns=['created_at'],errors='ignore'),use_container_width=True,hide_index=True)
+            _ = show_dataframe(df.drop(columns=['created_at'],errors='ignore'),use_container_width=True,hide_index=True)
             _ = export_csv(df,'la maquette','maquette')
             opts={f"#{r.id} — {r.title} ({r.semester})":int(r.id) for r in df.itertuples()}; chosen=st.selectbox('Fiche à supprimer (si nécessaire)',list(opts),key='del_subject_pick')
             if st.button('Supprimer la matière choisie',key='delete_subject'):
                 _ = run('DELETE FROM subjects WHERE id=?',(opts[chosen],)); st.success('Matière supprimée.'); st.rerun()
             dup=df.assign(n=df.title.map(norm),s=df.semester.map(norm),u=df.ue.map(norm)).groupby(['n','s','u']).filter(lambda g:len(g)>1)
-            if not dup.empty: st.warning('Doublons potentiels détectés : vérifie-les avant suppression.'); show_dataframe(dup[['id','title','semester','ue']],hide_index=True)
+            if not dup.empty: st.warning('Doublons potentiels détectés : vérifie-les avant suppression.'); _ = show_dataframe(dup[['id','title','semester','ue']],hide_index=True)
 
 # ---------- EDT ----------
 elif page=="Emploi du temps":
@@ -1476,7 +1476,7 @@ elif page=="Emploi du temps":
         if up:
             try:
                 imp=pd.read_csv(up) if up.name.lower().endswith('.csv') else pd.read_excel(up)
-                show_dataframe(imp,use_container_width=True,hide_index=True)
+                _ = show_dataframe(imp,use_container_width=True,hide_index=True)
                 if st.button('Enregistrer les séances importées',type='primary'):
                     alias={'intitule':'title','cours':'title','date':'event_date','jour':'event_date','debut':'start_time','heure debut':'start_time','fin':'end_time','heure fin':'end_time','type':'kind','matiere':'subject','salle':'location','lieu':'location','remarques':'notes'}
                     imp=imp.rename(columns={col:alias.get(norm(col),norm(col).replace(' ','_')) for col in imp.columns})
@@ -1515,7 +1515,7 @@ elif page=="Emploi du temps":
             if filt=='À venir': view=view[view.event_date>=date.today().isoformat()]
             if filt=='Passées': view=view[view.event_date<date.today().isoformat()]
             if query.strip(): view=view[view.title.str.contains(query,case=False,na=False)]
-            show_dataframe(view[['id','event_date','start_time','end_time','title','kind','subject_title','location','source']].rename(columns={'id':'ID','event_date':'Date','start_time':'Début','end_time':'Fin','title':'Événement','kind':'Type','subject_title':'Matière','location':'Lieu','source':'Origine'}),use_container_width=True,hide_index=True)
+            _ = show_dataframe(view[['id','event_date','start_time','end_time','title','kind','subject_title','location','source']].rename(columns={'id':'ID','event_date':'Date','start_time':'Début','end_time':'Fin','title':'Événement','kind':'Type','subject_title':'Matière','location':'Lieu','source':'Origine'}),use_container_width=True,hide_index=True)
             _ = export_csv(view,'l’emploi du temps','edt')
             eopts={f"#{r.id} — {r.event_date} {r.title}":int(r.id) for r in ev.itertuples()}; pick=st.selectbox('Séance à supprimer',list(eopts))
             if st.button('Supprimer la séance sélectionnée'): _ = run('DELETE FROM events WHERE id=?',(eopts[pick],)); st.rerun()
@@ -1569,7 +1569,7 @@ elif page=="Programmes de révision":
     st.divider(); st.subheader('Tâches de révision déjà planifiées')
     rt=read_df("SELECT * FROM tasks WHERE category='Révision' ORDER BY due_date")
     if rt.empty: st.caption('Aucune tâche de révision enregistrée pour le moment.')
-    else: show_dataframe(rt[['title','due_date','priority','status','notes']],use_container_width=True,hide_index=True)
+    else: _ = show_dataframe(rt[['title','due_date','priority','status','notes']],use_container_width=True,hide_index=True)
 
 # ---------- Journal et progression ----------
 elif page=="Suivi & progression":
@@ -1596,7 +1596,7 @@ elif page=="Suivi & progression":
         st.subheader('Historique des séances')
         if logs.empty: st.info('Le journal est vide.')
         else:
-            show_dataframe(logs[['study_date','subject','hours','method','confidence','notes']].rename(columns={'study_date':'Date','subject':'Matière','hours':'Heures','method':'Méthode','confidence':'Maîtrise /5','notes':'Notes'}),use_container_width=True,hide_index=True)
+            _ = show_dataframe(logs[['study_date','subject','hours','method','confidence','notes']].rename(columns={'study_date':'Date','subject':'Matière','hours':'Heures','method':'Méthode','confidence':'Maîtrise /5','notes':'Notes'}),use_container_width=True,hide_index=True)
             _ = export_csv(logs,'le journal d’étude','journal_etude')
             choices={f"#{r.id} · {r.study_date} · {r.subject}":int(r.id) for r in logs.itertuples()}; sel=st.selectbox('Entrée à supprimer',list(choices))
             if st.button('Supprimer cette entrée du journal'): _ = run('DELETE FROM study_logs WHERE id=?',(choices[sel],)); st.rerun()
@@ -1664,7 +1664,7 @@ elif page=="Assistant de vie":
             with a: _ = card('Revenus',f'{incomes:,.0f} FCFA')
             with b: _ = card('Dépenses',f'{expenses:,.0f} FCFA')
             with c: _ = card('Solde enregistré',f'{incomes-expenses:,.0f} FCFA')
-            show_dataframe(budget,use_container_width=True,hide_index=True); _ = export_csv(budget,'le budget','budget')
+            _ = show_dataframe(budget,use_container_width=True,hide_index=True); _ = export_csv(budget,'le budget','budget')
             opts={f"#{r.id} · {r.entry_date} · {r.kind} · {r.amount:g} FCFA":int(r.id) for r in budget.itertuples()}; pick=st.selectbox('Mouvement à supprimer',list(opts))
             if st.button('Supprimer le mouvement'): _ = run('DELETE FROM budgets WHERE id=?',(opts[pick],)); st.rerun()
         else: st.info('Aucun mouvement saisi. Le solde est calculé uniquement à partir des mouvements enregistrés ici.')
@@ -1683,7 +1683,7 @@ elif page=="Assistant de vie":
             else: st.error('Saisis le titre de la tâche.')
         tasks=read_df("SELECT * FROM tasks ORDER BY CASE priority WHEN 'Urgente' THEN 1 WHEN 'Haute' THEN 2 WHEN 'Normale' THEN 3 ELSE 4 END, due_date")
         if not tasks.empty:
-            show_dataframe(tasks[['id','title','due_date','priority','status','category','notes']],use_container_width=True,hide_index=True)
+            _ = show_dataframe(tasks[['id','title','due_date','priority','status','category','notes']],use_container_width=True,hide_index=True)
             opts={f"#{r.id} · {r.title}":int(r.id) for r in tasks.itertuples()}; sel=st.selectbox('Tâche à mettre à jour',list(opts)); tid=opts[sel]
             status=st.selectbox('Nouveau statut',['À faire','En cours','Terminée'],key='life_task_status')
             if st.button('Enregistrer le statut',key='life_task_save'): _ = run('UPDATE tasks SET status=? WHERE id=?',(status,tid)); st.rerun()
@@ -1730,7 +1730,7 @@ elif page=="Assistant de vie":
             contacts_view = contacts.drop(columns=['created_at'], errors='ignore').copy()
             for col in contacts_view.select_dtypes(include=['object']).columns:
                 contacts_view[col] = contacts_view[col].map(lambda value: display_text(value, ''))
-            show_dataframe(contacts_view, use_container_width=True, hide_index=True)
+            _ = show_dataframe(contacts_view, use_container_width=True, hide_index=True)
 
             if 'id' in contacts.columns:
                 contacts['_valid_id'] = pd.to_numeric(contacts['id'], errors='coerce')
@@ -1801,7 +1801,7 @@ elif page=="Rappels automatiques":
         with c2: _ = card('À traiter maintenant',len(overdue),'Date/heure du rappel atteinte')
         with c3: _ = card('E-mails envoyés',int((reminders.status=='Envoyé').sum()),'Rappels ponctuels déjà transmis')
         display=reminders.rename(columns={'title':'Rappel automatique','details':'Détails / rubrique','remind_at':'Date et heure','repeat_rule':'Répétition','status':'État e-mail','enabled':'Actif','last_sent_at':'Dernier e-mail','last_error':'Erreur éventuelle','source_type':'Rubrique source','source_id':'N° entrée'})
-        show_dataframe(display[['Rappel automatique','Détails / rubrique','Date et heure','Rubrique source','État e-mail','Actif','Dernier e-mail','Erreur éventuelle']],use_container_width=True,hide_index=True)
+        _ = show_dataframe(display[['Rappel automatique','Détails / rubrique','Date et heure','Rubrique source','État e-mail','Actif','Dernier e-mail','Erreur éventuelle']],use_container_width=True,hide_index=True)
         choices={f"#{int(r.id)} — {r.title} — {r.remind_at}":int(r.id) for r in reminders.itertuples()}
         selected=st.selectbox('Gérer un rappel automatique',list(choices),key='auto_reminder_manage_pick')
         rid=choices[selected]; a,b=st.columns(2)
@@ -2108,7 +2108,7 @@ elif page=="Compétences & Carrière":
         trainings=read_df('SELECT * FROM career_training ORDER BY start_date DESC,id DESC')
         if trainings.empty: st.info('Aucune formation ou certification enregistrée.')
         else:
-            show_dataframe(trainings[['title','provider','kind','start_date','end_date','status','url','notes']].rename(columns={'title':'Formation','provider':'Organisme','kind':'Type','start_date':'Début','end_date':'Fin','status':'État','url':'Lien','notes':'Notes'}),use_container_width=True,hide_index=True)
+            _ = show_dataframe(trainings[['title','provider','kind','start_date','end_date','status','url','notes']].rename(columns={'title':'Formation','provider':'Organisme','kind':'Type','start_date':'Début','end_date':'Fin','status':'État','url':'Lien','notes':'Notes'}),use_container_width=True,hide_index=True)
             opts={f"#{r.id} · {r.title}":int(r.id) for r in trainings.itertuples()}; pick=st.selectbox('Formation à supprimer',list(opts),key='career_training_delete_pick')
             if st.button('Supprimer la formation sélectionnée',key='career_training_delete'): _ = run('DELETE FROM career_training WHERE id=?',(opts[pick],)); st.rerun()
             _ = export_csv(trainings,'les formations','formations_carriere')
@@ -2152,7 +2152,7 @@ elif page=="Compétences & Carrière":
         if not opportunities.empty:
             upcoming=opportunities[opportunities.deadline.astype(str)>=date.today().isoformat()].sort_values('deadline').head(8)
             if upcoming.empty: st.info('Aucune échéance future enregistrée.')
-            else: show_dataframe(upcoming[['deadline','title','organization','kind','status']].rename(columns={'deadline':'Date limite','title':'Opportunité','organization':'Organisation','kind':'Type','status':'Statut'}),use_container_width=True,hide_index=True)
+            else: _ = show_dataframe(upcoming[['deadline','title','organization','kind','status']].rename(columns={'deadline':'Date limite','title':'Opportunité','organization':'Organisation','kind':'Type','status':'Statut'}),use_container_width=True,hide_index=True)
         else: st.info('Les échéances apparaîtront ici dès que tu enregistres des opportunités.')
         st.markdown('#### Conseils de départ')
         st.markdown('- Choisis 3 compétences prioritaires à développer ce mois-ci.\n- Ajoute les formations réellement commencées ou envisagées.\n- Enregistre les liens officiels des stages et opportunités pour retrouver facilement les annonces.')
@@ -2170,7 +2170,7 @@ elif page=="Centre de productivité XXL":
                 try:
                     df=read_df(sql,args)
                     if not df.empty:
-                        found+=len(df); st.markdown(f'**{label} — {len(df)} résultat(s)**'); show_dataframe(df,use_container_width=True,hide_index=True)
+                        found+=len(df); st.markdown(f'**{label} — {len(df)} résultat(s)**'); _ = show_dataframe(df,use_container_width=True,hide_index=True)
                 except Exception: pass
             if not found: st.info('Aucun résultat trouvé dans les modules indexés. Essaie un autre mot-clé.')
     with tabs[1]:
@@ -2184,7 +2184,7 @@ elif page=="Centre de productivité XXL":
                 _ = run('INSERT INTO tasks(title,due_date,priority,status,category,notes) VALUES(?,?,?,?,?,?)',(idea.strip(),due.isoformat() if due else '',priority,'À faire',domain,details.strip()))
                 st.success('Idée enregistrée comme tâche.'); st.rerun()
         quick=read_df('SELECT id,title,due_date,priority,status,category,notes FROM tasks ORDER BY id DESC LIMIT 20')
-        if not quick.empty: show_dataframe(quick,use_container_width=True,hide_index=True)
+        if not quick.empty: _ = show_dataframe(quick,use_container_width=True,hide_index=True)
     with tabs[2]:
         with st.form('central_project_form'):
             title=st.text_input('Nom du projet *'); domain=st.selectbox('Domaine du projet',['Études','Carrière','Finances','Agronomie','Personnel','Association','Entreprise','Autre']); status=st.selectbox('Statut',['À faire','En cours','En pause','Terminé','Abandonné']); progress=st.slider('Progression',0,100,0); a,b=st.columns(2); start=a.date_input('Début',value=date.today()); due=b.date_input('Échéance',value=date.today()+timedelta(days=30)); notes=st.text_area('Description / prochaines étapes'); save=st.form_submit_button('Enregistrer le projet')
@@ -2260,14 +2260,14 @@ elif page=="Centre de productivité XXL":
             st.success('⏰ Ta session précédente est terminée. Une nouvelle session peut être lancée.')
             st.session_state['issa_focus_expired']=False
         focus=read_df('SELECT * FROM focus_sessions ORDER BY id DESC'); total=int(focus.duration_minutes.sum()) if not focus.empty else 0; a,b=st.columns(2); a.metric('Minutes cumulées',total); b.metric('Heures cumulées',round(total/60,1))
-        if not focus.empty: show_dataframe(focus,use_container_width=True,hide_index=True); _ = export_csv(focus,'les séances de concentration','focus_sessions')
+        if not focus.empty: _ = show_dataframe(focus,use_container_width=True,hide_index=True); _ = export_csv(focus,'les séances de concentration','focus_sessions')
     with tabs[5]:
         today=date.today().isoformat(); existing=read_df('SELECT * FROM daily_journal WHERE entry_date=?',(today,)); default=existing.iloc[0] if not existing.empty else None
         with st.form('central_daily_journal_form'):
             mood=st.selectbox('Humeur',['Très bonne','Bonne','Neutre','Difficile','Très difficile'],index=['Très bonne','Bonne','Neutre','Difficile','Très difficile'].index(default['mood']) if default is not None and default['mood'] in ['Très bonne','Bonne','Neutre','Difficile','Très difficile'] else 2); energy=st.slider('Énergie',1,5,int(default['energy']) if default is not None else 3); successes=st.text_area('Réussites du jour',value=str(default['successes']) if default is not None else ''); improvements=st.text_area('À améliorer',value=str(default['improvements']) if default is not None else ''); priorities=st.text_area('Priorités pour demain',value=str(default['tomorrow_priorities']) if default is not None else ''); save=st.form_submit_button('Enregistrer le journal du jour')
         if save: _ = run('INSERT INTO daily_journal(entry_date,mood,energy,successes,improvements,tomorrow_priorities) VALUES(?,?,?,?,?,?) ON CONFLICT(entry_date) DO UPDATE SET mood=excluded.mood,energy=excluded.energy,successes=excluded.successes,improvements=excluded.improvements,tomorrow_priorities=excluded.tomorrow_priorities',(today,mood,int(energy),successes.strip(),improvements.strip(),priorities.strip())); st.success('Journal quotidien sauvegardé.'); st.rerun()
         journals=read_df('SELECT * FROM daily_journal ORDER BY entry_date DESC');
-        if not journals.empty: show_dataframe(journals,use_container_width=True,hide_index=True); _ = export_csv(journals,'le journal quotidien','daily_journal')
+        if not journals.empty: _ = show_dataframe(journals,use_container_width=True,hide_index=True); _ = export_csv(journals,'le journal quotidien','daily_journal')
     with tabs[6]:
         with st.form('central_meeting_form'):
             title=st.text_input('Objet de la réunion / rencontre *'); meeting_date=st.date_input('Date',value=date.today()); participants=st.text_input('Participants'); summary=st.text_area('Compte rendu'); decisions=st.text_area('Décisions prises'); actions=st.text_area('Actions à mener'); status=st.selectbox('Suivi',['À suivre','En cours','Terminé']); save=st.form_submit_button('Enregistrer le compte rendu')
@@ -2275,7 +2275,7 @@ elif page=="Centre de productivité XXL":
             if not title.strip(): st.error('Indique l’objet de la rencontre.')
             else: _ = run('INSERT INTO meeting_minutes(title,meeting_date,participants,summary,decisions,actions,status) VALUES(?,?,?,?,?,?,?)',(title.strip(),meeting_date.isoformat(),participants.strip(),summary.strip(),decisions.strip(),actions.strip(),status)); st.success('Compte rendu enregistré.'); st.rerun()
         meetings=read_df('SELECT * FROM meeting_minutes ORDER BY meeting_date DESC,id DESC')
-        if not meetings.empty: show_dataframe(meetings,use_container_width=True,hide_index=True); _ = export_csv(meetings,'les comptes rendus','meeting_minutes')
+        if not meetings.empty: _ = show_dataframe(meetings,use_container_width=True,hide_index=True); _ = export_csv(meetings,'les comptes rendus','meeting_minutes')
     with tabs[7]:
         with st.form('central_life_form'):
             title=st.text_input('Rendez-vous, démarche ou course *'); kind=st.selectbox('Type',['Rendez-vous','Démarche administrative','Courses','Échéance','Autre']); a,b=st.columns(2); event_date=a.date_input('Date',value=date.today()); event_time=b.time_input('Heure',value=time(9,0)); priority=st.selectbox('Priorité',['Basse','Normale','Haute','Urgente']); status=st.selectbox('État',['À faire','En cours','Terminé','Annulé']); notes=st.text_area('Notes'); save=st.form_submit_button('Ajouter à l’organisateur')
@@ -2283,7 +2283,7 @@ elif page=="Centre de productivité XXL":
             if not title.strip(): st.error('Le titre est obligatoire.')
             else: _ = run('INSERT INTO life_organizer(title,kind,event_date,event_time,priority,status,notes) VALUES(?,?,?,?,?,?,?)',(title.strip(),kind,event_date.isoformat(),event_time.strftime('%H:%M'),priority,status,notes.strip())); st.success('Élément ajouté à l’organisateur.'); st.rerun()
         organizer=read_df('SELECT * FROM life_organizer ORDER BY event_date,event_time,id DESC')
-        if not organizer.empty: show_dataframe(organizer,use_container_width=True,hide_index=True); _ = export_csv(organizer,'les éléments de l’organisateur','life_organizer')
+        if not organizer.empty: _ = show_dataframe(organizer,use_container_width=True,hide_index=True); _ = export_csv(organizer,'les éléments de l’organisateur','life_organizer')
         else: st.info('Aucun rendez-vous ou démarche enregistré.')
 
 elif page=="Paramètres & sauvegarde":
