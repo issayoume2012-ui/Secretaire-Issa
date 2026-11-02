@@ -25,8 +25,7 @@ st.markdown(f"""
 <style>
 :root{{--issa-navy:#10213c;--issa-blue:#2457a7;--issa-cyan:#3bb7c9;--issa-gold:#f0b84b;--issa-muted:#64748b}}
 .block-container{{max-width:1550px;padding-top:1rem;padding-bottom:2rem;position:relative;z-index:1}}
-[data-testid="stAppViewContainer"]{{background-color:#eaf0f8;background-image:linear-gradient(rgba(245,249,255,.70),rgba(245,249,255,.76)),{_BACKGROUND_CSS};background-size:cover;background-position:center top;background-attachment:fixed;background-repeat:no-repeat}}
-[data-testid="stAppViewContainer"]::before{{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;background-image:{_BACKGROUND_CSS};background-size:cover;background-position:center 15%;background-repeat:no-repeat;opacity:.20;filter:saturate(.82)}}
+[data-testid="stAppViewContainer"]{{background-color:#eaf0f8;background-image:linear-gradient(rgba(245,249,255,.76),rgba(245,249,255,.82)),{_BACKGROUND_CSS};background-size:cover;background-position:center center;background-attachment:fixed;background-repeat:no-repeat}}
 [data-testid="stMain"]{{background:transparent;position:relative;z-index:1}}
 [data-testid="stHeader"]{{background:rgba(245,249,255,.72)}}
 [data-testid="stSidebar"]{{background:#fff;border-right:1px solid #e1e8f2}}
@@ -838,19 +837,17 @@ _NAV_APPS = {
 with st.container(border=True):
     _vcol1, _vcol2 = st.columns([3, 2])
     with _vcol1:
-        _nav_language_label = st.selectbox("🌍 Langue de commande / Làkk", ["Français", "Wolof"], key="global_voice_nav_language", help="La saisie écrite accepte les deux langues. La reconnaissance vocale wolof dépend du support du moteur de transcription.")
+        _nav_language_label = st.selectbox("Làkk bu ndigal / Langue de commande", ["Wolof", "Français"], key="global_voice_nav_language", help="Tontu yi dañuy nekk ci Wolof ci bind. Waxal walla bind sa ndigal.")
         _nav_lang_code = "fr-FR" if _nav_language_label == "Français" else "wo-SN"
         _nav_audio = st.audio_input("🎙️ Enregistrez votre commande / Waxal sa ndigal", key="global_voice_navigation_audio")
         _nav_text = st.text_input("⌨️ Ou tapez votre demande / Wallaa nga bind", placeholder="Ex. : Ouvre l’emploi du temps · Ubbi sama emploi du temps · Ouvre Gmail", key="global_voice_navigation_text")
-        _nav_go = st.button("✨ Seugn bi, écoute et agis ! / Déggal te defal", key="global_voice_navigation_go", use_container_width=True, type="primary", disabled=(_nav_audio is None and not _nav_text.strip()))
-        _auto_repeat = st.checkbox("🔁 Répéter automatiquement la réponse / Waxaatal tontu bi", value=True, key="global_voice_nav_auto_repeat")
-        _repeat_count_label = st.selectbox("Nombre de répétitions / Ñaata yoon", ["1 fois", "2 fois", "3 fois"], index=1, key="global_voice_nav_repeat_count")
-        st.caption("Le navigateur peut ouvrir des applications web. Pour des applications installées sur l’ordinateur ou le téléphone, cela dépend du système, des liens pris en charge et des autorisations : un site web ne peut pas lancer librement toutes les applications locales.")
+        _nav_go = st.button("✨ Seugn bi, déggal te defal", key="global_voice_navigation_go", use_container_width=True, type="primary", disabled=(_nav_audio is None and not _nav_text.strip()))
+        st.caption("Seugn bi man na ubbi ay site ci web. Ngir ay application yu nekk ci sa telefon walla ordinateur, dafay aju ci sa appareil ak sa ndigal.")
     with _vcol2:
-        st.markdown("**Essaie ces commandes / Jéemal ndigal yii**")
-        st.markdown("- 🇫🇷 « Ouvre mon planning » · « Va aux révisions » · « Ouvre Gmail »")
-        st.markdown("- 🇸🇳 « Ubbi sama planning » · « Demal ci révisions » · « Ubbi Gmail »")
-        st.caption("Seugn bi peut naviguer dans les rubriques et ouvrir des applications web. Il ne peut pas envoyer un message ou modifier une autre application sans connexion et autorisation dédiées.")
+        st.markdown("**Jéemal ndigal yii**")
+        st.markdown("- « Ubbi sama planning » · « Demal ci révisions » · « Ubbi Gmail »")
+        st.markdown("- « Ubbi WhatsApp » · « Demal ci carrière » · « Ubbi sama tableau de bord »")
+        st.caption("Tontu yi ci Wolof lañu, ci bind rekk. Seugn bi du jàng leen ci baat.")
     if _nav_go and (_nav_audio is not None or _nav_text.strip()):
         try:
             _spoken_nav = transcribe_audio(_nav_audio, language=_nav_lang_code) if _nav_audio is not None else _nav_text.strip()
@@ -859,13 +856,12 @@ with st.container(border=True):
             _app_match = next(((name, url) for name, (url, terms) in _NAV_APPS.items() if any(unicodedata.normalize("NFKD", term.lower()).encode("ascii", "ignore").decode("ascii") in _spoken_norm for term in terms)), None)
             if _app_match:
                 _app_name, _app_url = _app_match
-                _reply = (f"Seugn bi: D'accord, j'ouvre {_app_name} dans un nouvel onglet. Suivez le lien ci-dessous si le navigateur ne l'ouvre pas automatiquement."
-                          if _nav_language_label == "Français" else f"Seugn bi: Waaw, maa ngi lay jox yoon wi ci {_app_name}. Cuqal ci butoŋ bi ngir ubbi ko ci beneen onglet.")
+                _reply = f"Seugn bi: Waaw, maa ngi lay won yoon wi ngir nga ubbi {_app_name}. Cuqal ci butoŋ bi ci suuf."
+
                 st.session_state["global_voice_nav_app"] = _app_name
                 st.session_state["global_voice_nav_app_url"] = _app_url
                 st.session_state["global_voice_nav_message"] = _reply
                 st.session_state["global_voice_nav_speak"] = _reply
-                st.session_state["global_voice_nav_speech_lang"] = "fr-FR" if _nav_language_label == "Français" else "wo-SN"
                 st.rerun()
             _nav_routes = [
                 (("accueil", "vue d ensemble", "vue ensemble", "home", "tableau de bord general", "kaay ci kanam", "dalal ak jamm"), "Vue d’ensemble"),
@@ -884,36 +880,23 @@ with st.container(border=True):
             _route = next((r for r in _nav_routes if any(unicodedata.normalize("NFKD", term.lower()).encode("ascii", "ignore").decode("ascii") in _spoken_norm for term in r[0])), None)
             if _route:
                 st.session_state["top_nav"] = _route[1]
-                if _nav_language_label == "Français":
-                    _reply = f"Seugn bi a compris : « {_spoken_nav} ». J’ouvre la rubrique {_route[1]}."
-                else:
-                    _reply = f"Seugn bi dégg na la: « {_spoken_nav} ». Maa ngi lay yóbbu ci {_route[1]}."
+                _reply = f"Seugn bi dégg na la: « {_spoken_nav} ». Maa ngi lay yóbbu ci {_route[1]}."
                 st.session_state["global_voice_nav_message"] = _reply
                 st.session_state["global_voice_nav_speak"] = _reply
-                st.session_state["global_voice_nav_speech_lang"] = "fr-FR" if _nav_language_label == "Français" else "wo-SN"
                 st.session_state.pop("global_voice_nav_app", None)
                 st.session_state.pop("global_voice_nav_app_url", None)
                 st.rerun()
-            _unknown_reply = (f"Seugn bi a entendu : « {_spoken_nav} ». Je n’ai pas identifié la commande. Demande une rubrique ou une application comme Gmail, Drive, WhatsApp, YouTube ou ChatGPT."
-                              if _nav_language_label == "Français" else f"Seugn bi dégg na: « {_spoken_nav} ». Xamuma ndigal li. Waxal turu rubrique bi, walla nga ne Gmail, Drive, WhatsApp, YouTube walla ChatGPT.")
+            _unknown_reply = f"Seugn bi dégg na la: « {_spoken_nav} ». Xamuma ndigal li. Waxal turu barab bi nga bëgg ubbi, walla nga bind turu app bi: Gmail, Drive, WhatsApp, YouTube walla ChatGPT."
             st.session_state["global_voice_nav_message"] = _unknown_reply
             st.session_state["global_voice_nav_speak"] = _unknown_reply
-            st.session_state["global_voice_nav_speech_lang"] = "fr-FR" if _nav_language_label == "Français" else "wo-SN"
             st.rerun()
         except Exception as _nav_err:
             st.error(f"Commande vocale indisponible : {_nav_err}")
 if st.session_state.get("global_voice_nav_message"):
     st.success(st.session_state["global_voice_nav_message"])
     if st.session_state.get("global_voice_nav_app_url"):
-        st.link_button(f"🚀 Ouvrir {st.session_state.get('global_voice_nav_app', 'l’application')}", st.session_state["global_voice_nav_app_url"], use_container_width=True)
-    st.caption("🔊 Seugn bi / Wax ak Seugn bi — la réponse peut être lue automatiquement plusieurs fois. Le bouton permet de la relancer.")
-    _spoken_reply = str(st.session_state.get("global_voice_nav_speak", ""))
-    if _spoken_reply:
-        _reply_js = json.dumps(_spoken_reply, ensure_ascii=False)
-        _speech_lang_js = json.dumps(st.session_state.get("global_voice_nav_speech_lang", "fr-FR"))
-        _auto_repeat_js = json.dumps(bool(st.session_state.get("global_voice_nav_auto_repeat", True)))
-        _repeat_count_js = json.dumps(int(str(st.session_state.get("global_voice_nav_repeat_count", "2 fois")).split()[0]))
-        st.components.v1.html(f"""<div style='font:14px sans-serif;padding:4px 0;color:#17345c'>🔊 Réponse vocale de Seugn bi <button id='issa-speak-again' type='button' style='margin-left:8px;padding:8px 12px;border-radius:8px;border:1px solid #b8c9e3;background:#edf5ff;cursor:pointer'>▶ Répéter la réponse</button><span id='issa-speech-status' aria-live='polite' style='margin-left:8px'></span></div><script>(function(){{const text={_reply_js};const lang={_speech_lang_js};const autoRepeat={_auto_repeat_js};const repeatCount={_repeat_count_js};let runId=0;function speak(){{if(!('speechSynthesis' in window)){{document.getElementById('issa-speech-status').textContent='La lecture vocale n’est pas prise en charge par ce navigateur.';return;}}runId++;const thisRun=runId;window.speechSynthesis.cancel();let n=0;function sayNext(){{if(thisRun!==runId)return;if(n >= (autoRepeat ? repeatCount : 1)){{document.getElementById('issa-speech-status').textContent='✓ Réponse terminée';return;}}n++;const u=new SpeechSynthesisUtterance(text);u.lang=lang;u.rate=0.88;u.pitch=1.02;u.volume=0.92;const voices=window.speechSynthesis.getVoices();const preferred=voices.find(v=>v.lang.toLowerCase()===lang.toLowerCase())||voices.find(v=>v.lang.toLowerCase().startsWith(lang.split('-')[0].toLowerCase()));if(preferred)u.voice=preferred;u.onend=()=>{{if(thisRun===runId)setTimeout(sayNext,450);}};u.onerror=()=>{{document.getElementById('issa-speech-status').textContent='Utilisez le bouton pour relancer la lecture.';}};window.speechSynthesis.speak(u);document.getElementById('issa-speech-status').textContent='Lecture '+n+'/'+(autoRepeat ? repeatCount : 1);}}sayNext();}}document.getElementById('issa-speak-again').addEventListener('click',speak);speak();}})();</script>""", height=65)
+        st.link_button(f"🚀 Ubbi {st.session_state.get('global_voice_nav_app', 'app bi')}", st.session_state["global_voice_nav_app_url"], use_container_width=True)
+    st.caption("Tontu yi dañuy ñëw ci bind rekk. Seugn bi du jàng tontu yi ci baat.")
 
 # ---------- Centre de lancement XXL : sites, applications web et fonctions internes ----------
 st.markdown('<div class="issa-nav-title">🚀 Lanceur universel XXL · Applications, sites et outils</div>', unsafe_allow_html=True)
@@ -954,7 +937,7 @@ with st.container(border=True):
 
 st.markdown('<div class="issa-nav-title">Menu principal · Choisissez aussi par clic</div>',unsafe_allow_html=True)
 if 'top_nav' not in st.session_state: st.session_state['top_nav']=PAGES[0]
-st.radio('Navigation principale',PAGES,format_func=lambda x:PAGE_SHORT[x],horizontal=True,label_visibility='collapsed',key='top_nav')
+st.selectbox('Tànnal barab bi nga bëgg / Aller à une rubrique',PAGES,format_func=lambda x:PAGE_SHORT[x],key='top_nav')
 page=st.session_state['top_nav']
 _logout_col, _empty_col = st.columns([1, 8])
 if _logout_col.button('🔒 Déconnexion', key='issa_logout'):
