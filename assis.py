@@ -753,11 +753,20 @@ def process_due_reminders():
             _ = run("UPDATE reminders SET status='Erreur',last_error=? WHERE id=?", (str(exc)[:500], int(r.id)))
 
 def _reminder_worker(stop_event):
+    # Envoi et synchronisation en arrière-plan pour garder le rendu réactif.
+    last_sync = 0.0
     while not stop_event.is_set():
         try:
             _ = process_due_reminders()
         except Exception:
             pass
+        now = time_module.monotonic()
+        if now - last_sync >= 21600:
+            try:
+                _ = sync_existing_entries_to_reminders()
+            except Exception:
+                pass
+            last_sync = now
         stop_event.wait(120)
 
 @st.cache_resource
@@ -850,24 +859,20 @@ def read_df(sql, params=()):
     # d'une table non gérée par le schéma applicatif ou d'une ancienne donnée.
     table_match = re.search(r"\bFROM\s+([A-Za-z_][A-Za-z0-9_]*)", sql, re.I)
     source_table = table_match.group(1) if table_match else "requête SQL"
+    # Nettoyage vectorisé pour éviter deux parcours Python par cellule à chaque rerun.
+    missing_tokens = {"none", "null", "nan", "<na>", "nat", "undefined"}
     for col in df.columns:
-        raw_values = df[col]
-        bad_mask = raw_values.map(
-            lambda value: value is None
-            or (isinstance(value, str) and value.strip().casefold() in {"none", "null", "nan", "<na>", "nat", "undefined"})
-            or (not isinstance(value, str) and not isinstance(value, (list, tuple, dict)) and pd.isna(value))
-        )
-        bad_count = int(bad_mask.sum())
-        if bad_count:
-            entry = {"table": source_table, "column": str(col), "count": bad_count, "source": "lecture SQL / code"}
-            if entry not in _NONE_RUNTIME_LOG:
-                _NONE_RUNTIME_LOG.append(entry)
-        # Nettoyage de chaque valeur, y compris les chaînes littérales "None" enregistrées en base.
-        cleaned = df[col].map(lambda value: _clean_missing_value(value, ""))
-        if col.lower() in numeric_names or pd.api.types.is_numeric_dtype(df[col].dtype):
-            df[col] = pd.to_numeric(cleaned, errors="coerce").fillna(0)
+        series = df[col]
+        if col.lower() in numeric_names or pd.api.types.is_numeric_dtype(series.dtype):
+            if pd.api.types.is_object_dtype(series.dtype) or pd.api.types.is_string_dtype(series.dtype):
+                tokens = series.astype("string").str.strip().str.casefold().isin(missing_tokens)
+                series = series.mask(tokens)
+            df[col] = pd.to_numeric(series, errors="coerce").fillna(0)
         else:
-            df[col] = cleaned
+            if pd.api.types.is_object_dtype(series.dtype) or pd.api.types.is_string_dtype(series.dtype):
+                tokens = series.astype("string").str.strip().str.casefold().isin(missing_tokens)
+                series = series.mask(tokens, "")
+            df[col] = series.fillna("")
     return df
 
 
@@ -1026,15 +1031,7 @@ def card(label,value,note=''):
 def export_csv(df,name,key):
     if not df.empty: st.download_button(f"Exporter {name} en CSV",df.to_csv(index=False).encode('utf-8-sig'),file_name=f"campusclair_{key}.csv",mime='text/csv',key=f"csv_{key}")
 REMINDER_WORKER = start_reminder_worker()
-# Traitement allégé : ne pas refaire toutes les synchronisations SQL à chaque clic.
-# Les appels sont explicitement affectés à une variable pour éviter qu'une valeur
-# de retour None soit affichée par le mécanisme Magic de Streamlit.
-_sync_clock = time_module.time()
-_sync_previous = float(st.session_state.get("issa_global_sync_last", 0) or 0)
-if _sync_clock - _sync_previous >= 21600:  # synchronisation complète toutes les 6 h
-    _sync_result = sync_existing_entries_to_reminders()
-    st.session_state["issa_global_sync_last"] = _sync_clock
-# L'envoi des rappels est déjà assuré par le worker en arrière-plan.
+# Les synchronisations et l'envoi des rappels sont traités hors du rendu Streamlit.
 # Ne pas effectuer d'appel SMTP bloquant pendant le rendu initial de l'interface.
 if not st.session_state.get("issa_initial_reminder_check_done", False):
     st.session_state["issa_initial_reminder_check_done"] = True
@@ -1764,7 +1761,6 @@ elif page=="Assistant de vie":
 # ---------- Rappels automatiques issus des rubriques enregistrées ----------
 elif page=="Rappels automatiques":
     _ = header('SECRÉTARIAT PERSONNEL','Rappels automatiques par e-mail 📧','Les rappels sont générés à partir de ce que tu enregistres déjà dans les onglets : agenda, tâches, objectifs, habitudes, formations et opportunités. Tu n’as pas à ressaisir les mêmes informations ici.')
-    _ = sync_existing_entries_to_reminders()
     current_email = get_recipient_email()
     with st.container(border=True):
         st.markdown('#### 📬 Adresse qui recevra les rappels')
