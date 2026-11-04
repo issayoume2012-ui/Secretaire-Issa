@@ -1,4 +1,5 @@
 """Secrétaire Issa — assistant personnel avec rappels automatiques par Gmail.
+Version optimisée XXL : synchronisation moins fréquente et SMTP non bloquant au rendu.
 Lancement : python -m streamlit run CampusClair_XXL.py
 Base SQLite locale séparée : campus_clair.db
 Dépendances : streamlit, pandas, speechrecognition, openpyxl (facultatif), PyMuPDF (PDF), python-docx (DOCX).
@@ -37,7 +38,7 @@ st.markdown(f"""
 <style>
 :root{{--issa-navy:#10213c;--issa-blue:#2457a7;--issa-cyan:#3bb7c9;--issa-gold:#f0b84b;--issa-muted:#64748b}}
 .block-container{{max-width:1550px;padding-top:1rem;padding-bottom:2rem;position:relative;z-index:1}}
-[data-testid="stAppViewContainer"]{{background-color:#eaf0f8;background-image:linear-gradient(rgba(245,249,255,.76),rgba(245,249,255,.82)),{_BACKGROUND_CSS};background-size:cover;background-position:center center;background-attachment:fixed;background-repeat:no-repeat}}
+[data-testid="stAppViewContainer"]{{background-color:#eaf0f8;background-image:linear-gradient(rgba(245,249,255,.76),rgba(245,249,255,.82)),{_BACKGROUND_CSS};background-size:cover;background-position:center center;background-attachment:scroll;background-repeat:no-repeat}}
 [data-testid="stMain"]{{background:transparent;position:relative;z-index:1}}
 [data-testid="stHeader"]{{background:rgba(245,249,255,.72)}}
 [data-testid="stSidebar"]{{background:#fff;border-right:1px solid #e1e8f2}}
@@ -60,7 +61,7 @@ div[role="radiogroup"]{{gap:.35rem;flex-wrap:wrap}}
 div[role="radiogroup"] label{{background:#fff;border:1px solid #dce6f3;border-radius:12px;padding:8px 12px!important;font-weight:700;box-shadow:0 2px 7px rgba(16,33,60,.035)}}
 div[role="radiogroup"] label:has(input:checked){{background:#eaf2ff;border-color:#7ca8e6;color:#164b93}}
 /* Habillage premium : surfaces nettes, hiérarchie visuelle et navigation lisible. */
-[data-testid="stAppViewContainer"]{{background-color:#edf3fb;background-image:linear-gradient(135deg,rgba(247,250,255,.82),rgba(235,243,253,.88)),{_BACKGROUND_CSS};background-size:cover;background-position:center;background-attachment:fixed;background-repeat:no-repeat}}
+[data-testid="stAppViewContainer"]{{background-color:#edf3fb;background-image:linear-gradient(135deg,rgba(247,250,255,.82),rgba(235,243,253,.88)),{_BACKGROUND_CSS};background-size:cover;background-position:center;background-attachment:scroll;background-repeat:no-repeat}}
 [data-testid="stMainBlockContainer"]{{padding-top:1.35rem}}
 .issa-brand{{background:linear-gradient(118deg,#0b1830 0%,#173d70 48%,#087e91 100%);border:1px solid rgba(255,255,255,.18);border-radius:26px;padding:30px 32px;margin-bottom:20px;box-shadow:0 18px 42px rgba(13,38,75,.22)}}
 .issa-brand:before{{content:"";position:absolute;width:270px;height:270px;right:-65px;bottom:-190px;border:1px solid rgba(255,255,255,.17);border-radius:50%;box-shadow:0 0 0 28px rgba(255,255,255,.035),0 0 0 58px rgba(255,255,255,.025)}}
@@ -1030,11 +1031,12 @@ REMINDER_WORKER = start_reminder_worker()
 # de retour None soit affichée par le mécanisme Magic de Streamlit.
 _sync_clock = time_module.time()
 _sync_previous = float(st.session_state.get("issa_global_sync_last", 0) or 0)
-if _sync_clock - _sync_previous >= 900:
+if _sync_clock - _sync_previous >= 21600:  # synchronisation complète toutes les 6 h
     _sync_result = sync_existing_entries_to_reminders()
     st.session_state["issa_global_sync_last"] = _sync_clock
+# L'envoi des rappels est déjà assuré par le worker en arrière-plan.
+# Ne pas effectuer d'appel SMTP bloquant pendant le rendu initial de l'interface.
 if not st.session_state.get("issa_initial_reminder_check_done", False):
-    _reminder_process_result = process_due_reminders()
     st.session_state["issa_initial_reminder_check_done"] = True
 
 def subject_choices():
