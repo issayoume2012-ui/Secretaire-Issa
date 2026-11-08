@@ -2156,14 +2156,47 @@ elif page=="Rappels automatiques":
             _magic_result = st.error(str(exc))
     reminders=read_df("SELECT id,title,details,remind_at,phone,repeat_rule,status,enabled,last_sent_at,last_error,email_status,email_sent_at,template_key,source_type,source_id FROM reminders ORDER BY remind_at")
     if not reminders.empty:
-        with st.expander("🧹 Supprimer tous les rappels", expanded=False):
-            _magic_result = st.caption("Cette action efface tous les rappels enregistrés, y compris l’historique des e-mails. Les tâches, cours et autres données de tes rubriques restent intacts. Les rappels automatiques liés à ces données peuvent être recréés lors d’une prochaine synchronisation.")
-            _confirm_delete_all = st.checkbox("Je confirme la suppression définitive de tous les rappels", key="confirm_delete_all_reminders")
-            if st.button("Supprimer tous les rappels", type="secondary", disabled=not _confirm_delete_all, key="delete_all_reminders"):
+        _reminder_labels = {
+            f"#{int(r.id)} — {r.title} — {r.remind_at}": int(r.id)
+            for r in reminders.itertuples()
+        }
+        with st.expander("🧹 Suppression groupée des rappels", expanded=False):
+            _magic_result = st.caption("Sélectionne plusieurs rappels pour les supprimer ensemble. Les tâches, cours et autres données d’origine restent intacts.")
+            with st.form("bulk_delete_reminders_form", clear_on_submit=True):
+                _bulk_selected_labels = st.multiselect(
+                    "Rappels à supprimer",
+                    options=list(_reminder_labels),
+                    placeholder="Choisis un ou plusieurs rappels…",
+                    key="bulk_delete_reminders_selection",
+                )
+                _bulk_confirm = st.checkbox("Je confirme la suppression des rappels sélectionnés")
+                _bulk_submit = st.form_submit_button(
+                    "Supprimer la sélection",
+                    type="secondary",
+                    disabled=not _bulk_selected_labels or not _bulk_confirm,
+                )
+            if _bulk_submit:
+                _bulk_ids = [_reminder_labels[label] for label in _bulk_selected_labels]
+                _bulk_marks = ",".join("?" for _ in _bulk_ids)
+                with connect() as _delete_db:
+                    _delete_db.execute(f"DELETE FROM reminders WHERE id IN ({_bulk_marks})", tuple(_bulk_ids))
+                _reminder_sync_guard()["last_run"] = time_module.time()
+                _magic_result = st.success(f"{len(_bulk_ids)} rappel(s) supprimé(s). Les données des autres rubriques sont conservées.")
+                _magic_result = st.rerun()
+
+        with st.expander("🗑️ Supprimer tous les rappels", expanded=False):
+            _magic_result = st.caption("Cette action efface tous les rappels enregistrés, y compris l’historique des e-mails. Les tâches, cours et autres données restent intacts. Les rappels automatiques liés à ces données peuvent réapparaître à la prochaine synchronisation.")
+            with st.form("delete_all_reminders_form", clear_on_submit=True):
+                _confirm_delete_all = st.checkbox("Je confirme la suppression définitive de tous les rappels")
+                _delete_all_submit = st.form_submit_button(
+                    "Supprimer tous les rappels",
+                    type="secondary",
+                    disabled=not _confirm_delete_all,
+                )
+            if _delete_all_submit:
                 with connect() as _delete_db:
                     _delete_db.execute("DELETE FROM reminders")
                 _reminder_sync_guard()["last_run"] = time_module.time()
-                st.session_state["confirm_delete_all_reminders"] = False
                 _magic_result = st.success("Tous les rappels ont été supprimés. Les autres données de l’application sont conservées.")
                 _magic_result = st.rerun()
     if reminders.empty:
