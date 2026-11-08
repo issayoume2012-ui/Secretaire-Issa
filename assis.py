@@ -779,7 +779,7 @@ def _clean_missing_value(value, fallback=""):
         pass
     if isinstance(value, str):
         value = value.strip()
-        if value.casefold() in {"none", "null", "nan", "<na>", "nat", "undefined"}:
+        if value.strip().casefold() in {"none", "null", "nan", "<na>", "nat", "undefined"}:
             return fallback
         return value
     return value
@@ -2411,9 +2411,9 @@ elif page=="Paramètres & sauvegarde":
 st.markdown('<div class="issa-footer"><strong>🗂️ Secrétaire Issa</strong><br><small>Un espace personnel de secrétariat, de suivi et d’organisation · Données stockées dans Supabase PostgreSQL.</small></div>',unsafe_allow_html=True)
 role_icons={
     "Vue d’ensemble":"🏠", "Maquettes & matières":"🎓", "Emploi du temps":"🗓️",
-    "Programmes de révision":"🎯", "Suivi & progression":"📈", "Assistant de vie":"👤", "Rappels automatiques":"🔔", "Assistant e-mail & documents":"✉️",
+    "Programmes de révision":"🎯", "Suivi & progression":"📈", "Assistant IA XXL":"🤖", "Assistant de vie":"👤", "Rappels automatiques":"🔔", "Assistant e-mail & documents":"✉️",
     "Compétences & Carrière":"🚀", "Centre de productivité XXL":"🧠", "Paramètres & sauvegarde":"⚙️"
 }
-roles_html=''.join(f'<span class="issa-role-pill">{role_icons[p]} {PAGE_ROLE[p]}</span>' for p in PAGES)
+roles_html=''.join(f'<span class="issa-role-pill">{role_icons.get(p, "🤖")} {display_text(PAGE_ROLE.get(p), p)}</span>' for p in PAGES)
 st.markdown(f'<div class="issa-roles"><div class="issa-roles-title">Les rôles de vos secrétaires spécialisés</div><div class="issa-role-pills">{roles_html}</div></div>',unsafe_allow_html=True)
 st.caption('Navigation disponible dans le menu supérieur · Base de données : Supabase PostgreSQL · tables créées automatiquement')
