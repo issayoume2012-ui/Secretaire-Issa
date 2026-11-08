@@ -1066,6 +1066,26 @@ def sync_existing_entries_to_reminders():
             _ = upsert_auto_reminder('note', r.id, f"Note à ne pas oublier : {r.title}", r.content or '', dt.strftime('%Y-%m-%d %H:%M:%S'))
         except Exception: pass
 
+@st.cache_resource(show_spinner=False)
+def _reminder_sync_guard():
+    return {"last_run": 0.0, "lock": threading.Lock()}
+
+def sync_reminders_if_due(interval_seconds=21600, force=False):
+    """Synchronise les rubriques au plus une fois par intervalle pour tout le processus."""
+    guard = _reminder_sync_guard()
+    with guard["lock"]:
+        now = time_module.time()
+        if not force and now - guard["last_run"] < interval_seconds:
+            return False
+        guard["last_run"] = now
+    try:
+        sync_existing_entries_to_reminders()
+        return True
+    except Exception:
+        with guard["lock"]:
+            guard["last_run"] = 0.0
+        raise
+
 def display_text(value, fallback=""):
     """Retourne une valeur sûre pour l'interface, sans None/NULL/NaN visibles."""
     cleaned = _clean_missing_value(value, fallback)
@@ -1344,11 +1364,10 @@ REMINDER_WORKER = start_reminder_worker()
 # Traitement allégé : ne pas refaire toutes les synchronisations SQL à chaque clic.
 # Les appels sont explicitement affectés à une variable pour éviter qu'une valeur
 # de retour None soit affichée par le mécanisme Magic de Streamlit.
-_sync_clock = time_module.time()
-_sync_previous = float(st.session_state.get("issa_global_sync_last", 0) or 0)
-if _sync_clock - _sync_previous >= 21600:  # synchronisation complète toutes les 6 h
-    _sync_result = sync_existing_entries_to_reminders()
-    st.session_state["issa_global_sync_last"] = _sync_clock
+try:
+    _sync_result = sync_reminders_if_due(interval_seconds=21600)
+except Exception as _sync_error:
+    _NONE_RUNTIME_LOG.append({"where": "reminder_sync", "error": str(_sync_error)[:200]})
 # L'envoi des rappels est déjà assuré par le worker en arrière-plan.
 # Ne pas effectuer d'appel SMTP bloquant pendant le rendu initial de l'interface.
 if not st.session_state.get("issa_initial_reminder_check_done", False):
@@ -2081,7 +2100,10 @@ elif page=="Assistant de vie":
 # ---------- Rappels automatiques issus des rubriques enregistrées ----------
 elif page=="Rappels automatiques":
     _ = header('SECRÉTARIAT PERSONNEL','Rappels automatiques par e-mail 🔔','Les rappels sont générés à partir de ce que tu enregistres déjà dans les onglets : agenda, tâches, objectifs, habitudes, formations et opportunités. Tu n’as pas à ressaisir les mêmes informations ici.')
-    _ = sync_existing_entries_to_reminders()
+    try:
+        _ = sync_reminders_if_due(interval_seconds=21600)
+    except Exception as _sync_error:
+        _magic_result = st.warning(f"Synchronisation des rappels différée : {str(_sync_error)[:160]}")
     current_email = get_recipient_email()
     with st.container(border=True):
         _magic_result = st.markdown('#### 📬 Adresse qui recevra les rappels')
@@ -2133,6 +2155,17 @@ elif page=="Rappels automatiques":
         except Exception as exc:
             _magic_result = st.error(str(exc))
     reminders=read_df("SELECT id,title,details,remind_at,phone,repeat_rule,status,enabled,last_sent_at,last_error,email_status,email_sent_at,template_key,source_type,source_id FROM reminders ORDER BY remind_at")
+    if not reminders.empty:
+        with st.expander("🧹 Supprimer tous les rappels", expanded=False):
+            _magic_result = st.caption("Cette action efface tous les rappels enregistrés, y compris l’historique des e-mails. Les tâches, cours et autres données de tes rubriques restent intacts. Les rappels automatiques liés à ces données peuvent être recréés lors d’une prochaine synchronisation.")
+            _confirm_delete_all = st.checkbox("Je confirme la suppression définitive de tous les rappels", key="confirm_delete_all_reminders")
+            if st.button("Supprimer tous les rappels", type="secondary", disabled=not _confirm_delete_all, key="delete_all_reminders"):
+                with connect() as _delete_db:
+                    _delete_db.execute("DELETE FROM reminders")
+                _reminder_sync_guard()["last_run"] = time_module.time()
+                st.session_state["confirm_delete_all_reminders"] = False
+                _magic_result = st.success("Tous les rappels ont été supprimés. Les autres données de l’application sont conservées.")
+                _magic_result = st.rerun()
     if reminders.empty:
         _magic_result = st.info('Aucune échéance détectée. Ajoute une tâche avec une date limite, un cours dans l’agenda, un objectif daté ou une opportunité : le rappel sera créé automatiquement.')
     else:
