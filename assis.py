@@ -6,7 +6,7 @@ Dépendances : streamlit, pandas, speechrecognition, openpyxl (facultatif), PyMu
 """
 from pathlib import Path
 from datetime import date, datetime, time, timedelta
-import sqlite3, re, unicodedata, io, math, os, threading, time as time_module, smtplib, ssl, imaplib, email, email.policy, hashlib, hmac, base64, json
+import sqlite3, re, unicodedata, io, math, os, threading, time as time_module, smtplib, ssl, imaplib, email, email.policy, hashlib, hmac, base64, json, urllib.request, urllib.error
 from email.message import EmailMessage
 import pandas as pd
 import streamlit as st
@@ -753,20 +753,11 @@ def process_due_reminders():
             _ = run("UPDATE reminders SET status='Erreur',last_error=? WHERE id=?", (str(exc)[:500], int(r.id)))
 
 def _reminder_worker(stop_event):
-    # Envoi et synchronisation en arrière-plan pour garder le rendu réactif.
-    last_sync = 0.0
     while not stop_event.is_set():
         try:
             _ = process_due_reminders()
         except Exception:
             pass
-        now = time_module.monotonic()
-        if now - last_sync >= 21600:
-            try:
-                _ = sync_existing_entries_to_reminders()
-            except Exception:
-                pass
-            last_sync = now
         stop_event.wait(120)
 
 @st.cache_resource
@@ -859,20 +850,24 @@ def read_df(sql, params=()):
     # d'une table non gérée par le schéma applicatif ou d'une ancienne donnée.
     table_match = re.search(r"\bFROM\s+([A-Za-z_][A-Za-z0-9_]*)", sql, re.I)
     source_table = table_match.group(1) if table_match else "requête SQL"
-    # Nettoyage vectorisé pour éviter deux parcours Python par cellule à chaque rerun.
-    missing_tokens = {"none", "null", "nan", "<na>", "nat", "undefined"}
     for col in df.columns:
-        series = df[col]
-        if col.lower() in numeric_names or pd.api.types.is_numeric_dtype(series.dtype):
-            if pd.api.types.is_object_dtype(series.dtype) or pd.api.types.is_string_dtype(series.dtype):
-                tokens = series.astype("string").str.strip().str.casefold().isin(missing_tokens)
-                series = series.mask(tokens)
-            df[col] = pd.to_numeric(series, errors="coerce").fillna(0)
+        raw_values = df[col]
+        bad_mask = raw_values.map(
+            lambda value: value is None
+            or (isinstance(value, str) and value.strip().casefold() in {"none", "null", "nan", "<na>", "nat", "undefined"})
+            or (not isinstance(value, str) and not isinstance(value, (list, tuple, dict)) and pd.isna(value))
+        )
+        bad_count = int(bad_mask.sum())
+        if bad_count:
+            entry = {"table": source_table, "column": str(col), "count": bad_count, "source": "lecture SQL / code"}
+            if entry not in _NONE_RUNTIME_LOG:
+                _NONE_RUNTIME_LOG.append(entry)
+        # Nettoyage de chaque valeur, y compris les chaînes littérales "None" enregistrées en base.
+        cleaned = df[col].map(lambda value: _clean_missing_value(value, ""))
+        if col.lower() in numeric_names or pd.api.types.is_numeric_dtype(df[col].dtype):
+            df[col] = pd.to_numeric(cleaned, errors="coerce").fillna(0)
         else:
-            if pd.api.types.is_object_dtype(series.dtype) or pd.api.types.is_string_dtype(series.dtype):
-                tokens = series.astype("string").str.strip().str.casefold().isin(missing_tokens)
-                series = series.mask(tokens, "")
-            df[col] = series.fillna("")
+            df[col] = cleaned
     return df
 
 
@@ -1031,7 +1026,15 @@ def card(label,value,note=''):
 def export_csv(df,name,key):
     if not df.empty: st.download_button(f"Exporter {name} en CSV",df.to_csv(index=False).encode('utf-8-sig'),file_name=f"campusclair_{key}.csv",mime='text/csv',key=f"csv_{key}")
 REMINDER_WORKER = start_reminder_worker()
-# Les synchronisations et l'envoi des rappels sont traités hors du rendu Streamlit.
+# Traitement allégé : ne pas refaire toutes les synchronisations SQL à chaque clic.
+# Les appels sont explicitement affectés à une variable pour éviter qu'une valeur
+# de retour None soit affichée par le mécanisme Magic de Streamlit.
+_sync_clock = time_module.time()
+_sync_previous = float(st.session_state.get("issa_global_sync_last", 0) or 0)
+if _sync_clock - _sync_previous >= 21600:  # synchronisation complète toutes les 6 h
+    _sync_result = sync_existing_entries_to_reminders()
+    st.session_state["issa_global_sync_last"] = _sync_clock
+# L'envoi des rappels est déjà assuré par le worker en arrière-plan.
 # Ne pas effectuer d'appel SMTP bloquant pendant le rendu initial de l'interface.
 if not st.session_state.get("issa_initial_reminder_check_done", False):
     st.session_state["issa_initial_reminder_check_done"] = True
@@ -1042,11 +1045,11 @@ def subject_choices():
     for r in df.itertuples(): opts[f"{r.title} · {r.semester} · {r.ue}"]=int(r.id)
     return df,opts
 
-PAGES=["Vue d’ensemble","Maquettes & matières","Emploi du temps","Programmes de révision","Suivi & progression","Assistant de vie","Rappels automatiques","Assistant e-mail & documents","Compétences & Carrière","Centre de productivité XXL","Paramètres & sauvegarde"]
+PAGES=["Vue d’ensemble","Maquettes & matières","Emploi du temps","Programmes de révision","Suivi & progression","Assistant IA XXL","Assistant de vie","Rappels automatiques","Assistant e-mail & documents","Compétences & Carrière","Centre de productivité XXL","Paramètres & sauvegarde"]
 PAGE_SHORT={
     "Vue d’ensemble":"🏠 Accueil XXL", "Maquettes & matières":"🎓 Académie", "Emploi du temps":"🗓️ Planning",
     "Programmes de révision":"🎯 Révisions", "Suivi & progression":"📈 Progression",
-    "Assistant de vie":"👤 Vie personnelle", "Rappels automatiques":"📧 Rappels e-mail", "Assistant e-mail & documents":"✉️ Assistant complet", "Compétences & Carrière":"🚀 Carrière", "Centre de productivité XXL":"🧠 Central XXL",
+    "Assistant IA XXL":"🤖 Assistant IA français–wolof", "Assistant de vie":"👤 Vie personnelle", "Rappels automatiques":"📧 Rappels e-mail", "Assistant e-mail & documents":"✉️ Assistant complet", "Compétences & Carrière":"🚀 Carrière", "Centre de productivité XXL":"🧠 Central XXL",
     "Paramètres & sauvegarde":"⚙️ Paramètres"
 }
 PAGE_ROLE={
@@ -1055,6 +1058,7 @@ PAGE_ROLE={
     "Emploi du temps":"Secrétaire chargé de la planification et de l’emploi du temps",
     "Programmes de révision":"Secrétaire chargé de l’organisation des révisions",
     "Suivi & progression":"Secrétaire chargé du suivi des résultats et de la progression",
+    "Assistant IA XXL":"Assistant personnel bilingue français–wolof, informé des données et documents XXL",
     "Assistant de vie":"Secrétaire chargé de l’organisation personnelle et des démarches",
     "Rappels automatiques":"Secrétaire chargé des rappels et échéances par e-mail",
     "Assistant e-mail & documents":"Assistant de rédaction, messagerie, voix et consultation documentaire",
@@ -1244,6 +1248,7 @@ st.markdown('''
 _NAV_GROUPS = {
     "🏠 ACCUEIL": ["Vue d’ensemble"],
     "🎓 ESPACE ACADÉMIQUE": ["Maquettes & matières", "Emploi du temps", "Programmes de révision", "Suivi & progression"],
+    "🤖 ASSISTANT IA": ["Assistant IA XXL"],
     "👤 VIE & ASSISTANCE": ["Assistant de vie", "Rappels automatiques", "Assistant e-mail & documents"],
     "🚀 CARRIÈRE & PRODUCTIVITÉ": ["Compétences & Carrière", "Centre de productivité XXL"],
     "⚙️ CONFIGURATION": ["Paramètres & sauvegarde"],
@@ -1761,6 +1766,7 @@ elif page=="Assistant de vie":
 # ---------- Rappels automatiques issus des rubriques enregistrées ----------
 elif page=="Rappels automatiques":
     _ = header('SECRÉTARIAT PERSONNEL','Rappels automatiques par e-mail 📧','Les rappels sont générés à partir de ce que tu enregistres déjà dans les onglets : agenda, tâches, objectifs, habitudes, formations et opportunités. Tu n’as pas à ressaisir les mêmes informations ici.')
+    _ = sync_existing_entries_to_reminders()
     current_email = get_recipient_email()
     with st.container(border=True):
         st.markdown('#### 📬 Adresse qui recevra les rappels')
@@ -1821,6 +1827,95 @@ elif page=="Rappels automatiques":
     st.caption('Vérification des rappels au démarrage de chaque exécution de l’application et contrôle en arrière-plan toutes les 30 secondes tant que le processus Streamlit reste actif. Les rappels sont issus de l’agenda (1 h avant), des tâches et objectifs (veille à 08 h ou immédiatement si déjà en retard), des formations, des stages/concours/bourses, des notes « Rappel » et des habitudes actives. Gmail utilise le port 587 STARTTLS avec secours sur 465 SSL. Streamlit Cloud peut suspendre l’application lorsqu’elle est inactive : un envoi garanti même application endormie nécessite un planificateur externe et une base de données persistante.')
 
 # ---------- Assistant e-mail, voix et documents ----------
+elif page=="Assistant IA XXL":
+    _ = header("ASSISTANT PERSONNEL XXL", "Secrétaire Issa · IA bilingue 🤖", "Parle-moi en français ou en wolof. Je m’appuie sur tes cours, ton planning, tes révisions, tes tâches, ton budget, ta carrière et tes documents.")
+    st.caption("L’assistant garde le fil de la conversation pendant cette session et consulte les informations enregistrées dans ton espace XXL.")
+    _ai_key = _startup_secret("OPENAI_API_KEY", "")
+    _ai_model = _startup_secret("OPENAI_MODEL", "gpt-4o-mini")
+    if not _ai_key:
+        st.warning("Pour activer les réponses de l’IA, ajoute OPENAI_API_KEY dans les Secrets Streamlit ou dans une variable d’environnement. Les instructions sont dans le fichier LIRE_AVANT_DEMARRER_IA.txt.")
+    _speech_col, _voice_col = st.columns([1, 1])
+    with _speech_col:
+        _ai_language = st.selectbox("Langue de dictée", ["Français", "Wolof (prise en charge variable)"], key="issa_ai_speech_language")
+        _ai_audio = st.audio_input("🎙️ Dicter ta question", key="issa_ai_audio_input")
+        if st.button("Transcrire la question", key="issa_ai_transcribe", disabled=_ai_audio is None):
+            try:
+                _lang_code = "fr-FR" if _ai_language == "Français" else "wo-SN"
+                st.session_state["issa_ai_pending_question"] = transcribe_audio(_ai_audio, language=_lang_code)
+                st.rerun()
+            except Exception as _exc:
+                st.error(f"Transcription impossible : {_exc}")
+    with _voice_col:
+        st.markdown("**Réponse vocale**")
+        st.caption("Après une réponse, utilise le lecteur audio pour l’écouter. La voix disponible dépend du service et de la langue.")
+    if "issa_ai_messages" not in st.session_state:
+        st.session_state["issa_ai_messages"] = []
+    for _msg in st.session_state["issa_ai_messages"]:
+        with st.chat_message(_msg["role"]): st.markdown(_msg["content"])
+    _ai_question = st.chat_input("Écris en français ou en wolof / Bindal ci français walla wolof…")
+    if not _ai_question and st.session_state.get("issa_ai_pending_question"):
+        _ai_question = st.session_state.pop("issa_ai_pending_question")
+    if _ai_question:
+        st.session_state["issa_ai_messages"].append({"role":"user", "content":_ai_question})
+        if not _ai_key:
+            _ai_answer = "Na nga def, Issa ? Je suis prête à t’accompagner en français ou en wolof. Pour activer la génération des réponses, configure OPENAI_API_KEY dans les Secrets Streamlit comme indiqué dans LIRE_AVANT_DEMARRER_IA.txt."
+        else:
+            _table_queries = {
+                "Matières": "SELECT title,code,semester,ue,credits,teacher,notes FROM subjects ORDER BY title LIMIT 80",
+                "Cours et examens": "SELECT title,event_date,start_time,end_time,kind,location,notes FROM events ORDER BY event_date LIMIT 100",
+                "Tâches": "SELECT title,due_date,priority,status,category,notes FROM tasks ORDER BY due_date LIMIT 100",
+                "Révisions": "SELECT s.title AS matiere,l.study_date,l.hours,l.confidence,l.method,l.notes FROM study_logs l LEFT JOIN subjects s ON s.id=l.subject_id ORDER BY l.study_date DESC LIMIT 100",
+                "Objectifs": "SELECT title,category,target_date,progress,notes FROM goals ORDER BY target_date LIMIT 80",
+                "Habitudes": "SELECT title,frequency,notes,active FROM habits ORDER BY title LIMIT 80",
+                "Budget": "SELECT entry_date,kind,category,amount,description FROM budgets ORDER BY entry_date DESC LIMIT 100",
+                "Vie personnelle": "SELECT title,category,content,reminder_date FROM life_notes ORDER BY created_at DESC LIMIT 60",
+                "Contacts": "SELECT name,role,email,phone,notes FROM contacts ORDER BY name LIMIT 80",
+                "Compétences": "SELECT name,category,level,target_level,status,notes FROM career_skills ORDER BY name LIMIT 80",
+                "Formations": "SELECT title,provider,kind,start_date,end_date,status,notes FROM career_training ORDER BY end_date LIMIT 80",
+                "Opportunités": "SELECT title,organization,kind,deadline,status,notes FROM career_opportunities ORDER BY deadline LIMIT 80",
+                "Sessions focus": "SELECT session_date,duration_minutes,activity,notes FROM focus_sessions ORDER BY session_date DESC LIMIT 60",
+                "Journal quotidien": "SELECT entry_date,mood,energy,successes,improvements,tomorrow_priorities FROM daily_journal ORDER BY entry_date DESC LIMIT 30",
+                "Projets": "SELECT title,domain,status,progress,due_date,notes FROM productivity_projects ORDER BY due_date LIMIT 60",
+                "Réunions": "SELECT title,meeting_date,participants,summary,decisions,actions,status FROM meeting_minutes ORDER BY meeting_date DESC LIMIT 60",
+                "Documents indexés": "SELECT title,content FROM assistant_docs ORDER BY uploaded_at DESC LIMIT 40",
+            }
+            _context_parts=[]
+            for _label,_sql in _table_queries.items():
+                try:
+                    _df=read_df(_sql)
+                    if not _df.empty: _context_parts.append(_label+":\n"+_df.to_json(orient="records",force_ascii=False))
+                except Exception: pass
+            _context="\n\n".join(_context_parts)[:26000]
+            _system_prompt=("Tu es Secrétaire Issa XXL, l’assistant personnel d’Issa Youme, étudiant en agronomie et sciences alimentaires à l’Université Amadou Makhtar Mbow (UAM), au Sénégal. Tu aides pour les études, la pédagogie, l’emploi du temps, les révisions, la productivité, les tâches et échéances, les habitudes, le journal, le budget en FCFA, les objectifs, les notes et contacts, les compétences, les formations et stages, les opportunités, les documents et les réunions.\n\n"
+            "LANGUE : comprends le français et le wolof. Réponds naturellement dans la langue utilisée par Issa ; s’il mélange les langues, réponds dans un mélange fluide français–wolof. Garde un ton chaleureux, professionnel, clair et rigoureux. Ne prétends pas parler ou comprendre parfaitement le wolof si une formulation est incertaine ; demande une précision avec tact.\n\n"
+            "UTILISATION DES DONNÉES : appuie-toi sur le contexte enregistré ci-dessous pour croiser les dates d’examens avec les révisions et le niveau de maîtrise, relever les priorités et échéances, résumer le budget et proposer des actions concrètes. Les données peuvent être incomplètes ou anciennes : indique les limites et ne fabrique jamais de faits, de dépenses, de cours, de dates ou d’opportunités. Pour les questions générales, sépare clairement les conseils des faits du dossier. N’affirme pas avoir modifié une donnée, envoyé un e-mail ou connecté un service externe. Réponds de manière concise et propose une prochaine étape utile.\n\n"
+            "CONTEXTE ACTUEL DE L’ESPACE XXL :\n"+_context)
+            _api_messages=[{"role":"system","content":_system_prompt}]
+            _api_messages.extend(st.session_state["issa_ai_messages"][-12:])
+            try:
+                _payload=json.dumps({"model":_ai_model,"messages":_api_messages,"temperature":0.4},ensure_ascii=False).encode("utf-8")
+                _request=urllib.request.Request("https://api.openai.com/v1/chat/completions",data=_payload,headers={"Authorization":"Bearer "+_ai_key,"Content-Type":"application/json"},method="POST")
+                with urllib.request.urlopen(_request,timeout=90) as _response: _result=json.loads(_response.read().decode("utf-8"))
+                _ai_answer=_result["choices"][0]["message"]["content"].strip()
+            except urllib.error.HTTPError as _exc:
+                _detail=_exc.read().decode("utf-8",errors="replace")[:700]
+                _ai_answer=f"Le service IA a refusé la demande (HTTP {_exc.code}). Vérifie la clé API, le modèle configuré et le quota. Détail : {_detail}"
+            except Exception as _exc:
+                _ai_answer=f"Je n’ai pas pu joindre le service IA ({type(_exc).__name__}). Vérifie la connexion et réessaie."
+        st.session_state["issa_ai_messages"].append({"role":"assistant","content":_ai_answer})
+        with st.chat_message("assistant"):
+            st.markdown(_ai_answer)
+            if _ai_key:
+                try:
+                    _tts_request=urllib.request.Request("https://api.openai.com/v1/audio/speech",data=json.dumps({"model":"gpt-4o-mini-tts","voice":"alloy","input":_ai_answer,"instructions":"Speak clearly and warmly. Preserve the user's French and Wolof wording."},ensure_ascii=False).encode("utf-8"),headers={"Authorization":"Bearer "+_ai_key,"Content-Type":"application/json"},method="POST")
+                    with urllib.request.urlopen(_tts_request,timeout=90) as _tts_response: _audio_bytes=_tts_response.read()
+                    st.audio(_audio_bytes,format="audio/mpeg")
+                except Exception:
+                    st.caption("Lecture vocale indisponible pour cette réponse. Le texte reste visible ci-dessus.")
+    if st.session_state.get("issa_ai_messages") and st.button("Effacer cette conversation", key="issa_ai_clear"):
+        st.session_state["issa_ai_messages"]=[]
+        st.rerun()
+
 elif page=="Assistant e-mail & documents":
     _ = header("ASSISTANT PERSONNEL", "E-mails, voix et documents ✉️", "Prépare tes messages, dicte-les à la voix, envoie-les depuis Gmail, consulte ta boîte de réception et interroge tes documents importés.")
     st.info(f"Adresse d’expédition fixe : **{FIXED_SENDER_EMAIL}**. La lecture de la boîte utilise IMAP Gmail et le même mot de passe d’application.")
