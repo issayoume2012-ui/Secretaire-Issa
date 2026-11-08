@@ -25,7 +25,7 @@ def _startup_secret(name, default=""):
     return default if value.casefold() in {"none", "null", "undefined"} else value
 
 DB_BACKEND = _startup_secret("DB_BACKEND", "postgres").lower()
-st.set_page_config(page_title="Secrétaire Issa", page_icon="🗂️", layout="wide", initial_sidebar_state="collapsed")
+_magic_result = st.set_page_config(page_title="Secrétaire Issa", page_icon="🗂️", layout="wide", initial_sidebar_state="collapsed")
 # Photo d'Issa Youme utilisée comme arrière-plan global. Le fichier im1.jpeg doit
 # accompagner ce script dans le déploiement ; un fond de secours est prévu.
 _BACKGROUND_IMAGE = APP_DIR / "im1.jpeg"
@@ -34,7 +34,7 @@ try:
 except Exception:
     _BACKGROUND_B64 = ""
 _BACKGROUND_CSS = (f"url('data:image/jpeg;base64,{_BACKGROUND_B64}')" if _BACKGROUND_B64 else "none")
-st.markdown(f"""
+_magic_result = st.markdown(f"""
 <style>
 :root{{--issa-navy:#10213c;--issa-blue:#2457a7;--issa-cyan:#3bb7c9;--issa-gold:#f0b84b;--issa-muted:#64748b}}
 .block-container{{max-width:1550px;padding-top:1rem;padding-bottom:2rem;position:relative;z-index:1}}
@@ -150,13 +150,13 @@ def secret_value(name, default=""):
 _AUTH_USER = secret_value("YOUAGRONOME_OWNER_EMAIL") or secret_value("APP_USERNAME")
 _AUTH_PASS = secret_value("YOUAGRONOME_OWNER_PASS") or secret_value("APP_PASSWORD")
 if not _AUTH_USER or not _AUTH_PASS:
-    st.error("🔐 Accès non configuré. Ajoute YOUAGRONOME_OWNER_EMAIL et YOUAGRONOME_OWNER_PASS (ou APP_USERNAME et APP_PASSWORD) dans les Secrets de l’application.")
-    st.code('YOUAGRONOME_OWNER_EMAIL = "identifiant_prive"\nYOUAGRONOME_OWNER_PASS = "mot_de_passe_long_et_unique"', language="toml")
-    st.stop()
+    _magic_result = st.error("🔐 Accès non configuré. Ajoute YOUAGRONOME_OWNER_EMAIL et YOUAGRONOME_OWNER_PASS (ou APP_USERNAME et APP_PASSWORD) dans les Secrets de l’application.")
+    _magic_result = st.code('YOUAGRONOME_OWNER_EMAIL = "identifiant_prive"\nYOUAGRONOME_OWNER_PASS = "mot_de_passe_long_et_unique"', language="toml")
+    _magic_result = st.stop()
 if "issa_authenticated" not in st.session_state:
     st.session_state["issa_authenticated"] = False
 if not st.session_state["issa_authenticated"]:
-    st.markdown('<div class="issa-brand"><span class="issa-badge">Accès privé sécurisé</span><h1>🗂️ Secrétaire Issa</h1><p>Connecte-toi pour accéder à ton secrétariat personnel.</p></div>', unsafe_allow_html=True)
+    _magic_result = st.markdown('<div class="issa-brand"><span class="issa-badge">Accès privé sécurisé</span><h1>🗂️ Secrétaire Issa</h1><p>Connecte-toi pour accéder à ton secrétariat personnel.</p></div>', unsafe_allow_html=True)
     with st.form("issa_login_form"):
         username_input = st.text_input("Identifiant", autocomplete="username")
         password_input = st.text_input("Mot de passe", type="password", autocomplete="current-password")
@@ -164,10 +164,10 @@ if not st.session_state["issa_authenticated"]:
     if login_clicked:
         if hmac.compare_digest(username_input.strip(), _AUTH_USER) and hmac.compare_digest(password_input, _AUTH_PASS):
             st.session_state["issa_authenticated"] = True
-            st.rerun()
+            _magic_result = st.rerun()
         else:
-            st.error("Identifiant ou mot de passe incorrect.")
-    st.stop()
+            _magic_result = st.error("Identifiant ou mot de passe incorrect.")
+    _magic_result = st.stop()
 
 # ---------- Base de données : PostgreSQL Supabase (ou SQLite en mode local) ----------
 # Configure les secrets dans .streamlit/secrets.toml ou dans les variables d'environnement.
@@ -196,7 +196,7 @@ class _PostgresConnection:
         try:
             self.raw.commit() if typ is None else self.raw.rollback()
         finally:
-            self.raw.close()
+            _magic_result = self.raw.close()
         return False
     @staticmethod
     def _sql(sql):
@@ -212,12 +212,12 @@ class _PostgresConnection:
         return sql
     def execute(self, sql, params=()):
         cur = self.raw.cursor()
-        cur.execute(self._sql(sql), params or ())
+        _magic_result = cur.execute(self._sql(sql), params or ())
         return cur
     def executescript(self, script):
         cur = self.raw.cursor()
         for statement in script.split(';'):
-            if statement.strip(): cur.execute(self._sql(statement))
+            if statement.strip(): _magic_result = cur.execute(self._sql(statement))
         return cur
     def __getattr__(self, name): return getattr(self.raw, name)
 
@@ -257,14 +257,14 @@ class _SQLiteConnection:
     def __init__(self):
         self.raw = sqlite3.connect(str(DB_PATH), timeout=30, check_same_thread=False)
         self.raw.row_factory = sqlite3.Row
-        self.raw.execute("PRAGMA foreign_keys=ON")
-        self.raw.execute("PRAGMA journal_mode=WAL")
-        self.raw.execute("PRAGMA busy_timeout=30000")
+        _magic_result = self.raw.execute("PRAGMA foreign_keys=ON")
+        _magic_result = self.raw.execute("PRAGMA journal_mode=WAL")
+        _magic_result = self.raw.execute("PRAGMA busy_timeout=30000")
     def __enter__(self): return self
     def __exit__(self, typ, value, tb):
         try:
             self.raw.commit() if typ is None else self.raw.rollback()
-        finally: self.raw.close()
+        finally: _magic_result = self.raw.close()
         return False
     def execute(self, sql, params=()): return self.raw.execute(sql, params or ())
     def executescript(self, script): return self.raw.executescript(script)
@@ -277,16 +277,16 @@ def connect():
 
 def _init_postgres_schema():
     with connect() as c:
-        c.executescript(_postgres_schema_sql())
-        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_reminders_source ON reminders(source_type, source_id) WHERE source_type <> '' AND source_id IS NOT NULL")
+        _magic_result = c.executescript(_postgres_schema_sql())
+        _magic_result = c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_reminders_source ON reminders(source_type, source_id) WHERE source_type <> '' AND source_id IS NOT NULL")
 
 
 def init_db():
     if DB_BACKEND in {"postgres", "postgresql", "supabase"}:
-        _init_postgres_schema()
+        _magic_result = _init_postgres_schema()
         return
     with connect() as c:
-        c.executescript("""        CREATE TABLE IF NOT EXISTS subjects(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,code TEXT DEFAULT '',semester TEXT DEFAULT '',ue TEXT DEFAULT '',ue_code TEXT DEFAULT '',credits REAL DEFAULT 0,cm REAL DEFAULT 0,td REAL DEFAULT 0,tp REAL DEFAULT 0,tpe REAL DEFAULT 0,vht REAL DEFAULT 0,teacher TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        _magic_result = c.executescript("""        CREATE TABLE IF NOT EXISTS subjects(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,code TEXT DEFAULT '',semester TEXT DEFAULT '',ue TEXT DEFAULT '',ue_code TEXT DEFAULT '',credits REAL DEFAULT 0,cm REAL DEFAULT 0,td REAL DEFAULT 0,tp REAL DEFAULT 0,tpe REAL DEFAULT 0,vht REAL DEFAULT 0,teacher TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,event_date TEXT NOT NULL,start_time TEXT DEFAULT '',end_time TEXT DEFAULT '',kind TEXT DEFAULT 'Cours',subject_id INTEGER,location TEXT DEFAULT '',notes TEXT DEFAULT '',source TEXT DEFAULT 'Saisie manuelle',created_at TEXT DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE SET NULL);
         CREATE TABLE IF NOT EXISTS tasks(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,due_date TEXT DEFAULT '',priority TEXT DEFAULT 'Normale',status TEXT DEFAULT 'À faire',category TEXT DEFAULT 'Travail personnel',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS documents(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,category TEXT DEFAULT 'Autre',url TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
@@ -314,13 +314,13 @@ def init_db():
         _life_notes_migrations = {"category": "TEXT DEFAULT 'Personnel'", "content": "TEXT DEFAULT ''", "reminder_date": "TEXT DEFAULT ''", "reminder_time": "TEXT DEFAULT '08:00'", "created_at": "TEXT DEFAULT ''"}
         for _column, _definition in _life_notes_migrations.items():
             if _column not in _life_notes_columns:
-                c.execute(f'ALTER TABLE life_notes ADD COLUMN "{_column}" {_definition}')
+                _magic_result = c.execute(f'ALTER TABLE life_notes ADD COLUMN "{_column}" {_definition}')
         _reminder_columns = {row["name"] for row in c.execute("PRAGMA table_info(reminders)").fetchall()}
         _reminder_migrations = {"title": "TEXT DEFAULT 'Rappel importé'", "details": "TEXT DEFAULT ''", "remind_at": "TEXT NOT NULL DEFAULT ''", "phone": "TEXT NOT NULL DEFAULT ''", "repeat_rule": "TEXT DEFAULT 'Aucun'", "enabled": "INTEGER DEFAULT 1", "status": "TEXT DEFAULT 'En attente'", "last_sent_at": "TEXT DEFAULT ''", "last_error": "TEXT DEFAULT ''", "source_type": "TEXT DEFAULT ''", "source_id": "INTEGER", "created_at": "TEXT DEFAULT ''"}
         for _column, _definition in _reminder_migrations.items():
             if _column not in _reminder_columns:
-                c.execute(f'ALTER TABLE reminders ADD COLUMN "{_column}" {_definition}')
-        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_reminders_source ON reminders(source_type, source_id) WHERE source_type <> '' AND source_id IS NOT NULL")
+                _magic_result = c.execute(f'ALTER TABLE reminders ADD COLUMN "{_column}" {_definition}')
+        _magic_result = c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_reminders_source ON reminders(source_type, source_id) WHERE source_type <> '' AND source_id IS NOT NULL")
 
 _APP_SCHEMA_DDL = "\n        CREATE TABLE IF NOT EXISTS subjects(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,code TEXT DEFAULT '',semester TEXT DEFAULT '',ue TEXT DEFAULT '',ue_code TEXT DEFAULT '',credits REAL DEFAULT 0,cm REAL DEFAULT 0,td REAL DEFAULT 0,tp REAL DEFAULT 0,tpe REAL DEFAULT 0,vht REAL DEFAULT 0,teacher TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,event_date TEXT NOT NULL,start_time TEXT DEFAULT '',end_time TEXT DEFAULT '',kind TEXT DEFAULT 'Cours',subject_id INTEGER,location TEXT DEFAULT '',notes TEXT DEFAULT '',source TEXT DEFAULT 'Saisie manuelle',created_at TEXT DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE SET NULL);\n        CREATE TABLE IF NOT EXISTS tasks(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,due_date TEXT DEFAULT '',priority TEXT DEFAULT 'Normale',status TEXT DEFAULT 'À faire',category TEXT DEFAULT 'Travail personnel',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS documents(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,category TEXT DEFAULT 'Autre',url TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS study_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,subject_id INTEGER,study_date TEXT NOT NULL,hours DOUBLE PRECISION NOT NULL,method TEXT DEFAULT 'Révision active',confidence INTEGER DEFAULT 3,notes TEXT DEFAULT '',FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE SET NULL);\n        CREATE TABLE IF NOT EXISTS goals(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,category TEXT DEFAULT 'Études',target_date TEXT DEFAULT '',progress INTEGER DEFAULT 0,notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS habits(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,frequency TEXT DEFAULT 'Quotidienne',notes TEXT DEFAULT '',active INTEGER DEFAULT 1,created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS habit_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,habit_id INTEGER NOT NULL,log_date TEXT NOT NULL,done INTEGER DEFAULT 1,UNIQUE(habit_id,log_date),FOREIGN KEY(habit_id) REFERENCES habits(id) ON DELETE CASCADE);\n        CREATE TABLE IF NOT EXISTS budgets(id INTEGER PRIMARY KEY AUTOINCREMENT,entry_date TEXT NOT NULL,kind TEXT NOT NULL,category TEXT DEFAULT 'Autre',amount DOUBLE PRECISION NOT NULL,description TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS life_notes(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,category TEXT DEFAULT 'Personnel',content TEXT DEFAULT '',reminder_date TEXT DEFAULT '',reminder_time TEXT DEFAULT '08:00',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS contacts(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,role TEXT DEFAULT '',phone TEXT DEFAULT '',email TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS career_skills(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,category TEXT DEFAULT 'Technique',level TEXT DEFAULT 'Débutant',target_level TEXT DEFAULT 'Intermédiaire',status TEXT DEFAULT 'À apprendre',resource_url TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS career_training(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,provider TEXT DEFAULT '',kind TEXT DEFAULT 'Formation',start_date TEXT DEFAULT '',end_date TEXT DEFAULT '',status TEXT DEFAULT 'À envisager',url TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS career_opportunities(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,organization TEXT DEFAULT '',kind TEXT DEFAULT 'Stage',location TEXT DEFAULT '',deadline TEXT DEFAULT '',url TEXT DEFAULT '',status TEXT DEFAULT 'À examiner',contact TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS reminders(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,details TEXT DEFAULT '',remind_at TEXT NOT NULL,phone TEXT NOT NULL DEFAULT '',repeat_rule TEXT DEFAULT 'Aucun',enabled INTEGER DEFAULT 1,status TEXT DEFAULT 'En attente',last_sent_at TEXT DEFAULT '',last_error TEXT DEFAULT '',source_type TEXT DEFAULT '',source_id INTEGER,created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY, value TEXT DEFAULT '');\n        CREATE TABLE IF NOT EXISTS assistant_docs(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,content TEXT NOT NULL,uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS productivity_projects(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,domain TEXT DEFAULT 'Personnel',status TEXT DEFAULT 'À faire',progress INTEGER DEFAULT 0,start_date TEXT DEFAULT '',due_date TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS flashcards(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,front TEXT NOT NULL,back TEXT NOT NULL,category TEXT DEFAULT 'Études',mastery INTEGER DEFAULT 0,created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS focus_sessions(id INTEGER PRIMARY KEY AUTOINCREMENT,session_date TEXT NOT NULL,duration_minutes INTEGER NOT NULL,activity TEXT DEFAULT 'Étude',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS daily_journal(id INTEGER PRIMARY KEY AUTOINCREMENT,entry_date TEXT NOT NULL UNIQUE,mood TEXT DEFAULT '',energy INTEGER DEFAULT 3,successes TEXT DEFAULT '',improvements TEXT DEFAULT '',tomorrow_priorities TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS meeting_minutes(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,meeting_date TEXT DEFAULT '',participants TEXT DEFAULT '',summary TEXT DEFAULT '',decisions TEXT DEFAULT '',actions TEXT DEFAULT '',status TEXT DEFAULT 'À suivre',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS life_organizer(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,kind TEXT DEFAULT 'Rendez-vous',event_date TEXT DEFAULT '',event_time TEXT DEFAULT '',priority TEXT DEFAULT 'Normale',status TEXT DEFAULT 'À faire',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        "
 
@@ -331,9 +331,9 @@ def _split_schema_columns(body):
         elif not quoted and ch == "(": depth += 1
         elif not quoted and ch == ")": depth -= 1
         elif not quoted and depth == 0 and ch == ",":
-            parts.append(body[start:i].strip()); start = i + 1
+            _magic_result = parts.append(body[start:i].strip()); start = i + 1
     tail = body[start:].strip()
-    if tail: parts.append(tail)
+    if tail: _magic_result = parts.append(tail)
     return parts
 
 def _migration_fallback(table, column, definition):
@@ -363,11 +363,11 @@ _NONE_RUNTIME_LOG = []
 
 def _ensure_app_schema():
     """Vérifie le schéma actif sans supprimer aucune table ni aucune donnée."""
-    init_db()
+    _magic_result = init_db()
     if DB_BACKEND in {"postgres", "postgresql", "supabase"}:
         # Ne pas lancer d'UPDATE global sur toutes les colonnes à chaque démarrage.
         # Les valeurs NULL/'None' sont neutralisées à la lecture dans read_df().
-        _NONE_REPAIR_LOG.clear()
+        _magic_result = _NONE_REPAIR_LOG.clear()
         with connect() as c:
             rows = c.execute("SELECT table_name AS name FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'").fetchall()
             found = {r["name"] for r in rows}
@@ -375,7 +375,7 @@ def _ensure_app_schema():
             missing = sorted(expected - found)
             if missing: raise RuntimeError("Tables PostgreSQL absentes : " + ", ".join(missing))
         return expected
-    _NONE_REPAIR_LOG.clear()
+    _magic_result = _NONE_REPAIR_LOG.clear()
     with connect() as c:
         # Vérification du schéma uniquement : aucun balayage/UPDATE de toutes les tables.
         found = {r["name"] for r in c.execute(
@@ -403,7 +403,7 @@ def _auto_migrate_local_sqlite_to_supabase():
     imported_rows = 0
     source_key = str(DB_PATH.resolve())
     with connect() as dst:
-        dst.execute("""CREATE TABLE IF NOT EXISTS issa_migration_history (
+        _magic_result = dst.execute("""CREATE TABLE IF NOT EXISTS issa_migration_history (
             source_key TEXT PRIMARY KEY,
             source_size BIGINT NOT NULL DEFAULT 0,
             source_mtime DOUBLE PRECISION NOT NULL DEFAULT 0,
@@ -441,7 +441,7 @@ def _auto_migrate_local_sqlite_to_supabase():
             "assistant_docs", "productivity_projects", "flashcards", "focus_sessions", "daily_journal",
             "meeting_minutes", "life_organizer", "reminders", "events", "study_logs", "habit_logs"
         ]
-        source_tables.sort(key=lambda name: import_order.index(name) if name in import_order else len(import_order))
+        _magic_result = source_tables.sort(key=lambda name: import_order.index(name) if name in import_order else len(import_order))
 
         for table in source_tables:
             safe_table = table.replace('"', '""')
@@ -463,7 +463,7 @@ def _auto_migrate_local_sqlite_to_supabase():
                     placeholders = ",".join(["%s"] * len(cols))
                     insert_sql = f'INSERT INTO "{safe_table}" ({quoted_cols}) VALUES ({placeholders}) ON CONFLICT DO NOTHING'
                     cur = dst.raw.cursor()
-                    cur.executemany(insert_sql, [tuple(row[c] for c in cols) for row in rows])
+                    _magic_result = cur.executemany(insert_sql, [tuple(row[c] for c in cols) for row in rows])
                     imported_rows += len(rows)
                 imported_tables += 1
 
@@ -475,18 +475,18 @@ def _auto_migrate_local_sqlite_to_supabase():
                         max_row = dst.execute(f'SELECT COALESCE(MAX(id),0) AS max_id FROM "{safe_table}"').fetchone()
                         max_id = int(max_row["max_id"] or 0)
                         if max_id > 0:
-                            dst.execute("SELECT setval(%s::regclass, %s, true)", (seq_name, max_id))
+                            _magic_result = dst.execute("SELECT setval(%s::regclass, %s, true)", (seq_name, max_id))
 
         stat = DB_PATH.stat()
         with connect() as dst:
-            dst.execute(
+            _magic_result = dst.execute(
                 "INSERT INTO issa_migration_history(source_key,source_size,source_mtime,tables_count,rows_count) VALUES(?,?,?,?,?) ON CONFLICT(source_key) DO NOTHING",
                 (source_key, stat.st_size, stat.st_mtime, imported_tables, imported_rows)
             )
         return {"status": "migrated", "tables": imported_tables, "rows": imported_rows}
     finally:
         if source is not None:
-            source.close()
+            _magic_result = source.close()
 
 
 @st.cache_resource(show_spinner=False)
@@ -512,13 +512,13 @@ if "issa_database_tables_ready" not in st.session_state:
         # Message uniquement après une véritable première migration ; aucun
         # message de connexion n'est imprimé pendant les reruns ordinaires.
         if _migration_info.get("status") == "migrated":
-            st.toast(
+            _magic_result = st.toast(
                 f"Migration terminée : {_migration_info.get('rows', 0)} ligne(s) importée(s).",
                 icon="✅"
             )
     except Exception as exc:
-        st.error("La base de données n'a pas pu être initialisée. Vérifie les secrets Supabase et la dépendance psycopg2-binary. Détail : " + str(exc)[:350])
-        st.stop()
+        _magic_result = st.error("La base de données n'a pas pu être initialisée. Vérifie les secrets Supabase et la dépendance psycopg2-binary. Détail : " + str(exc)[:350])
+        _magic_result = st.stop()
 
 
 DEFAULT_REMINDER_PHONE = "+221777473170"  # conservé pour compatibilité avec les anciennes bases
@@ -537,7 +537,7 @@ def get_saved_setting(key, default=""):
 
 def save_setting(key, value):
     with connect() as c:
-        c.execute("INSERT INTO app_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, str(value).strip()))
+        _magic_result = c.execute("INSERT INTO app_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, str(value).strip()))
 
 DEFAULT_SMTP_USERNAME = "issayoume1801@gmail.com"
 
@@ -578,7 +578,7 @@ def send_email(subject, body, recipient=None):
     message["Subject"] = subject
     message["From"] = f"{sender_name} <{username}>"
     message["To"] = recipient
-    message.set_content(body)
+    _magic_result = message.set_content(body)
     context = ssl.create_default_context()
     errors = []
     # Essai selon le port configuré, puis bascule vers l'autre mode Gmail.
@@ -590,22 +590,22 @@ def send_email(subject, body, recipient=None):
                 server = smtplib.SMTP_SSL(host, candidate_port, timeout=20, context=context)
             else:
                 server = smtplib.SMTP(host, candidate_port, timeout=20)
-                server.ehlo()
-                server.starttls(context=context)
-                server.ehlo()
-            server.login(username, password)
-            server.send_message(message)
-            server.quit()
+                _magic_result = server.ehlo()
+                _magic_result = server.starttls(context=context)
+                _magic_result = server.ehlo()
+            _magic_result = server.login(username, password)
+            _magic_result = server.send_message(message)
+            _magic_result = server.quit()
             return True
         except smtplib.SMTPAuthenticationError:
             if server:
-                try: server.quit()
+                try: _magic_result = server.quit()
                 except Exception: pass
             raise RuntimeError("Gmail a refusé l'authentification. Vérifie SMTP_USERNAME et utilise le mot de passe d'application Google à 16 caractères. Ne mets pas ton mot de passe Gmail habituel.") from None
         except Exception as exc:
-            errors.append(f"port {candidate_port} ({mode}) : {type(exc).__name__}: {exc}")
+            _magic_result = errors.append(f"port {candidate_port} ({mode}) : {type(exc).__name__}: {exc}")
             if server:
-                try: server.quit()
+                try: _magic_result = server.quit()
                 except Exception: pass
     detail = " ; ".join(errors)
     raise RuntimeError("Impossible de se connecter à Gmail SMTP après deux tentatives. Vérifie SMTP_HOST=smtp.gmail.com, le port 587/465, l'adresse Gmail et le mot de passe d'application. Détails : " + detail)
@@ -617,9 +617,9 @@ def _decode_mime(value):
     out = []
     for piece, enc in parts:
         if isinstance(piece, bytes):
-            try: out.append(piece.decode(enc or "utf-8", errors="replace"))
-            except Exception: out.append(piece.decode("utf-8", errors="replace"))
-        else: out.append(str(piece))
+            try: _magic_result = out.append(piece.decode(enc or "utf-8", errors="replace"))
+            except Exception: _magic_result = out.append(piece.decode("utf-8", errors="replace"))
+        else: _magic_result = out.append(str(piece))
     return "".join(out)
 
 def _email_body(msg):
@@ -638,7 +638,7 @@ def _email_body(msg):
                     text = re.sub(r"(?is)<(script|style).*?>.*?</\1>", " ", text)
                     text = re.sub(r"(?s)<[^>]+>", " ", text)
                     text = re.sub(r"\s+", " ", text)
-                if text.strip(): chunks.append(text.strip())
+                if text.strip(): _magic_result = chunks.append(text.strip())
                 if ctype == "text/plain" and text.strip(): break
             except Exception:
                 pass
@@ -651,7 +651,7 @@ def fetch_recent_emails(limit=15):
         raise RuntimeError("Ajoute SMTP_PASSWORD dans les Secrets Streamlit.")
     items = []
     with imaplib.IMAP4_SSL("imap.gmail.com", 993, timeout=25) as mail:
-        mail.login(FIXED_SENDER_EMAIL, password)
+        _magic_result = mail.login(FIXED_SENDER_EMAIL, password)
         status, _ = mail.select("INBOX", readonly=True)
         if status != "OK": raise RuntimeError("Impossible d’ouvrir la boîte de réception Gmail.")
         status, data = mail.search(None, "ALL")
@@ -661,7 +661,7 @@ def fetch_recent_emails(limit=15):
             status, raw = mail.fetch(msg_id, "(RFC822)")
             if status != "OK" or not raw or not isinstance(raw[0], tuple): continue
             msg = email.message_from_bytes(raw[0][1], policy=email.policy.default)
-            items.append({"id": msg_id.decode("ascii", errors="ignore"), "subject": _decode_mime(msg.get("Subject", "(sans objet)")), "from": _decode_mime(msg.get("From", "")), "date": _decode_mime(msg.get("Date", "")), "body": _email_body(msg)})
+            _magic_result = items.append({"id": msg_id.decode("ascii", errors="ignore"), "subject": _decode_mime(msg.get("Subject", "(sans objet)")), "from": _decode_mime(msg.get("From", "")), "date": _decode_mime(msg.get("Date", "")), "body": _email_body(msg)})
     return items
 
 def transcribe_audio(uploaded_audio, language="fr-FR"):
@@ -679,7 +679,7 @@ def transcribe_audio(uploaded_audio, language="fr-FR"):
         if not audio_bytes:
             raise RuntimeError("Aucun son n’a été enregistré. Relance l’enregistrement et parle pendant quelques secondes.")
         with sr.AudioFile(io.BytesIO(audio_bytes)) as source:
-            recognizer.adjust_for_ambient_noise(source, duration=min(0.5, max(0.1, source.DURATION / 4)))
+            _magic_result = recognizer.adjust_for_ambient_noise(source, duration=min(0.5, max(0.1, source.DURATION / 4)))
         # Réouvre le flux depuis le début après le calibrage du bruit ambiant.
         with sr.AudioFile(io.BytesIO(audio_bytes)) as source:
             audio_data = recognizer.record(source)
@@ -739,7 +739,7 @@ def process_due_reminders():
                 if cur.rowcount != 1:
                     continue
             body = f"Bonjour,\n\nVoici ton rappel : {r.title}\n\n" + (f"Détails :\n{r.details}\n\n" if r.details else "") + f"Échéance prévue : {r.remind_at}.\n\n— Secrétaire Issa"
-            send_email(f"🔔 Rappel Secrétaire Issa : {r.title}", body)
+            _magic_result = send_email(f"🔔 Rappel Secrétaire Issa : {r.title}", body)
             sent_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             if r.repeat_rule == "Quotidien":
                 next_at = (datetime.strptime(r.remind_at, "%Y-%m-%d %H:%M:%S") + timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
@@ -758,14 +758,14 @@ def _reminder_worker(stop_event):
             _ = process_due_reminders()
         except Exception:
             pass
-        stop_event.wait(120)
+        _magic_result = stop_event.wait(120)
 
 @st.cache_resource
 def start_reminder_worker():
     """Démarre un seul vérificateur par processus Streamlit."""
     stop_event = threading.Event()
     thread = threading.Thread(target=_reminder_worker, args=(stop_event,), daemon=True, name="campusclair-reminders")
-    thread.start()
+    _magic_result = thread.start()
     return stop_event
 
 def _clean_missing_value(value, fallback=""):
@@ -789,10 +789,10 @@ def ensure_reminders_schema():
     """Répare à la demande le schéma des rappels avant les requêtes du tableau de bord."""
     if DB_BACKEND in {"postgres", "postgresql", "supabase"}:
         with connect() as c:
-            c.execute("CREATE TABLE IF NOT EXISTS reminders (id BIGSERIAL PRIMARY KEY, title TEXT DEFAULT 'Rappel importé', details TEXT DEFAULT '', remind_at TEXT DEFAULT '', phone TEXT DEFAULT '', repeat_rule TEXT DEFAULT 'Aucun', enabled INTEGER DEFAULT 1, status TEXT DEFAULT 'En attente', last_sent_at TEXT DEFAULT '', last_error TEXT DEFAULT '', source_type TEXT DEFAULT '', source_id BIGINT, created_at TEXT DEFAULT '')")
+            _magic_result = c.execute("CREATE TABLE IF NOT EXISTS reminders (id BIGSERIAL PRIMARY KEY, title TEXT DEFAULT 'Rappel importé', details TEXT DEFAULT '', remind_at TEXT DEFAULT '', phone TEXT DEFAULT '', repeat_rule TEXT DEFAULT 'Aucun', enabled INTEGER DEFAULT 1, status TEXT DEFAULT 'En attente', last_sent_at TEXT DEFAULT '', last_error TEXT DEFAULT '', source_type TEXT DEFAULT '', source_id BIGINT, created_at TEXT DEFAULT '')")
         return
     with connect() as c:
-        c.execute("CREATE TABLE IF NOT EXISTS reminders (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT DEFAULT 'Rappel importé', details TEXT DEFAULT '', remind_at TEXT DEFAULT '', phone TEXT DEFAULT '', repeat_rule TEXT DEFAULT 'Aucun', enabled INTEGER DEFAULT 1, status TEXT DEFAULT 'En attente', last_sent_at TEXT DEFAULT '', last_error TEXT DEFAULT '', source_type TEXT DEFAULT '', source_id INTEGER, created_at TEXT DEFAULT '')")
+        _magic_result = c.execute("CREATE TABLE IF NOT EXISTS reminders (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT DEFAULT 'Rappel importé', details TEXT DEFAULT '', remind_at TEXT DEFAULT '', phone TEXT DEFAULT '', repeat_rule TEXT DEFAULT 'Aucun', enabled INTEGER DEFAULT 1, status TEXT DEFAULT 'En attente', last_sent_at TEXT DEFAULT '', last_error TEXT DEFAULT '', source_type TEXT DEFAULT '', source_id INTEGER, created_at TEXT DEFAULT '')")
         columns = {row['name'] for row in c.execute('PRAGMA table_info(reminders)').fetchall()}
         migrations = {
             'title': "TEXT DEFAULT 'Rappel importé'",
@@ -810,14 +810,14 @@ def ensure_reminders_schema():
         }
         for column, definition in migrations.items():
             if column not in columns:
-                c.execute(f'ALTER TABLE reminders ADD COLUMN "{column}" {definition}')
-                columns.add(column)
+                _magic_result = c.execute(f'ALTER TABLE reminders ADD COLUMN "{column}" {definition}')
+                _magic_result = columns.add(column)
         # Normalise les valeurs NULL qui peuvent perturber l'affichage.
-        c.execute("UPDATE reminders SET title='Rappel importé' WHERE title IS NULL OR TRIM(title)=''")
-        c.execute("UPDATE reminders SET details='' WHERE details IS NULL")
-        c.execute("UPDATE reminders SET remind_at='' WHERE remind_at IS NULL")
-        c.execute("UPDATE reminders SET enabled=1 WHERE enabled IS NULL")
-        c.execute("UPDATE reminders SET status='En attente' WHERE status IS NULL OR TRIM(status)=''")
+        _magic_result = c.execute("UPDATE reminders SET title='Rappel importé' WHERE title IS NULL OR TRIM(title)=''")
+        _magic_result = c.execute("UPDATE reminders SET details='' WHERE details IS NULL")
+        _magic_result = c.execute("UPDATE reminders SET remind_at='' WHERE remind_at IS NULL")
+        _magic_result = c.execute("UPDATE reminders SET enabled=1 WHERE enabled IS NULL")
+        _magic_result = c.execute("UPDATE reminders SET status='En attente' WHERE status IS NULL OR TRIM(status)=''")
 
 def read_df(sql, params=()):
     """Lit SQLite ; si une table manque dans une ancienne base, répare le schéma puis réessaie."""
@@ -831,7 +831,7 @@ def read_df(sql, params=()):
         # mais provient d'une version antérieure qui ne possédait pas toutes les tables.
         if "no such table" not in str(exc).lower():
             raise
-        _ensure_app_schema()
+        _magic_result = _ensure_app_schema()
         with connect() as c:
             cur = c.execute(sql, params)
             columns = [d[0] for d in cur.description] if cur.description else []
@@ -861,7 +861,7 @@ def read_df(sql, params=()):
         if bad_count:
             entry = {"table": source_table, "column": str(col), "count": bad_count, "source": "lecture SQL / code"}
             if entry not in _NONE_RUNTIME_LOG:
-                _NONE_RUNTIME_LOG.append(entry)
+                _magic_result = _NONE_RUNTIME_LOG.append(entry)
         # Nettoyage de chaque valeur, y compris les chaînes littérales "None" enregistrées en base.
         cleaned = df[col].map(lambda value: _clean_missing_value(value, ""))
         if col.lower() in numeric_names or pd.api.types.is_numeric_dtype(df[col].dtype):
@@ -877,12 +877,12 @@ def show_dataframe(df, *args, **kwargs):
         clean = df.copy()
         for column in clean.columns:
             clean[column] = clean[column].map(lambda value: _clean_missing_value(value, ""))
-        st.dataframe(clean, *args, **kwargs)
+        _magic_result = st.dataframe(clean, *args, **kwargs)
     else:
-        st.dataframe(df, *args, **kwargs)
+        _magic_result = st.dataframe(df, *args, **kwargs)
 
 def run(sql,params=()):
-    with connect() as c: c.execute(sql,params)
+    with connect() as c: _magic_result = c.execute(sql,params)
 
 def upsert_auto_reminder(source_type, source_id, title, details, remind_at, repeat_rule='Aucun'):
     """Crée/actualise un rappel lié à une entrée enregistrée, sans repousser l'échéance à chaque rechargement."""
@@ -901,15 +901,15 @@ def upsert_auto_reminder(source_type, source_id, title, details, remind_at, repe
             # Si le contenu n'a pas changé, conserver la date actuelle (notamment pour les rappels quotidiens).
             if same_content:
                 if existing['status'] in ('Désactivé', 'Erreur'):
-                    c.execute("UPDATE reminders SET enabled=1,status='En attente',last_error='' WHERE id=?", (int(existing['id']),))
+                    _magic_result = c.execute("UPDATE reminders SET enabled=1,status='En attente',last_error='' WHERE id=?", (int(existing['id']),))
                 return
             # Une entrée modifiée dans sa rubrique met à jour le rappel associé.
-            c.execute("UPDATE reminders SET title=?,details=?,remind_at=?,phone=?,repeat_rule=?,enabled=1,status='En attente',last_error='' WHERE id=?",
+            _magic_result = c.execute("UPDATE reminders SET title=?,details=?,remind_at=?,phone=?,repeat_rule=?,enabled=1,status='En attente',last_error='' WHERE id=?",
                       (title, details or '', dt_text, DEFAULT_REMINDER_PHONE, repeat_rule, int(existing['id'])))
         else:
             # Les éléments déjà en retard doivent tout de même être rappelés rapidement.
             if dt < datetime.now(): dt_text = (datetime.now() + timedelta(minutes=1)).replace(microsecond=0).strftime('%Y-%m-%d %H:%M:%S')
-            c.execute("INSERT OR IGNORE INTO reminders(title,details,remind_at,phone,repeat_rule,enabled,status,source_type,source_id) VALUES(?,?,?,?,?,1,'En attente',?,?)",
+            _magic_result = c.execute("INSERT OR IGNORE INTO reminders(title,details,remind_at,phone,repeat_rule,enabled,status,source_type,source_id) VALUES(?,?,?,?,?,1,'En attente',?,?)",
                       (title, details or '', dt_text, DEFAULT_REMINDER_PHONE, repeat_rule, source_type, int(source_id)))
 
 def sync_existing_entries_to_reminders():
@@ -918,20 +918,20 @@ def sync_existing_entries_to_reminders():
     # Annule automatiquement les rappels dont l'entrée a été terminée, désactivée ou supprimée.
     try:
         with connect() as c:
-            c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type='task' AND source_id IN (SELECT id FROM tasks WHERE status IN ('Terminée','Terminé','Rendue','Rendu')) AND status IN ('En attente','Erreur')")
-            c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type='goal' AND source_id IN (SELECT id FROM goals WHERE progress >= 100) AND status IN ('En attente','Erreur')")
-            c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type='opportunity' AND source_id IN (SELECT id FROM career_opportunities WHERE status IN ('Refusée','Expirée','Retenue','Candidature envoyée')) AND status IN ('En attente','Erreur')")
-            c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type IN ('training_début','training_fin') AND source_id IN (SELECT id FROM career_training WHERE status IN ('Terminée','Abandonnée')) AND status IN ('En attente','Erreur')")
-            c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type='habit' AND source_id IN (SELECT id FROM habits WHERE active=0) AND status IN ('En attente','Erreur')")
-            c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type='note' AND source_id IN (SELECT id FROM life_notes WHERE category<>'Rappel' OR reminder_date='') AND status IN ('En attente','Erreur')")
+            _magic_result = c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type='task' AND source_id IN (SELECT id FROM tasks WHERE status IN ('Terminée','Terminé','Rendue','Rendu')) AND status IN ('En attente','Erreur')")
+            _magic_result = c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type='goal' AND source_id IN (SELECT id FROM goals WHERE progress >= 100) AND status IN ('En attente','Erreur')")
+            _magic_result = c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type='opportunity' AND source_id IN (SELECT id FROM career_opportunities WHERE status IN ('Refusée','Expirée','Retenue','Candidature envoyée')) AND status IN ('En attente','Erreur')")
+            _magic_result = c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type IN ('training_début','training_fin') AND source_id IN (SELECT id FROM career_training WHERE status IN ('Terminée','Abandonnée')) AND status IN ('En attente','Erreur')")
+            _magic_result = c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type='habit' AND source_id IN (SELECT id FROM habits WHERE active=0) AND status IN ('En attente','Erreur')")
+            _magic_result = c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type='note' AND source_id IN (SELECT id FROM life_notes WHERE category<>'Rappel' OR reminder_date='') AND status IN ('En attente','Erreur')")
             # Les entrées supprimées n'ont plus de raison de déclencher un e-mail.
-            c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type='task' AND source_id NOT IN (SELECT id FROM tasks) AND status IN ('En attente','Erreur')")
-            c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type='goal' AND source_id NOT IN (SELECT id FROM goals) AND status IN ('En attente','Erreur')")
-            c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type='event' AND source_id NOT IN (SELECT id FROM events) AND status IN ('En attente','Erreur')")
-            c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type='opportunity' AND source_id NOT IN (SELECT id FROM career_opportunities) AND status IN ('En attente','Erreur')")
-            c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type LIKE 'training_%' AND source_id NOT IN (SELECT id FROM career_training) AND status IN ('En attente','Erreur')")
-            c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type='habit' AND source_id NOT IN (SELECT id FROM habits) AND status IN ('En attente','Erreur')")
-            c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type='note' AND source_id NOT IN (SELECT id FROM life_notes) AND status IN ('En attente','Erreur')")
+            _magic_result = c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type='task' AND source_id NOT IN (SELECT id FROM tasks) AND status IN ('En attente','Erreur')")
+            _magic_result = c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type='goal' AND source_id NOT IN (SELECT id FROM goals) AND status IN ('En attente','Erreur')")
+            _magic_result = c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type='event' AND source_id NOT IN (SELECT id FROM events) AND status IN ('En attente','Erreur')")
+            _magic_result = c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type='opportunity' AND source_id NOT IN (SELECT id FROM career_opportunities) AND status IN ('En attente','Erreur')")
+            _magic_result = c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type LIKE 'training_%' AND source_id NOT IN (SELECT id FROM career_training) AND status IN ('En attente','Erreur')")
+            _magic_result = c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type='habit' AND source_id NOT IN (SELECT id FROM habits) AND status IN ('En attente','Erreur')")
+            _magic_result = c.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type='note' AND source_id NOT IN (SELECT id FROM life_notes) AND status IN ('En attente','Erreur')")
     except Exception:
         pass
     # Emploi du temps : une heure avant le début ; si l'évènement est imminent/passé aujourd'hui, rappel immédiat.
@@ -997,13 +997,13 @@ def sync_existing_entries_to_reminders():
                 }
                 for _ln_col, _ln_def in _ln_migrations.items():
                     if _ln_col not in _ln_cols:
-                        c.execute(f'ALTER TABLE life_notes ADD COLUMN "{_ln_col}" {_ln_def}')
-                        _ln_cols.add(_ln_col)
+                        _magic_result = c.execute(f'ALTER TABLE life_notes ADD COLUMN "{_ln_col}" {_ln_def}')
+                        _magic_result = _ln_cols.add(_ln_col)
             _life_notes_reminders = read_df("SELECT id,title,content,reminder_date,reminder_time FROM life_notes WHERE COALESCE(category,'Personnel')='Rappel' AND COALESCE(reminder_date,'') <> ''")
     except Exception as _ln_error:
         # Ne pas faire tomber toute l'application à cause d'une ancienne table de notes.
         _life_notes_reminders = pd.DataFrame(columns=["id", "title", "content", "reminder_date", "reminder_time"])
-        _NONE_RUNTIME_LOG.append({"table": "life_notes", "column": "rappels", "count": 1, "source": f"Base de données: {_ln_error}"})
+        _magic_result = _NONE_RUNTIME_LOG.append({"table": "life_notes", "column": "rappels", "count": 1, "source": f"Base de données: {_ln_error}"})
     for r in _life_notes_reminders.itertuples():
         try:
             dt = datetime.strptime(f"{r.reminder_date} {r.reminder_time or '08:00'}", '%Y-%m-%d %H:%M')
@@ -1018,13 +1018,13 @@ def display_text(value, fallback=""):
 def norm(s):
     return re.sub(r'[^a-z0-9]+',' ',unicodedata.normalize('NFKD',str(s or '')).encode('ascii','ignore').decode().lower()).strip()
 def header(kicker,title,desc):
-    st.markdown(f'<div class="cc-hero"><div class="cc-eyebrow">{kicker}</div><div class="cc-title">{title}</div><p class="cc-sub">{desc}</p></div>',unsafe_allow_html=True)
+    _magic_result = st.markdown(f'<div class="cc-hero"><div class="cc-eyebrow">{kicker}</div><div class="cc-title">{title}</div><p class="cc-sub">{desc}</p></div>',unsafe_allow_html=True)
 def card(label,value,note=''):
     value = display_text(value, '0')
     note = display_text(note, '')
-    st.markdown(f'<div class="cc-card"><div class="cc-label">{label}</div><div class="cc-value">{value}</div><div class="cc-note">{note}</div></div>',unsafe_allow_html=True)
+    _magic_result = st.markdown(f'<div class="cc-card"><div class="cc-label">{label}</div><div class="cc-value">{value}</div><div class="cc-note">{note}</div></div>',unsafe_allow_html=True)
 def export_csv(df,name,key):
-    if not df.empty: st.download_button(f"Exporter {name} en CSV",df.to_csv(index=False).encode('utf-8-sig'),file_name=f"campusclair_{key}.csv",mime='text/csv',key=f"csv_{key}")
+    if not df.empty: _magic_result = st.download_button(f"Exporter {name} en CSV",df.to_csv(index=False).encode('utf-8-sig'),file_name=f"campusclair_{key}.csv",mime='text/csv',key=f"csv_{key}")
 REMINDER_WORKER = start_reminder_worker()
 # Traitement allégé : ne pas refaire toutes les synchronisations SQL à chaque clic.
 # Les appels sont explicitement affectés à une variable pour éviter qu'une valeur
@@ -1066,7 +1066,7 @@ PAGE_ROLE={
     "Centre de productivité XXL":"Centre centralisé : recherche globale, capture rapide, projets, flashcards, concentration, journal et organisation quotidienne",
     "Paramètres & sauvegarde":"Secrétaire chargé des paramètres, des exports et de la sauvegarde des données"
 }
-st.markdown('''<div class="issa-brand"><span class="issa-badge">Organisation · Pédagogie · Assistance</span><h1>🗂️ Secrétaire Issa</h1><p>Votre espace de secrétariat intelligent : chaque espace correspond à un secrétaire chargé d’une mission précise.</p></div>''',unsafe_allow_html=True)
+_magic_result = st.markdown('''<div class="issa-brand"><span class="issa-badge">Organisation · Pédagogie · Assistance</span><h1>🗂️ Secrétaire Issa</h1><p>Votre espace de secrétariat intelligent : chaque espace correspond à un secrétaire chargé d’une mission précise.</p></div>''',unsafe_allow_html=True)
 # Navigation vocale bilingue + lanceur d'applications externes. Les applications s'ouvrent dans un nouvel onglet via des liens explicites.
 _NAV_APPS = {
     "Gmail": ("https://mail.google.com/", ("gmail", "mail", "e mail", "email", "courriel", "saññ email", "email yi")),
@@ -1120,7 +1120,7 @@ if _focus_active and _focus_until and time_module.time() >= _focus_until:
     if not st.session_state.get("issa_focus_logged", False):
         _elapsed = max(1, int((time_module.time() - float(st.session_state.get("issa_focus_started", time_module.time()))) / 60))
         try:
-            run(
+            _magic_result = run(
                 'INSERT INTO focus_sessions(session_date,duration_minutes,activity,notes) VALUES(?,?,?,?)',
                 (date.today().isoformat(), _elapsed, str(st.session_state.get("issa_focus_activity", "Étude")), str(st.session_state.get("issa_focus_notes", "Séance chronométrée")))
             )
@@ -1134,14 +1134,14 @@ if _focus_active and _focus_until and time_module.time() >= _focus_until:
 
 if _focus_active:
     _remaining = max(0, int(_focus_until - time_module.time()))
-    st.markdown('''
+    _magic_result = st.markdown('''
     <div style="padding:26px;border-radius:24px;background:linear-gradient(120deg,#10213c,#174b76,#087e91);color:white;margin:10px 0 20px">
       <div style="font-size:.78rem;letter-spacing:.15em;font-weight:800;opacity:.85">MODE CONCENTRATION · SESSION EN COURS</div>
       <h1 style="color:white;margin:.35rem 0">🎯 Reste dans ta zone de travail</h1>
       <p style="color:#e5f5ff;margin:0">La navigation de Secrétaire Issa est mise en pause jusqu’à la fin du chronomètre.</p>
     </div>''', unsafe_allow_html=True)
-    st.markdown(f"### {st.session_state.get('issa_focus_activity','Étude')}")
-    st.components.v1.html(f'''<div style="font-family:system-ui;text-align:center;padding:22px;border:1px solid #dbe5f2;border-radius:20px;background:#f8fbff">
+    _magic_result = st.markdown(f"### {st.session_state.get('issa_focus_activity','Étude')}")
+    _magic_result = st.components.v1.html(f'''<div style="font-family:system-ui;text-align:center;padding:22px;border:1px solid #dbe5f2;border-radius:20px;background:#f8fbff">
       <div id="issa-countdown" style="font-size:clamp(48px,9vw,82px);font-weight:850;letter-spacing:.04em;color:#12345a">--:--:--</div>
       <div id="issa-countdown-state" style="color:#53657d;font-size:14px">Temps de concentration restant</div>
       <script>
@@ -1152,14 +1152,14 @@ if _focus_active:
       }}tick();const timer=setInterval(tick,500);
       }})();
       </script></div>''', height=190)
-    st.info("Pendant cette session, seuls les outils de recherche ci-dessous et ton document de travail sont proposés dans l’application.")
+    _magic_result = st.info("Pendant cette session, seuls les outils de recherche ci-dessous et ton document de travail sont proposés dans l’application.")
     _focus_cols = st.columns(2)
     with _focus_cols[0]:
-        st.link_button("🤖 Ouvrir ChatGPT", "https://chatgpt.com/", use_container_width=True)
+        _magic_result = st.link_button("🤖 Ouvrir ChatGPT", "https://chatgpt.com/", use_container_width=True)
     with _focus_cols[1]:
-        st.link_button("🔎 Recherche Google (dans le navigateur)", "https://www.google.com/", use_container_width=True)
-    st.caption("Ces liens s’ouvrent dans ton navigateur par défaut. Si Chrome est ton navigateur par défaut, ils s’ouvriront dans Chrome ; un site hébergé ne peut pas imposer le lancement d’une application locale.")
-    st.markdown("### 📄 Document de travail")
+        _magic_result = st.link_button("🔎 Recherche Google (dans le navigateur)", "https://www.google.com/", use_container_width=True)
+    _magic_result = st.caption("Ces liens s’ouvrent dans ton navigateur par défaut. Si Chrome est ton navigateur par défaut, ils s’ouvriront dans Chrome ; un site hébergé ne peut pas imposer le lancement d’une application locale.")
+    _magic_result = st.markdown("### 📄 Document de travail")
     _active_upload = st.file_uploader("Ouvrir un document (TXT, MD, PDF ou DOCX)", type=["txt","md","pdf","docx"], key="issa_focus_active_upload")
     if _active_upload is not None:
         _raw = _active_upload.getvalue()
@@ -1172,38 +1172,38 @@ if _focus_active:
                 _pdf = fitz.open(stream=_raw, filetype="pdf")
                 _text = "\\n\\n".join(pg.get_text() for pg in _pdf)
             except Exception:
-                st.warning("Aperçu PDF indisponible : tu peux tout de même télécharger le fichier ci-dessous.")
+                _magic_result = st.warning("Aperçu PDF indisponible : tu peux tout de même télécharger le fichier ci-dessous.")
         elif _active_upload.name.lower().endswith(".docx"):
             try:
                 from docx import Document
                 _doc = Document(io.BytesIO(_raw))
                 _text = "\\n".join(par.text for par in _doc.paragraphs)
             except Exception:
-                st.warning("Aperçu DOCX indisponible : tu peux tout de même télécharger le fichier ci-dessous.")
+                _magic_result = st.warning("Aperçu DOCX indisponible : tu peux tout de même télécharger le fichier ci-dessous.")
         if _text:
             st.session_state["issa_focus_document_text"] = _text
             st.session_state["issa_focus_document_name"] = _active_upload.name
-        st.download_button("⬇️ Télécharger / ouvrir le fichier original", data=_raw, file_name=_active_upload.name, use_container_width=True)
+        _magic_result = st.download_button("⬇️ Télécharger / ouvrir le fichier original", data=_raw, file_name=_active_upload.name, use_container_width=True)
     _doc_text = st.text_area("Espace de lecture, d’étude ou de saisie", value=st.session_state.get("issa_focus_document_text", ""), height=360, key="issa_focus_document_editor", placeholder="Colle tes notes, rédige ton devoir ou travaille sur le texte extrait du document…")
     st.session_state["issa_focus_document_text"] = _doc_text
-    st.download_button("💾 Enregistrer mon travail en fichier texte", data=_doc_text.encode("utf-8"), file_name="mon_travail_concentration.txt", mime="text/plain", use_container_width=True, disabled=not bool(_doc_text.strip()))
-    st.caption("Le texte saisi ici reste dans la session de cette application ; télécharge régulièrement ton travail pour en garder une copie.")
+    _magic_result = st.download_button("💾 Enregistrer mon travail en fichier texte", data=_doc_text.encode("utf-8"), file_name="mon_travail_concentration.txt", mime="text/plain", use_container_width=True, disabled=not bool(_doc_text.strip()))
+    _magic_result = st.caption("Le texte saisi ici reste dans la session de cette application ; télécharge régulièrement ton travail pour en garder une copie.")
     _left, _right = st.columns([3,1])
     with _left:
-        st.caption("Le verrouillage empêche de naviguer vers les autres rubriques de Secrétaire Issa pendant le compte à rebours. Il ne bloque pas le système d’exploitation ni les autres applications du PC.")
+        _magic_result = st.caption("Le verrouillage empêche de naviguer vers les autres rubriques de Secrétaire Issa pendant le compte à rebours. Il ne bloque pas le système d’exploitation ni les autres applications du PC.")
     with _right:
         if st.button("Arrêt d’urgence", type="secondary", use_container_width=True):
             st.session_state["issa_focus_active"] = False
             st.session_state["issa_focus_until"] = 0
             st.session_state["issa_focus_logged"] = True
-            st.warning("Session interrompue manuellement.")
-            st.rerun()
-    st.stop()
+            _magic_result = st.warning("Session interrompue manuellement.")
+            _magic_result = st.rerun()
+    _magic_result = st.stop()
 
 # ---------- Centre de lancement XXL : sites, applications web et fonctions internes ----------
-st.markdown('<div class="issa-nav-title">🚀 Lanceur universel XXL · Applications, sites et outils</div>', unsafe_allow_html=True)
+_magic_result = st.markdown('<div class="issa-nav-title">🚀 Lanceur universel XXL · Applications, sites et outils</div>', unsafe_allow_html=True)
 with st.container(border=True):
-    st.markdown("**Ouvrir rapidement un service**")
+    _magic_result = st.markdown("**Ouvrir rapidement un service**")
     _launcher_categories = {
         "Communication": ["Gmail", "WhatsApp Web", "Telegram Web", "Outlook", "Microsoft Teams", "Zoom", "Google Meet", "Discord"],
         "Google & Microsoft": ["Google Drive", "Google Calendar", "Google Docs", "Google Sheets", "Google Slides", "Google Photos", "Microsoft 365", "OneDrive", "Microsoft Word en ligne", "Microsoft Excel en ligne", "PowerPoint en ligne"],
@@ -1220,8 +1220,8 @@ with st.container(border=True):
             for _idx, _app in enumerate(_names):
                 _app_url = _NAV_APPS[_app][0]
                 with _cols[_idx % 4]:
-                    st.link_button("↗ " + _app, _app_url, use_container_width=True)
-    st.markdown("**Ouvrir n’importe quel site**")
+                    _magic_result = st.link_button("↗ " + _app, _app_url, use_container_width=True)
+    _magic_result = st.markdown("**Ouvrir n’importe quel site**")
     _custom_site = st.text_input("Adresse du site ou nom de domaine", placeholder="Ex. : https://www.senegalservices.sn ou wikipedia.org", key="issa_custom_site")
     if st.button("🌐 Ouvrir ce site", key="issa_open_custom_site", disabled=not _custom_site.strip(), use_container_width=True):
         from urllib.parse import urlparse
@@ -1232,12 +1232,12 @@ with st.container(border=True):
         if _parsed.scheme in ("http", "https") and _parsed.netloc and "." in _parsed.netloc and not any(ch.isspace() for ch in _candidate):
             st.session_state["issa_custom_site_validated"] = _candidate
         else:
-            st.error("Adresse invalide. Entre un domaine comme exemple.com ou une adresse commençant par https://.")
+            _magic_result = st.error("Adresse invalide. Entre un domaine comme exemple.com ou une adresse commençant par https://.")
     if st.session_state.get("issa_custom_site_validated"):
-        st.link_button("🚀 Continuer vers " + st.session_state["issa_custom_site_validated"], st.session_state["issa_custom_site_validated"], use_container_width=True)
-    st.caption("Les liens ouvrent des services web dans un nouvel onglet selon le navigateur. Pour des logiciels installés sur le téléphone/PC, le navigateur exige une intégration native et une autorisation : aucun site Streamlit ne peut lancer librement toutes les applications locales.")
+        _magic_result = st.link_button("🚀 Continuer vers " + st.session_state["issa_custom_site_validated"], st.session_state["issa_custom_site_validated"], use_container_width=True)
+    _magic_result = st.caption("Les liens ouvrent des services web dans un nouvel onglet selon le navigateur. Pour des logiciels installés sur le téléphone/PC, le navigateur exige une intégration native et une autorisation : aucun site Streamlit ne peut lancer librement toutes les applications locales.")
 
-st.markdown('''
+_magic_result = st.markdown('''
 <div class="issa-main-menu-head">
   <div class="issa-main-menu-kicker">🧭 ESPACE DE NAVIGATION</div>
   <div class="issa-main-menu-title">MENU PRINCIPAL</div>
@@ -1263,7 +1263,7 @@ _default_group = _GROUP_FOR_PAGE.get(_current_page, next(iter(_NAV_GROUPS)))
 if st.session_state.get("issa_nav_group") not in _NAV_GROUPS:
     st.session_state["issa_nav_group"] = _default_group
 
-st.radio(
+_magic_result = st.radio(
     "Grands espaces",
     list(_NAV_GROUPS.keys()),
     horizontal=True,
@@ -1277,8 +1277,8 @@ if st.session_state.get("issa_nav_subpage") not in _subpages:
     st.session_state["issa_nav_subpage"] = _current_page if _current_page in _subpages else _subpages[0]
 
 if len(_subpages) > 1:
-    st.markdown('<div class="issa-subnav-label">SOUS-ONGLETS · Choisissez une rubrique</div>', unsafe_allow_html=True)
-    st.radio(
+    _magic_result = st.markdown('<div class="issa-subnav-label">SOUS-ONGLETS · Choisissez une rubrique</div>', unsafe_allow_html=True)
+    _magic_result = st.radio(
         "Sous-espaces",
         _subpages,
         horizontal=True,
@@ -1295,12 +1295,12 @@ st.session_state["top_nav"] = page
 _logout_col, _empty_col = st.columns([1, 8])
 if _logout_col.button('🔒 Déconnexion', key='issa_logout'):
     st.session_state['issa_authenticated'] = False
-    st.rerun()
-st.markdown(f'<div class="cc-card" style="padding:12px 16px;margin:10px 0 16px"><div class="cc-eyebrow">Votre secrétaire spécialisé</div><div style="font-size:1.05rem;font-weight:800;color:#17345c;margin-top:4px">🧭 {PAGE_ROLE[page]}</div></div>',unsafe_allow_html=True)
+    _magic_result = st.rerun()
+_magic_result = st.markdown(f'<div class="cc-card" style="padding:12px 16px;margin:10px 0 16px"><div class="cc-eyebrow">Votre secrétaire spécialisé</div><div style="font-size:1.05rem;font-weight:800;color:#17345c;margin-top:4px">🧭 {PAGE_ROLE[page]}</div></div>',unsafe_allow_html=True)
 
 # Assistance XXL : raccourcis d'aide utilisables sur ordinateur, tablette et mobile.
 with st.expander("🆘 Assistance XXL — aide rapide", expanded=False):
-    st.markdown("""
+    _magic_result = st.markdown("""
     **Besoin d'aide ?** Choisis l'assistant adapté à ta tâche. Les raccourcis changent directement de rubrique.
     - **Assistant de vie** : organisation personnelle, objectifs, habitudes et tâches.
     - **Assistant e-mail & documents** : rédaction, messagerie et documents.
@@ -1317,7 +1317,7 @@ with st.expander("🆘 Assistance XXL — aide rapide", expanded=False):
             if st.button(_help_label, key="help_xxl_" + _help_page, use_container_width=True):
                 st.session_state["issa_nav_group"] = _help_group
                 st.session_state["issa_nav_subpage"] = _help_page
-                st.rerun()
+                _magic_result = st.rerun()
 
 # RAPPELS TRANSVERSAUX : visibles depuis TOUS les onglets, sans ressaisie.
 try:
@@ -1328,15 +1328,15 @@ try:
     if not _alerts.empty:
         _late = _alerts[_alerts['remind_at'].astype(str) <= _now_text]
         if not _late.empty:
-            st.error(f"🔔 **RAPPEL À FAIRE : {len(_late)} tâche(s) ou échéance(s) sont arrivées à échéance.** Ouvre l’onglet « Rappels automatiques » pour les consulter.")
+            _magic_result = st.error(f"🔔 **RAPPEL À FAIRE : {len(_late)} tâche(s) ou échéance(s) sont arrivées à échéance.** Ouvre l’onglet « Rappels automatiques » pour les consulter.")
         _soon = _alerts[_alerts['remind_at'].astype(str) > _now_text]
         if not _soon.empty:
-            st.warning(f"⏰ **À venir dans les prochaines 24 heures : {len(_soon)} rappel(s).** Consulte l’onglet « Rappels automatiques » pour voir les dates et les détails.")
+            _magic_result = st.warning(f"⏰ **À venir dans les prochaines 24 heures : {len(_soon)} rappel(s).** Consulte l’onglet « Rappels automatiques » pour voir les dates et les détails.")
         with st.expander('Voir les rappels à faire ou à venir', expanded=not _late.empty):
             for _item in _alerts.itertuples():
-                st.markdown(f"**{_item.remind_at} — {_item.title}**")
+                _magic_result = st.markdown(f"**{_item.remind_at} — {_item.title}**")
                 if _item.details:
-                    st.caption(str(_item.details))
+                    _magic_result = st.caption(str(_item.details))
 except Exception:
     # Ne pas bloquer l’application principale si une base ancienne est en cours de migration.
     pass
@@ -1356,34 +1356,34 @@ if page=="Vue d’ensemble":
     with cols[3]: _ = card('Heures étudiées',round(hours,1),'Journal de révision')
     # Résumé des rappels issus des autres rubriques, visible dès l'ouverture de l'application.
     try:
-        ensure_reminders_schema()
+        _magic_result = ensure_reminders_schema()
         soon=read_df("SELECT title,details,remind_at,status FROM reminders WHERE enabled=1 AND status='En attente' ORDER BY remind_at LIMIT 6")
     except Exception as _reminders_dashboard_error:
         # Ne pas faire tomber tout le tableau de bord si une base déployée est encore incompatible.
-        _NONE_RUNTIME_LOG.append({"where": "dashboard_reminders", "error": str(_reminders_dashboard_error)[:300]})
+        _magic_result = _NONE_RUNTIME_LOG.append({"where": "dashboard_reminders", "error": str(_reminders_dashboard_error)[:300]})
         soon = pd.DataFrame(columns=["title", "details", "remind_at", "status"])
-        st.warning("Les rappels ne peuvent pas être chargés pour le moment. Le reste du tableau de bord reste disponible. Vérifie les logs de l’application et la connexion Supabase.")
-    st.subheader('🔔 Ce que tu dois faire bientôt')
+        _magic_result = st.warning("Les rappels ne peuvent pas être chargés pour le moment. Le reste du tableau de bord reste disponible. Vérifie les logs de l’application et la connexion Supabase.")
+    _magic_result = st.subheader('🔔 Ce que tu dois faire bientôt')
     if soon.empty:
-        st.info('Aucun rappel en attente. Les rappels apparaîtront automatiquement dès que tu enregistres une tâche, un cours, un objectif, une formation, une opportunité ou une note de type « Rappel ».')
+        _magic_result = st.info('Aucun rappel en attente. Les rappels apparaîtront automatiquement dès que tu enregistres une tâche, un cours, un objectif, une formation, une opportunité ou une note de type « Rappel ».')
     else:
         for rr in soon.itertuples():
-            st.markdown(f"- **{rr.title}** — {rr.remind_at}")
-            if rr.details: st.caption(rr.details)
-    st.subheader('📅 Prochaines séances')
-    if upcoming.empty: st.info('Aucune séance future. Saisis ton emploi du temps dans l’onglet correspondant.')
+            _magic_result = st.markdown(f"- **{rr.title}** — {rr.remind_at}")
+            if rr.details: _magic_result = st.caption(rr.details)
+    _magic_result = st.subheader('📅 Prochaines séances')
+    if upcoming.empty: _magic_result = st.info('Aucune séance future. Saisis ton emploi du temps dans l’onglet correspondant.')
     else: _ = show_dataframe(upcoming.sort_values(['event_date','start_time']).head(8)[['event_date','start_time','end_time','title','kind','location']].rename(columns={'event_date':'Date','start_time':'Début','end_time':'Fin','title':'Séance','kind':'Type','location':'Lieu'}),use_container_width=True,hide_index=True)
     a,b=st.columns(2)
     with a:
-        st.subheader('🎯 Tâches prioritaires')
-        if open_tasks.empty: st.success('Aucune tâche ouverte enregistrée.')
+        _magic_result = st.subheader('🎯 Tâches prioritaires')
+        if open_tasks.empty: _magic_result = st.success('Aucune tâche ouverte enregistrée.')
         else: _ = show_dataframe(open_tasks.head(7)[['title','due_date','priority','status']].rename(columns={'title':'Tâche','due_date':'Échéance','priority':'Priorité','status':'Statut'}),use_container_width=True,hide_index=True)
     with b:
-        st.subheader('🚀 Objectifs personnels')
-        if goals.empty: st.info('Ajoute tes objectifs dans Assistant de vie → Objectifs.')
+        _magic_result = st.subheader('🚀 Objectifs personnels')
+        if goals.empty: _magic_result = st.info('Ajoute tes objectifs dans Assistant de vie → Objectifs.')
         else:
-            for r in goals.sort_values('target_date').head(5).itertuples(): st.write(f"**{r.title}** — {r.progress}%" ); st.progress(int(r.progress)/100)
-    st.caption('Conseil : commence par saisir ta maquette, puis ton emploi du temps. Le programme de révision sera calculé à partir de ces informations.')
+            for r in goals.sort_values('target_date').head(5).itertuples(): _magic_result = st.write(f"**{r.title}** — {r.progress}%" ); _magic_result = st.progress(int(r.progress)/100)
+    _magic_result = st.caption('Conseil : commence par saisir ta maquette, puis ton emploi du temps. Le programme de révision sera calculé à partir de ces informations.')
 
 # ---------- Maquettes ----------
 elif page=="Maquettes & matières":
@@ -1397,14 +1397,14 @@ elif page=="Maquettes & matières":
             notes=st.text_area('Notes / compétences / coefficient')
             ok=st.form_submit_button('Enregistrer la matière',type='primary')
         if ok:
-            if not title.strip(): st.error('L’intitulé est obligatoire.')
+            if not title.strip(): _magic_result = st.error('L’intitulé est obligatoire.')
             else:
                 _ = run('INSERT INTO subjects(title,code,semester,ue,ue_code,credits,cm,td,tp,tpe,vht,teacher,notes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(title.strip(),code.strip(),semester,ue.strip(),ue_code.strip(),credits,cm,td,tp,tpe,vht,teacher.strip(),notes.strip()))
-                st.success('Matière enregistrée.'); st.rerun()
+                _magic_result = st.success('Matière enregistrée.'); _magic_result = st.rerun()
     with tab2:
-        st.markdown('**Pour une saisie massive**, prépare un CSV ou Excel avec les colonnes ci-dessous. Les noms de colonnes sont reconnus sans tenir compte des majuscules et accents.')
+        _magic_result = st.markdown('**Pour une saisie massive**, prépare un CSV ou Excel avec les colonnes ci-dessous. Les noms de colonnes sont reconnus sans tenir compte des majuscules et accents.')
         template=pd.DataFrame([{'title':'Pédologie','code':'AGR101','semester':'Semestre 1','ue':'Sciences du sol','ue_code':'UE01','credits':4,'cm':20,'td':10,'tp':15,'tpe':10,'vht':55,'teacher':'Nom enseignant','notes':''}])
-        st.download_button('Télécharger un modèle CSV',template.to_csv(index=False).encode('utf-8-sig'),'modele_maquette.csv','text/csv')
+        _magic_result = st.download_button('Télécharger un modèle CSV',template.to_csv(index=False).encode('utf-8-sig'),'modele_maquette.csv','text/csv')
         upl=st.file_uploader('Importer les matières (CSV ou XLSX)',type=['csv','xlsx'],key='subjects_bulk')
         if upl:
             try:
@@ -1427,30 +1427,30 @@ elif page=="Maquettes & matières":
                             if k in ['credits','cm','td','tp','tpe','vht']:
                                 try: v=float(v or 0)
                                 except: v=0.
-                            vals.append(v)
+                            _magic_result = vals.append(v)
                         _ = run('INSERT INTO subjects(title,code,semester,ue,ue_code,credits,cm,td,tp,tpe,vht,teacher,notes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',tuple(vals))
                         count+=1
-                    st.success(f'{count} matière(s) importée(s). Les doublons exacts ont été ignorés.'); st.rerun()
-            except Exception as ex: st.error(f'Lecture impossible : {ex}')
-        st.caption('Pour un PDF, utilise la saisie directe après vérification du texte extrait : les tableaux PDF ont souvent des colonnes difficiles à reconstruire automatiquement.')
+                    _magic_result = st.success(f'{count} matière(s) importée(s). Les doublons exacts ont été ignorés.'); _magic_result = st.rerun()
+            except Exception as ex: _magic_result = st.error(f'Lecture impossible : {ex}')
+        _magic_result = st.caption('Pour un PDF, utilise la saisie directe après vérification du texte extrait : les tableaux PDF ont souvent des colonnes difficiles à reconstruire automatiquement.')
         pdf=st.file_uploader('Lecture de contrôle facultative d’une maquette PDF',type=['pdf'],key='subject_pdf')
         if pdf and st.button('Extraire le texte du PDF',key='read_subject_pdf'):
             try:
                 import fitz
-                doc=fitz.open(stream=pdf.getvalue(),filetype='pdf'); st.text_area('Texte extrait à contrôler', '\n\n'.join(pg.get_text() for pg in doc),height=250)
-            except ImportError: st.warning('Installe PyMuPDF : python -m pip install PyMuPDF')
-            except Exception as ex: st.error(f'PDF illisible : {ex}')
+                doc=fitz.open(stream=pdf.getvalue(),filetype='pdf'); _magic_result = st.text_area('Texte extrait à contrôler', '\n\n'.join(pg.get_text() for pg in doc),height=250)
+            except ImportError: _magic_result = st.warning('Installe PyMuPDF : python -m pip install PyMuPDF')
+            except Exception as ex: _magic_result = st.error(f'PDF illisible : {ex}')
     with tab3:
         df=read_df('SELECT * FROM subjects ORDER BY semester,ue,title')
-        if df.empty: st.info('Aucune matière enregistrée.')
+        if df.empty: _magic_result = st.info('Aucune matière enregistrée.')
         else:
             _ = show_dataframe(df.drop(columns=['created_at'],errors='ignore'),use_container_width=True,hide_index=True)
             _ = export_csv(df,'la maquette','maquette')
             opts={f"#{r.id} — {r.title} ({r.semester})":int(r.id) for r in df.itertuples()}; chosen=st.selectbox('Fiche à supprimer (si nécessaire)',list(opts),key='del_subject_pick')
             if st.button('Supprimer la matière choisie',key='delete_subject'):
-                _ = run('DELETE FROM subjects WHERE id=?',(opts[chosen],)); st.success('Matière supprimée.'); st.rerun()
+                _ = run('DELETE FROM subjects WHERE id=?',(opts[chosen],)); _magic_result = st.success('Matière supprimée.'); _magic_result = st.rerun()
             dup=df.assign(n=df.title.map(norm),s=df.semester.map(norm),u=df.ue.map(norm)).groupby(['n','s','u']).filter(lambda g:len(g)>1)
-            if not dup.empty: st.warning('Doublons potentiels détectés : vérifie-les avant suppression.'); _ = show_dataframe(dup[['id','title','semester','ue']],hide_index=True)
+            if not dup.empty: _magic_result = st.warning('Doublons potentiels détectés : vérifie-les avant suppression.'); _ = show_dataframe(dup[['id','title','semester','ue']],hide_index=True)
 
 # ---------- EDT ----------
 elif page=="Emploi du temps":
@@ -1463,19 +1463,19 @@ elif page=="Emploi du temps":
             sl=st.selectbox('Matière associée',list(subopts)); notes=st.text_input('Notes')
             ok=st.form_submit_button('Ajouter à l’agenda',type='primary')
         if ok:
-            if not title.strip(): st.error('Le titre est obligatoire.')
-            elif end<=start: st.error('La fin doit être après le début.')
+            if not title.strip(): _magic_result = st.error('Le titre est obligatoire.')
+            elif end<=start: _magic_result = st.error('La fin doit être après le début.')
             else:
                 _ = run('INSERT INTO events(title,event_date,start_time,end_time,kind,subject_id,location,notes) VALUES(?,?,?,?,?,?,?,?)',(title.strip(),day.isoformat(),start.strftime('%H:%M'),end.strftime('%H:%M'),kind,subopts[sl],location.strip(),notes.strip()))
                 new_id = int(read_df('SELECT id FROM events WHERE title=? AND event_date=? ORDER BY id DESC LIMIT 1', (title.strip(),day.isoformat())).iloc[0]['id'])
                 reminder_dt = datetime.combine(day, start) - timedelta(hours=1)
                 if reminder_dt < datetime.now(): reminder_dt = datetime.combine(day, start)
                 _ = upsert_auto_reminder('event', new_id, f'{kind} : {title.strip()}', f'Lieu : {location.strip() or "non précisé"}. {notes.strip()}', reminder_dt.strftime('%Y-%m-%d %H:%M:%S'))
-                st.success('Séance ajoutée. Un rappel est automatiquement créé dans Rappels.'); st.rerun()
+                _magic_result = st.success('Séance ajoutée. Un rappel est automatiquement créé dans Rappels.'); _magic_result = st.rerun()
     with tab2:
-        st.markdown('Colonnes conseillées : **title, event_date, start_time, end_time, kind, subject, location, notes**. Date au format AAAA-MM-JJ et heures HH:MM.')
+        _magic_result = st.markdown('Colonnes conseillées : **title, event_date, start_time, end_time, kind, subject, location, notes**. Date au format AAAA-MM-JJ et heures HH:MM.')
         template=pd.DataFrame([{'title':'Cours de pédologie','event_date':date.today().isoformat(),'start_time':'08:00','end_time':'10:00','kind':'Cours','subject':'Pédologie','location':'Salle 2','notes':''}])
-        st.download_button('Télécharger le modèle EDT CSV',template.to_csv(index=False).encode('utf-8-sig'),'modele_edt.csv','text/csv')
+        _magic_result = st.download_button('Télécharger le modèle EDT CSV',template.to_csv(index=False).encode('utf-8-sig'),'modele_edt.csv','text/csv')
         up=st.file_uploader('Importer un EDT CSV/XLSX',type=['csv','xlsx'],key='edt_bulk')
         if up:
             try:
@@ -1489,7 +1489,7 @@ elif page=="Emploi du temps":
                         try:
                             t=str(r.get('title','')).strip(); ds=pd.to_datetime(r.get('event_date'),dayfirst=True,errors='raise').date().isoformat()
                             stime=str(r.get('start_time','08:00')).strip()[:5]; etime=str(r.get('end_time','09:00')).strip()[:5]
-                            datetime.strptime(stime,'%H:%M'); datetime.strptime(etime,'%H:%M')
+                            _magic_result = datetime.strptime(stime,'%H:%M'); _magic_result = datetime.strptime(etime,'%H:%M')
                             if not t or etime<=stime: raise ValueError('titre manquant ou horaires invalides')
                             subname=norm(r.get('subject','')); sid=None
                             if subname:
@@ -1497,22 +1497,22 @@ elif page=="Emploi du temps":
                                 if not found.empty: sid=int(found.iloc[0].id)
                             _ = run('INSERT INTO events(title,event_date,start_time,end_time,kind,subject_id,location,notes,source) VALUES(?,?,?,?,?,?,?,?,?)',(t,ds,stime,etime,str(r.get('kind','Cours')),sid,str(r.get('location','')),str(r.get('notes','')),'Import CSV/Excel'))
                             count+=1
-                        except Exception as ex: errors.append(f'Ligne {ix+2}: {ex}')
-                    st.success(f'{count} séance(s) enregistrée(s).');
-                    if errors: st.warning('Certaines lignes ont été ignorées :'); st.write('\n'.join(errors[:20]))
-                    st.rerun()
-            except Exception as ex: st.error(f'Fichier impossible à lire : {ex}')
+                        except Exception as ex: _magic_result = errors.append(f'Ligne {ix+2}: {ex}')
+                    _magic_result = st.success(f'{count} séance(s) enregistrée(s).');
+                    if errors: _magic_result = st.warning('Certaines lignes ont été ignorées :'); _magic_result = st.write('\n'.join(errors[:20]))
+                    _magic_result = st.rerun()
+            except Exception as ex: _magic_result = st.error(f'Fichier impossible à lire : {ex}')
         pdf=st.file_uploader('Lecture de contrôle facultative d’un EDT PDF',type=['pdf'],key='edt_pdf')
         if pdf and st.button('Lire le texte du PDF',key='read_edt_pdf'):
             try:
                 import fitz
-                doc=fitz.open(stream=pdf.getvalue(),filetype='pdf'); st.text_area('Texte extrait — à vérifier', '\n\n'.join(pg.get_text() for pg in doc),height=250)
-                st.info('L’extraction PDF ne garantit pas la reconnaissance des cellules. Vérifie les jours, dates et horaires puis saisis/importes un tableau propre.')
-            except ImportError: st.warning('Installe PyMuPDF : python -m pip install PyMuPDF')
-            except Exception as ex: st.error(str(ex))
+                doc=fitz.open(stream=pdf.getvalue(),filetype='pdf'); _magic_result = st.text_area('Texte extrait — à vérifier', '\n\n'.join(pg.get_text() for pg in doc),height=250)
+                _magic_result = st.info('L’extraction PDF ne garantit pas la reconnaissance des cellules. Vérifie les jours, dates et horaires puis saisis/importes un tableau propre.')
+            except ImportError: _magic_result = st.warning('Installe PyMuPDF : python -m pip install PyMuPDF')
+            except Exception as ex: _magic_result = st.error(str(ex))
     with tab3:
         ev=read_df('SELECT e.*,s.title AS subject_title FROM events e LEFT JOIN subjects s ON s.id=e.subject_id ORDER BY event_date,start_time')
-        if ev.empty: st.info('Aucune séance enregistrée.')
+        if ev.empty: _magic_result = st.info('Aucune séance enregistrée.')
         else:
             d1,d2=st.columns(2); filt=d1.selectbox('Période',['Toutes','À venir','Passées']); query=d2.text_input('Rechercher')
             view=ev.copy()
@@ -1522,31 +1522,31 @@ elif page=="Emploi du temps":
             _ = show_dataframe(view[['id','event_date','start_time','end_time','title','kind','subject_title','location','source']].rename(columns={'id':'ID','event_date':'Date','start_time':'Début','end_time':'Fin','title':'Événement','kind':'Type','subject_title':'Matière','location':'Lieu','source':'Origine'}),use_container_width=True,hide_index=True)
             _ = export_csv(view,'l’emploi du temps','edt')
             eopts={f"#{r.id} — {r.event_date} {r.title}":int(r.id) for r in ev.itertuples()}; pick=st.selectbox('Séance à supprimer',list(eopts))
-            if st.button('Supprimer la séance sélectionnée'): _ = run('DELETE FROM events WHERE id=?',(eopts[pick],)); st.rerun()
+            if st.button('Supprimer la séance sélectionnée'): _ = run('DELETE FROM events WHERE id=?',(eopts[pick],)); _magic_result = st.rerun()
 
 # ---------- Génération du programme de révision ----------
 elif page=="Programmes de révision":
     _ = header('PLANIFICATION INTELLIGENTE','Programme de révision','Un planning indicatif construit à partir de ta maquette, de tes disponibilités et de la date cible. Tu peux ajuster les séances ensuite.')
     subjects=read_df('SELECT * FROM subjects ORDER BY title')
-    if subjects.empty: st.warning('Commence par enregistrer tes matières dans « Maquettes & matières ».'); st.stop()
+    if subjects.empty: _magic_result = st.warning('Commence par enregistrer tes matières dans « Maquettes & matières ».'); _magic_result = st.stop()
     with st.form('revision_generator'):
         a,b,c=st.columns(3); startday=a.date_input('Début du programme',date.today()); endday=b.date_input('Date cible / examen',date.today()+timedelta(days=21)); weekly=c.slider('Heures disponibles par semaine',2,40,10)
         d,e=st.columns(2); days=d.multiselect('Jours de révision',['Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi','Dimanche'],default=['Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi']); session=e.selectbox('Durée d’une séance',['30 minutes','45 minutes','1 heure','1 h 30','2 heures'],index=2)
         generate=st.form_submit_button('Générer mon programme',type='primary')
     if generate:
-        if endday<startday: st.error('La date cible doit être après le début.')
-        elif not days: st.error('Choisis au moins un jour de révision.')
+        if endday<startday: _magic_result = st.error('La date cible doit être après le début.')
+        elif not days: _magic_result = st.error('Choisis au moins un jour de révision.')
         else:
             daymap={'Lundi':0,'Mardi':1,'Mercredi':2,'Jeudi':3,'Vendredi':4,'Samedi':5,'Dimanche':6}; allowed=[daymap[d] for d in days]
             duration={'30 minutes':.5,'45 minutes':.75,'1 heure':1,'1 h 30':1.5,'2 heures':2}[session]
             date_list=[]; cur=startday
             while cur<=endday:
-                if cur.weekday() in allowed: date_list.append(cur)
+                if cur.weekday() in allowed: _magic_result = date_list.append(cur)
                 cur+=timedelta(days=1)
-            if not date_list: st.error('Aucune date ne correspond à tes choix.')
+            if not date_list: _magic_result = st.error('Aucune date ne correspond à tes choix.')
             else:
                 weights=[]
-                for r in subjects.itertuples(): weights.append(max(float(r.vht or 0),float(r.credits or 0)*8,4))
+                for r in subjects.itertuples(): _magic_result = weights.append(max(float(r.vht or 0),float(r.credits or 0)*8,4))
                 total=sum(weights); total_hours=min(weekly*max(1,(endday-startday).days/7),sum(weights))
                 quota=[total_hours*w/total for w in weights]; remaining=list(quota); rows=[]; idx=0
                 for day in date_list:
@@ -1557,29 +1557,29 @@ elif page=="Programmes de révision":
                         if not available: break
                         i=max(available,key=lambda j:remaining[j]); hrs=min(duration,remaining[i]); r=subjects.iloc[i]
                         methods=['Relire le cours puis faire une fiche','Rappel actif sans regarder le cours','Exercices / problèmes corrigés','Questions-réponses et mini-test']
-                        rows.append({'Date':day.isoformat(),'Jour':day.strftime('%A'),'Horaire conseillé':f'{8+(idx%8)*1:02d}:00','Matière':r.title,'Durée (h)':round(hrs,2),'Séance proposée':methods[idx%len(methods)],'État':'À faire'})
+                        _magic_result = rows.append({'Date':day.isoformat(),'Jour':day.strftime('%A'),'Horaire conseillé':f'{8+(idx%8)*1:02d}:00','Matière':r.title,'Durée (h)':round(hrs,2),'Séance proposée':methods[idx%len(methods)],'État':'À faire'})
                         remaining[i]-=hrs; idx+=1
                 plan=pd.DataFrame(rows)
                 st.session_state['generated_plan']=plan
-                st.success(f'Programme indicatif généré : {len(plan)} séances. Il ne connaît pas le contenu réel des cours ; ajuste les priorités selon les examens et difficultés.')
+                _magic_result = st.success(f'Programme indicatif généré : {len(plan)} séances. Il ne connaît pas le contenu réel des cours ; ajuste les priorités selon les examens et difficultés.')
     if st.session_state.get('generated_plan') is not None:
         plan=st.session_state['generated_plan']
         edited=st.data_editor(plan,use_container_width=True,num_rows='dynamic',hide_index=True,key='plan_editor')
-        st.download_button('Télécharger le programme CSV',edited.to_csv(index=False).encode('utf-8-sig'),'programme_revision.csv','text/csv')
+        _magic_result = st.download_button('Télécharger le programme CSV',edited.to_csv(index=False).encode('utf-8-sig'),'programme_revision.csv','text/csv')
         if st.button('Créer des tâches à partir de ce programme',type='primary'):
             for r in edited.to_dict('records'):
                 _ = run('INSERT INTO tasks(title,due_date,priority,status,category,notes) VALUES(?,?,?,?,?,?)',(f"Réviser : {r.get('Matière','')}",str(r.get('Date','')), 'Normale', 'À faire','Révision',f"{r.get('Durée (h)','')} h · {r.get('Séance proposée','')}"))
-            st.success('Séances ajoutées à Tâches & révisions.'); st.rerun()
-    st.divider(); st.subheader('Tâches de révision déjà planifiées')
+            _magic_result = st.success('Séances ajoutées à Tâches & révisions.'); _magic_result = st.rerun()
+    _magic_result = st.divider(); _magic_result = st.subheader('Tâches de révision déjà planifiées')
     rt=read_df("SELECT * FROM tasks WHERE category='Révision' ORDER BY due_date")
-    if rt.empty: st.caption('Aucune tâche de révision enregistrée pour le moment.')
+    if rt.empty: _magic_result = st.caption('Aucune tâche de révision enregistrée pour le moment.')
     else: _ = show_dataframe(rt[['title','due_date','priority','status','notes']],use_container_width=True,hide_index=True)
 
 # ---------- Journal et progression ----------
 elif page=="Suivi & progression":
     _ = header('BAROMÈTRE PÉDAGOGIQUE','Suivi & progression','Enregistre chaque séance réellement étudiée, ton niveau de maîtrise et tes heures cumulées par matière.')
     subjects=read_df('SELECT id,title,semester,vht FROM subjects ORDER BY title')
-    if subjects.empty: st.info('Ajoute d’abord les matières dans la maquette.')
+    if subjects.empty: _magic_result = st.info('Ajoute d’abord les matières dans la maquette.')
     else:
         opts={f"{r.title} · {r.semester}":int(r.id) for r in subjects.itertuples()}
         with st.form('study_log_form'):
@@ -1588,22 +1588,22 @@ elif page=="Suivi & progression":
             notes=st.text_area('Ce qui est compris / reste à revoir')
             ok=st.form_submit_button('Enregistrer ma séance',type='primary')
         if ok:
-            _ = run('INSERT INTO study_logs(subject_id,study_date,hours,method,confidence,notes) VALUES(?,?,?,?,?,?)',(opts[subject],day.isoformat(),hours,method,confidence,notes.strip())); st.success('Séance enregistrée.'); st.rerun()
+            _ = run('INSERT INTO study_logs(subject_id,study_date,hours,method,confidence,notes) VALUES(?,?,?,?,?,?)',(opts[subject],day.isoformat(),hours,method,confidence,notes.strip())); _magic_result = st.success('Séance enregistrée.'); _magic_result = st.rerun()
         logs=read_df('SELECT l.*,s.title AS subject FROM study_logs l LEFT JOIN subjects s ON s.id=l.subject_id ORDER BY study_date DESC,id DESC')
         summary=read_df('SELECT s.id,s.title,s.semester,s.vht,COALESCE(SUM(l.hours),0) AS studied,AVG(l.confidence) AS confidence FROM subjects s LEFT JOIN study_logs l ON l.subject_id=s.id GROUP BY s.id ORDER BY s.title')
-        st.subheader('Progression par matière')
+        _magic_result = st.subheader('Progression par matière')
         for r in summary.itertuples():
             target=float(r.vht or 0); studied=float(r.studied or 0); progress=min(1,studied/target) if target>0 else 0
-            st.markdown(f'**{r.title}** · {r.semester} — {studied:.1f} h étudiée(s) / {target:.1f} h de VHT')
-            st.progress(progress, text=f'{progress*100:.0f}% de la VHT' if target>0 else 'VHT non renseignée')
-            st.caption(f"Maîtrise moyenne déclarée : {float(r.confidence):.1f}/5" if pd.notna(r.confidence) else 'Aucune évaluation de maîtrise enregistrée.')
-        st.subheader('Historique des séances')
-        if logs.empty: st.info('Le journal est vide.')
+            _magic_result = st.markdown(f'**{r.title}** · {r.semester} — {studied:.1f} h étudiée(s) / {target:.1f} h de VHT')
+            _magic_result = st.progress(progress, text=f'{progress*100:.0f}% de la VHT' if target>0 else 'VHT non renseignée')
+            _magic_result = st.caption(f"Maîtrise moyenne déclarée : {float(r.confidence):.1f}/5" if pd.notna(r.confidence) else 'Aucune évaluation de maîtrise enregistrée.')
+        _magic_result = st.subheader('Historique des séances')
+        if logs.empty: _magic_result = st.info('Le journal est vide.')
         else:
             _ = show_dataframe(logs[['study_date','subject','hours','method','confidence','notes']].rename(columns={'study_date':'Date','subject':'Matière','hours':'Heures','method':'Méthode','confidence':'Maîtrise /5','notes':'Notes'}),use_container_width=True,hide_index=True)
             _ = export_csv(logs,'le journal d’étude','journal_etude')
             choices={f"#{r.id} · {r.study_date} · {r.subject}":int(r.id) for r in logs.itertuples()}; sel=st.selectbox('Entrée à supprimer',list(choices))
-            if st.button('Supprimer cette entrée du journal'): _ = run('DELETE FROM study_logs WHERE id=?',(choices[sel],)); st.rerun()
+            if st.button('Supprimer cette entrée du journal'): _ = run('DELETE FROM study_logs WHERE id=?',(choices[sel],)); _magic_result = st.rerun()
 
 # ---------- Assistant de vie avec sous-onglets ----------
 elif page=="Assistant de vie":
@@ -1620,17 +1620,17 @@ elif page=="Assistant de vie":
                 remind=datetime.combine(max(date.today(),target-timedelta(days=1)),time(8,0))
                 if remind < datetime.now(): remind=datetime.combine(target,time(8,0))
                 _ = upsert_auto_reminder('goal',new_id,f'Objectif à suivre : {title.strip()}',f'Domaine : {category}. Progression : {progress} %. {notes.strip()}',remind.strftime('%Y-%m-%d %H:%M:%S'))
-                st.rerun()
-            else: st.error('Donne un titre à ton objectif.')
+                _magic_result = st.rerun()
+            else: _magic_result = st.error('Donne un titre à ton objectif.')
         goals=read_df('SELECT * FROM goals ORDER BY target_date')
         if not goals.empty:
             for r in goals.itertuples():
                 with st.container(border=True):
-                    st.write(f"**{r.title}** · {r.category} · cible : {r.target_date or 'non définie'}")
+                    _magic_result = st.write(f"**{r.title}** · {r.category} · cible : {r.target_date or 'non définie'}")
                     new=st.slider(f'Progression — {r.title}',0,100,int(r.progress),key=f'goalprog_{r.id}')
-                    if st.button('Mettre à jour',key=f'goalupdate_{r.id}'): _ = run('UPDATE goals SET progress=? WHERE id=?',(new,r.id)); st.rerun()
-                    if r.notes: st.caption(r.notes)
-                    if st.button('Supprimer objectif',key=f'goaldel_{r.id}'): _ = run('DELETE FROM goals WHERE id=?',(r.id,)); st.rerun()
+                    if st.button('Mettre à jour',key=f'goalupdate_{r.id}'): _ = run('UPDATE goals SET progress=? WHERE id=?',(new,r.id)); _magic_result = st.rerun()
+                    if r.notes: _magic_result = st.caption(r.notes)
+                    if st.button('Supprimer objectif',key=f'goaldel_{r.id}'): _ = run('DELETE FROM goals WHERE id=?',(r.id,)); _magic_result = st.rerun()
     with tabs[1]:
         with st.form('habit_form'):
             title=st.text_input('Habitude à suivre *',placeholder='Ex. lire 20 minutes, réviser, ranger le bureau'); freq=st.selectbox('Fréquence',['Quotidienne','En semaine','Hebdomadaire']); notes=st.text_input('Pourquoi / rappel'); ok=st.form_submit_button('Créer une habitude')
@@ -1641,27 +1641,27 @@ elif page=="Assistant de vie":
                 remind=datetime.combine(date.today(),time(8,0))
                 if remind < datetime.now(): remind += timedelta(days=1)
                 _ = upsert_auto_reminder('habit',new_id,f'Habitude du jour : {title.strip()}',f'Fréquence : {freq}. {notes.strip()}',remind.strftime('%Y-%m-%d %H:%M:%S'),'Quotidien')
-                st.rerun()
-            else: st.error('Saisis le nom de l’habitude.')
+                _magic_result = st.rerun()
+            else: _magic_result = st.error('Saisis le nom de l’habitude.')
         habits=read_df('SELECT * FROM habits WHERE active=1 ORDER BY title')
-        if habits.empty: st.info('Aucune habitude suivie.')
+        if habits.empty: _magic_result = st.info('Aucune habitude suivie.')
         for r in habits.itertuples():
-            a,b,c=st.columns([3,2,1]); a.write(f"**{r.title}** · {r.frequency}"); b.caption(r.notes)
+            a,b,c=st.columns([3,2,1]); _magic_result = a.write(f"**{r.title}** · {r.frequency}"); _magic_result = b.caption(r.notes)
             done=read_df('SELECT id FROM habit_logs WHERE habit_id=? AND log_date=? AND done=1',(r.id,date.today().isoformat()))
-            if not done.empty: c.success('Fait aujourd’hui')
+            if not done.empty: _magic_result = c.success('Fait aujourd’hui')
             elif c.button('Marquer fait',key=f'habitdone_{r.id}'):
-                _ = run('INSERT OR REPLACE INTO habit_logs(habit_id,log_date,done) VALUES(?,?,1)',(r.id,date.today().isoformat())); st.rerun()
+                _ = run('INSERT OR REPLACE INTO habit_logs(habit_id,log_date,done) VALUES(?,?,1)',(r.id,date.today().isoformat())); _magic_result = st.rerun()
             last7=read_df('SELECT COUNT(*) AS n FROM habit_logs WHERE habit_id=? AND done=1 AND log_date>=?',(r.id,(date.today()-timedelta(days=6)).isoformat())).iloc[0]['n']
-            st.caption(f'Régularité sur les 7 derniers jours : {int(last7)}/7')
-            if st.button('Supprimer habitude',key=f'habitdel_{r.id}'): _ = run('DELETE FROM habits WHERE id=?',(r.id,)); st.rerun()
+            _magic_result = st.caption(f'Régularité sur les 7 derniers jours : {int(last7)}/7')
+            if st.button('Supprimer habitude',key=f'habitdel_{r.id}'): _ = run('DELETE FROM habits WHERE id=?',(r.id,)); _magic_result = st.rerun()
     with tabs[2]:
         with st.form('budget_form'):
             a,b,c=st.columns(3); day=a.date_input('Date',date.today()); kind=b.selectbox('Mouvement',['Dépense','Revenu']); amount=c.number_input('Montant (FCFA)',min_value=0.,step=500.)
             d,e=st.columns(2); category=d.selectbox('Catégorie',['Alimentation','Transport','Logement','Études','Téléphone / Internet','Santé','Loisirs','Salaire / aide','Épargne','Autre']); desc=e.text_input('Description')
             ok=st.form_submit_button('Enregistrer le mouvement')
         if ok:
-            if amount>0: _ = run('INSERT INTO budgets(entry_date,kind,category,amount,description) VALUES(?,?,?,?,?)',(day.isoformat(),kind,category,amount,desc.strip())); st.rerun()
-            else: st.error('Le montant doit être supérieur à zéro.')
+            if amount>0: _ = run('INSERT INTO budgets(entry_date,kind,category,amount,description) VALUES(?,?,?,?,?)',(day.isoformat(),kind,category,amount,desc.strip())); _magic_result = st.rerun()
+            else: _magic_result = st.error('Le montant doit être supérieur à zéro.')
         budget=read_df('SELECT * FROM budgets ORDER BY entry_date DESC,id DESC')
         if not budget.empty:
             incomes=budget.loc[budget.kind=='Revenu','amount'].sum(); expenses=budget.loc[budget.kind=='Dépense','amount'].sum(); a,b,c=st.columns(3)
@@ -1670,8 +1670,8 @@ elif page=="Assistant de vie":
             with c: _ = card('Solde enregistré',f'{incomes-expenses:,.0f} FCFA')
             _ = show_dataframe(budget,use_container_width=True,hide_index=True); _ = export_csv(budget,'le budget','budget')
             opts={f"#{r.id} · {r.entry_date} · {r.kind} · {r.amount:g} FCFA":int(r.id) for r in budget.itertuples()}; pick=st.selectbox('Mouvement à supprimer',list(opts))
-            if st.button('Supprimer le mouvement'): _ = run('DELETE FROM budgets WHERE id=?',(opts[pick],)); st.rerun()
-        else: st.info('Aucun mouvement saisi. Le solde est calculé uniquement à partir des mouvements enregistrés ici.')
+            if st.button('Supprimer le mouvement'): _ = run('DELETE FROM budgets WHERE id=?',(opts[pick],)); _magic_result = st.rerun()
+        else: _magic_result = st.info('Aucun mouvement saisi. Le solde est calculé uniquement à partir des mouvements enregistrés ici.')
     with tabs[3]:
         with st.form('life_task_form'):
             a,b,c=st.columns(3); title=a.text_input('Tâche / démarche *'); due=b.date_input('Date limite',date.today()+timedelta(days=1)); priority=c.selectbox('Priorité',['Basse','Normale','Haute','Urgente'])
@@ -1683,16 +1683,16 @@ elif page=="Assistant de vie":
                 remind=datetime.combine(max(date.today(), due-timedelta(days=1)), time(8,0))
                 if remind < datetime.now(): remind=datetime.combine(due,time(8,0))
                 _ = upsert_auto_reminder('task',new_id,f'Échéance : {title.strip()}',f'Priorité : {priority}. Domaine : {category}. {notes.strip()}',remind.strftime('%Y-%m-%d %H:%M:%S'))
-                st.rerun()
-            else: st.error('Saisis le titre de la tâche.')
+                _magic_result = st.rerun()
+            else: _magic_result = st.error('Saisis le titre de la tâche.')
         tasks=read_df("SELECT * FROM tasks ORDER BY CASE priority WHEN 'Urgente' THEN 1 WHEN 'Haute' THEN 2 WHEN 'Normale' THEN 3 ELSE 4 END, due_date")
         if not tasks.empty:
             _ = show_dataframe(tasks[['id','title','due_date','priority','status','category','notes']],use_container_width=True,hide_index=True)
             opts={f"#{r.id} · {r.title}":int(r.id) for r in tasks.itertuples()}; sel=st.selectbox('Tâche à mettre à jour',list(opts)); tid=opts[sel]
             status=st.selectbox('Nouveau statut',['À faire','En cours','Terminée'],key='life_task_status')
-            if st.button('Enregistrer le statut',key='life_task_save'): _ = run('UPDATE tasks SET status=? WHERE id=?',(status,tid)); st.rerun()
-            if st.button('Supprimer cette tâche',key='life_task_delete'): _ = run('DELETE FROM tasks WHERE id=?',(tid,)); st.rerun()
-        else: st.info('Ta liste est vide.')
+            if st.button('Enregistrer le statut',key='life_task_save'): _ = run('UPDATE tasks SET status=? WHERE id=?',(status,tid)); _magic_result = st.rerun()
+            if st.button('Supprimer cette tâche',key='life_task_delete'): _ = run('DELETE FROM tasks WHERE id=?',(tid,)); _magic_result = st.rerun()
+        else: _magic_result = st.info('Ta liste est vide.')
     with tabs[4]:
         with st.form('note_form'):
             title=st.text_input('Titre de la note *'); category=st.selectbox('Catégorie',['Idée','Personnel','Études','Projet','Rappel','Journal','Autre']); content=st.text_area('Contenu',height=140)
@@ -1710,25 +1710,25 @@ elif page=="Assistant de vie":
                 if category == 'Rappel' and rd:
                     dt=datetime.combine(reminder_date,reminder_time)
                     _ = upsert_auto_reminder('note',new_id,f'Note à ne pas oublier : {title.strip()}',content.strip(),dt.strftime('%Y-%m-%d %H:%M:%S'))
-                    st.success('Note enregistrée et rappel automatiquement programmé.')
-                st.rerun()
-            else: st.error('Le titre est obligatoire.')
+                    _magic_result = st.success('Note enregistrée et rappel automatiquement programmé.')
+                _magic_result = st.rerun()
+            else: _magic_result = st.error('Le titre est obligatoire.')
         notes=read_df('SELECT * FROM life_notes ORDER BY created_at DESC')
-        if notes.empty: st.info('Aucune note personnelle.')
+        if notes.empty: _magic_result = st.info('Aucune note personnelle.')
         for r in notes.itertuples():
             with st.container(border=True):
-                st.markdown(f'**{r.title}** · {r.category}'); st.write(r.content)
-                if r.category == 'Rappel' and getattr(r, 'reminder_date', ''): st.caption(f"🔔 Rappel prévu le {r.reminder_date} à {getattr(r, 'reminder_time', '08:00')}")
-                if st.button('Supprimer la note',key=f'note_del_{r.id}'): _ = run('DELETE FROM life_notes WHERE id=?',(r.id,)); st.rerun()
+                _magic_result = st.markdown(f'**{r.title}** · {r.category}'); _magic_result = st.write(r.content)
+                if r.category == 'Rappel' and getattr(r, 'reminder_date', ''): _magic_result = st.caption(f"🔔 Rappel prévu le {r.reminder_date} à {getattr(r, 'reminder_time', '08:00')}")
+                if st.button('Supprimer la note',key=f'note_del_{r.id}'): _ = run('DELETE FROM life_notes WHERE id=?',(r.id,)); _magic_result = st.rerun()
     with tabs[5]:
         with st.form('contact_form'):
             a,b=st.columns(2); name=a.text_input('Nom / organisation *'); role=b.text_input('Rôle / relation'); c,d=st.columns(2); phone=c.text_input('Téléphone'); email=d.text_input('E-mail'); notes=st.text_area('Notes de contact'); ok=st.form_submit_button('Enregistrer le contact')
         if ok:
-            if name.strip(): _ = run('INSERT INTO contacts(name,role,phone,email,notes) VALUES(?,?,?,?,?)',(name.strip(),role.strip(),phone.strip(),email.strip(),notes.strip())); st.rerun()
-            else: st.error('Le nom est obligatoire.')
+            if name.strip(): _ = run('INSERT INTO contacts(name,role,phone,email,notes) VALUES(?,?,?,?,?)',(name.strip(),role.strip(),phone.strip(),email.strip(),notes.strip())); _magic_result = st.rerun()
+            else: _magic_result = st.error('Le nom est obligatoire.')
         contacts=read_df('SELECT * FROM contacts ORDER BY name')
         if contacts.empty:
-            st.info('Aucun contact enregistré.')
+            _magic_result = st.info('Aucun contact enregistré.')
         else:
             # Nettoyer l'affichage et ne proposer à la suppression que des IDs valides.
             contacts_view = contacts.drop(columns=['created_at'], errors='ignore').copy()
@@ -1752,16 +1752,16 @@ elif page=="Assistant de vie":
                 pick = st.selectbox('Contact à supprimer', list(opts), key='contact_delete_pick')
                 if st.button('Supprimer le contact'):
                     _ = run('DELETE FROM contacts WHERE id=?', (opts[pick],))
-                    st.rerun()
+                    _magic_result = st.rerun()
             else:
-                st.info('Aucun contact avec un identifiant valide à supprimer. Les contacts affichés sont conservés.')
+                _magic_result = st.info('Aucun contact avec un identifiant valide à supprimer. Les contacts affichés sont conservés.')
     with tabs[6]:
-        st.markdown('### Petit bilan personnel')
-        st.caption('Cet espace aide à organiser tes habitudes, sans remplacer un professionnel de santé. Choisis des routines réalistes et adapte-les à tes contraintes.')
+        _magic_result = st.markdown('### Petit bilan personnel')
+        _magic_result = st.caption('Cet espace aide à organiser tes habitudes, sans remplacer un professionnel de santé. Choisis des routines réalistes et adapte-les à tes contraintes.')
         prompts={'Début de journée':'Quelle est ma priorité du jour ?','Études':'Quel sujet dois-je comprendre plutôt que simplement mémoriser ?','Équilibre':'Ai-je prévu une pause, du sommeil et un moment sans écran ?','Fin de journée':'Qu’ai-je accompli ? Quelle est la prochaine petite étape ?'}
         for label,q in prompts.items():
-            with st.expander(label): st.write(q); st.text_area('Ma réponse',key='routine_'+norm(label))
-        st.markdown('**Routine suggérée :** planifier 3 priorités, travailler en séances de 25–50 minutes, faire une courte pause, puis noter ce qui reste à revoir.')
+            with st.expander(label): _magic_result = st.write(q); _magic_result = st.text_area('Ma réponse',key='routine_'+norm(label))
+        _magic_result = st.markdown('**Routine suggérée :** planifier 3 priorités, travailler en séances de 25–50 minutes, faire une courte pause, puis noter ce qui reste à revoir.')
 
 # ---------- Rappels automatiques issus des rubriques enregistrées ----------
 elif page=="Rappels automatiques":
@@ -1769,34 +1769,34 @@ elif page=="Rappels automatiques":
     _ = sync_existing_entries_to_reminders()
     current_email = get_recipient_email()
     with st.container(border=True):
-        st.markdown('#### 📬 Adresse qui recevra les rappels')
+        _magic_result = st.markdown('#### 📬 Adresse qui recevra les rappels')
         with st.form('recipient_email_form'):
             recipient_input = st.text_input('Ton adresse e-mail', value=current_email, placeholder='exemple@gmail.com', help='Cette adresse est enregistrée dans la base locale de l’application.')
             save_email = st.form_submit_button('Enregistrer mon adresse e-mail', type='primary')
         if save_email:
             if not re.match(r'^[^\s@]+@[^\s@]+\.[^\s@]+$', recipient_input.strip()):
-                st.error('Entre une adresse e-mail valide.')
+                _magic_result = st.error('Entre une adresse e-mail valide.')
             else:
                 _ = save_setting('reminder_email', recipient_input.strip())
-                st.success('Adresse de réception enregistrée.')
-                st.rerun()
+                _magic_result = st.success('Adresse de réception enregistrée.')
+                _magic_result = st.rerun()
     if email_configured():
-        st.success(f"Envoi e-mail configuré. Les rappels seront envoyés à **{get_recipient_email()}** lorsque l’application fonctionne.")
+        _magic_result = st.success(f"Envoi e-mail configuré. Les rappels seront envoyés à **{get_recipient_email()}** lorsque l’application fonctionne.")
     else:
-        st.warning('Les rappels sont préparés automatiquement, mais l’envoi nécessite les identifiants Gmail SMTP dans les Secrets Streamlit.')
+        _magic_result = st.warning('Les rappels sont préparés automatiquement, mais l’envoi nécessite les identifiants Gmail SMTP dans les Secrets Streamlit.')
     with st.expander('⚙️ Configuration Gmail gratuite (à faire une seule fois)', expanded=not bool(get_config('SMTP_PASSWORD'))):
-        st.markdown('Utilise ton adresse Gmail et un **mot de passe d’application Google de 16 caractères**. Ne mets jamais ton mot de passe Gmail habituel et ne partage pas ce secret.')
-        st.code('SMTP_HOST = "smtp.gmail.com"\nSMTP_PORT = 587\nSMTP_USERNAME = "issayoume1801@gmail.com"\nSMTP_PASSWORD = "mot_de_passe_application_google"\nSMTP_SENDER_NAME = "Secrétaire Issa"\nAPP_USERNAME = "identifiant_de_connexion"\nAPP_PASSWORD = "mot_de_passe_de_connexion"\n\nYOUAGRONOME_OWNER_EMAIL = "identifiant_proprietaire"\nYOUAGRONOME_OWNER_PASS = "mot_de_passe_proprietaire"', language="toml")
-        st.caption('Dans Streamlit Cloud : Manage app → Settings → Secrets. L’adresse d’expédition est lue depuis SMTP_USERNAME. L’adresse de réception des rappels se règle ci-dessus. Le code essaie STARTTLS sur le port 587 puis SSL sur le port 465 si nécessaire.')
+        _magic_result = st.markdown('Utilise ton adresse Gmail et un **mot de passe d’application Google de 16 caractères**. Ne mets jamais ton mot de passe Gmail habituel et ne partage pas ce secret.')
+        _magic_result = st.code('SMTP_HOST = "smtp.gmail.com"\nSMTP_PORT = 587\nSMTP_USERNAME = "issayoume1801@gmail.com"\nSMTP_PASSWORD = "mot_de_passe_application_google"\nSMTP_SENDER_NAME = "Secrétaire Issa"\nAPP_USERNAME = "identifiant_de_connexion"\nAPP_PASSWORD = "mot_de_passe_de_connexion"\n\nYOUAGRONOME_OWNER_EMAIL = "identifiant_proprietaire"\nYOUAGRONOME_OWNER_PASS = "mot_de_passe_proprietaire"', language="toml")
+        _magic_result = st.caption('Dans Streamlit Cloud : Manage app → Settings → Secrets. L’adresse d’expédition est lue depuis SMTP_USERNAME. L’adresse de réception des rappels se règle ci-dessus. Le code essaie STARTTLS sur le port 587 puis SSL sur le port 465 si nécessaire.')
     if st.button('🧪 Envoyer un e-mail de test', disabled=not (get_config('SMTP_PASSWORD') and get_recipient_email())):
         try:
-            send_email('Test — Secrétaire Issa', 'Bonjour,\n\nCeci est un e-mail de test. Si tu le reçois, les rappels e-mail de Secrétaire Issa sont correctement configurés.')
-            st.success(f"E-mail de test transmis à {get_recipient_email()}.")
+            _magic_result = send_email('Test — Secrétaire Issa', 'Bonjour,\n\nCeci est un e-mail de test. Si tu le reçois, les rappels e-mail de Secrétaire Issa sont correctement configurés.')
+            _magic_result = st.success(f"E-mail de test transmis à {get_recipient_email()}.")
         except Exception as exc:
-            st.error(str(exc))
+            _magic_result = st.error(str(exc))
     reminders=read_df("SELECT id,title,details,remind_at,phone,repeat_rule,status,enabled,last_sent_at,last_error,source_type,source_id FROM reminders ORDER BY remind_at")
     if reminders.empty:
-        st.info('Aucune échéance détectée. Ajoute une tâche avec une date limite, un cours dans l’agenda, un objectif daté ou une opportunité : le rappel sera créé automatiquement.')
+        _magic_result = st.info('Aucune échéance détectée. Ajoute une tâche avec une date limite, un cours dans l’agenda, un objectif daté ou une opportunité : le rappel sera créé automatiquement.')
     else:
         pending=reminders[(reminders.enabled==1)&(reminders.status=='En attente')]
         overdue=pending[pending.remind_at.astype(str)<=datetime.now().strftime('%Y-%m-%d %H:%M:%S')]
@@ -1814,26 +1814,26 @@ elif page=="Rappels automatiques":
             if not cur.empty:
                 enabled=0 if int(cur.iloc[0]['enabled']) else 1
                 _ = run("UPDATE reminders SET enabled=?,status=? WHERE id=?",(enabled,'En attente' if enabled else 'Désactivé',rid))
-                st.rerun()
+                _magic_result = st.rerun()
         if b.button('Envoyer ce rappel maintenant par e-mail',key='auto_reminder_send_now',disabled=not email_configured()):
             row=read_df('SELECT * FROM reminders WHERE id=?',(rid,))
             if not row.empty:
                 r=row.iloc[0]
                 try:
-                    send_email(f"🔔 Rappel Secrétaire Issa : {r['title']}",f"Rappel : {r['title']}\n\n{r['details']}\n\nDate prévue : {r['remind_at']}\n— Secrétaire Issa")
+                    _magic_result = send_email(f"🔔 Rappel Secrétaire Issa : {r['title']}",f"Rappel : {r['title']}\n\n{r['details']}\n\nDate prévue : {r['remind_at']}\n— Secrétaire Issa")
                     _ = run("UPDATE reminders SET last_sent_at=?,last_error='' WHERE id=?",(datetime.now().strftime('%Y-%m-%d %H:%M:%S'),rid))
-                    st.success('E-mail transmis au serveur de messagerie.')
-                except Exception as exc: st.error(str(exc))
-    st.caption('Vérification des rappels au démarrage de chaque exécution de l’application et contrôle en arrière-plan toutes les 30 secondes tant que le processus Streamlit reste actif. Les rappels sont issus de l’agenda (1 h avant), des tâches et objectifs (veille à 08 h ou immédiatement si déjà en retard), des formations, des stages/concours/bourses, des notes « Rappel » et des habitudes actives. Gmail utilise le port 587 STARTTLS avec secours sur 465 SSL. Streamlit Cloud peut suspendre l’application lorsqu’elle est inactive : un envoi garanti même application endormie nécessite un planificateur externe et une base de données persistante.')
+                    _magic_result = st.success('E-mail transmis au serveur de messagerie.')
+                except Exception as exc: _magic_result = st.error(str(exc))
+    _magic_result = st.caption('Vérification des rappels au démarrage de chaque exécution de l’application et contrôle en arrière-plan toutes les 30 secondes tant que le processus Streamlit reste actif. Les rappels sont issus de l’agenda (1 h avant), des tâches et objectifs (veille à 08 h ou immédiatement si déjà en retard), des formations, des stages/concours/bourses, des notes « Rappel » et des habitudes actives. Gmail utilise le port 587 STARTTLS avec secours sur 465 SSL. Streamlit Cloud peut suspendre l’application lorsqu’elle est inactive : un envoi garanti même application endormie nécessite un planificateur externe et une base de données persistante.')
 
 # ---------- Assistant e-mail, voix et documents ----------
 elif page=="Assistant IA XXL":
     _ = header("ASSISTANT PERSONNEL XXL", "Secrétaire Issa · IA bilingue 🤖", "Parle-moi en français ou en wolof. Je m’appuie sur tes cours, ton planning, tes révisions, tes tâches, ton budget, ta carrière et tes documents.")
-    st.caption("L’assistant garde le fil de la conversation pendant cette session et consulte les informations enregistrées dans ton espace XXL.")
+    _magic_result = st.caption("L’assistant garde le fil de la conversation pendant cette session et consulte les informations enregistrées dans ton espace XXL.")
     _ai_key = _startup_secret("OPENAI_API_KEY", "")
     _ai_model = _startup_secret("OPENAI_MODEL", "gpt-4o-mini")
     if not _ai_key:
-        st.warning("Pour activer les réponses de l’IA, ajoute OPENAI_API_KEY dans les Secrets Streamlit ou dans une variable d’environnement. Les instructions sont dans le fichier LIRE_AVANT_DEMARRER_IA.txt.")
+        _magic_result = st.warning("Pour activer les réponses de l’IA, ajoute OPENAI_API_KEY dans les Secrets Streamlit ou dans une variable d’environnement. Les instructions sont dans le fichier LIRE_AVANT_DEMARRER_IA.txt.")
     _speech_col, _voice_col = st.columns([1, 1])
     with _speech_col:
         _ai_language = st.selectbox("Langue de dictée", ["Français", "Wolof (prise en charge variable)"], key="issa_ai_speech_language")
@@ -1842,21 +1842,21 @@ elif page=="Assistant IA XXL":
             try:
                 _lang_code = "fr-FR" if _ai_language == "Français" else "wo-SN"
                 st.session_state["issa_ai_pending_question"] = transcribe_audio(_ai_audio, language=_lang_code)
-                st.rerun()
+                _magic_result = st.rerun()
             except Exception as _exc:
-                st.error(f"Transcription impossible : {_exc}")
+                _magic_result = st.error(f"Transcription impossible : {_exc}")
     with _voice_col:
-        st.markdown("**Réponse vocale**")
-        st.caption("Après une réponse, utilise le lecteur audio pour l’écouter. La voix disponible dépend du service et de la langue.")
+        _magic_result = st.markdown("**Réponse vocale**")
+        _magic_result = st.caption("Après une réponse, utilise le lecteur audio pour l’écouter. La voix disponible dépend du service et de la langue.")
     if "issa_ai_messages" not in st.session_state:
         st.session_state["issa_ai_messages"] = []
     for _msg in st.session_state["issa_ai_messages"]:
-        with st.chat_message(_msg["role"]): st.markdown(_msg["content"])
+        with st.chat_message(_msg["role"]): _magic_result = st.markdown(_msg["content"])
     _ai_question = st.chat_input("Écris en français ou en wolof / Bindal ci français walla wolof…")
     if not _ai_question and st.session_state.get("issa_ai_pending_question"):
         _ai_question = st.session_state.pop("issa_ai_pending_question")
     if _ai_question:
-        st.session_state["issa_ai_messages"].append({"role":"user", "content":_ai_question})
+        _magic_result = st.session_state["issa_ai_messages"].append({"role":"user", "content":_ai_question})
         if not _ai_key:
             _ai_answer = "Na nga def, Issa ? Je suis prête à t’accompagner en français ou en wolof. Pour activer la génération des réponses, configure OPENAI_API_KEY dans les Secrets Streamlit comme indiqué dans LIRE_AVANT_DEMARRER_IA.txt."
         else:
@@ -1883,7 +1883,7 @@ elif page=="Assistant IA XXL":
             for _label,_sql in _table_queries.items():
                 try:
                     _df=read_df(_sql)
-                    if not _df.empty: _context_parts.append(_label+":\n"+_df.to_json(orient="records",force_ascii=False))
+                    if not _df.empty: _magic_result = _context_parts.append(_label+":\n"+_df.to_json(orient="records",force_ascii=False))
                 except Exception: pass
             _context="\n\n".join(_context_parts)[:26000]
             _system_prompt=("Tu es Secrétaire Issa XXL, l’assistant personnel d’Issa Youme, étudiant en agronomie et sciences alimentaires à l’Université Amadou Makhtar Mbow (UAM), au Sénégal. Tu aides pour les études, la pédagogie, l’emploi du temps, les révisions, la productivité, les tâches et échéances, les habitudes, le journal, le budget en FCFA, les objectifs, les notes et contacts, les compétences, les formations et stages, les opportunités, les documents et les réunions.\n\n"
@@ -1891,7 +1891,7 @@ elif page=="Assistant IA XXL":
             "UTILISATION DES DONNÉES : appuie-toi sur le contexte enregistré ci-dessous pour croiser les dates d’examens avec les révisions et le niveau de maîtrise, relever les priorités et échéances, résumer le budget et proposer des actions concrètes. Les données peuvent être incomplètes ou anciennes : indique les limites et ne fabrique jamais de faits, de dépenses, de cours, de dates ou d’opportunités. Pour les questions générales, sépare clairement les conseils des faits du dossier. N’affirme pas avoir modifié une donnée, envoyé un e-mail ou connecté un service externe. Réponds de manière concise et propose une prochaine étape utile.\n\n"
             "CONTEXTE ACTUEL DE L’ESPACE XXL :\n"+_context)
             _api_messages=[{"role":"system","content":_system_prompt}]
-            _api_messages.extend(st.session_state["issa_ai_messages"][-12:])
+            _magic_result = _api_messages.extend(st.session_state["issa_ai_messages"][-12:])
             try:
                 _payload=json.dumps({"model":_ai_model,"messages":_api_messages,"temperature":0.4},ensure_ascii=False).encode("utf-8")
                 _request=urllib.request.Request("https://api.openai.com/v1/chat/completions",data=_payload,headers={"Authorization":"Bearer "+_ai_key,"Content-Type":"application/json"},method="POST")
@@ -1902,23 +1902,23 @@ elif page=="Assistant IA XXL":
                 _ai_answer=f"Le service IA a refusé la demande (HTTP {_exc.code}). Vérifie la clé API, le modèle configuré et le quota. Détail : {_detail}"
             except Exception as _exc:
                 _ai_answer=f"Je n’ai pas pu joindre le service IA ({type(_exc).__name__}). Vérifie la connexion et réessaie."
-        st.session_state["issa_ai_messages"].append({"role":"assistant","content":_ai_answer})
+        _magic_result = st.session_state["issa_ai_messages"].append({"role":"assistant","content":_ai_answer})
         with st.chat_message("assistant"):
-            st.markdown(_ai_answer)
+            _magic_result = st.markdown(_ai_answer)
             if _ai_key:
                 try:
                     _tts_request=urllib.request.Request("https://api.openai.com/v1/audio/speech",data=json.dumps({"model":"gpt-4o-mini-tts","voice":"alloy","input":_ai_answer,"instructions":"Speak clearly and warmly. Preserve the user's French and Wolof wording."},ensure_ascii=False).encode("utf-8"),headers={"Authorization":"Bearer "+_ai_key,"Content-Type":"application/json"},method="POST")
                     with urllib.request.urlopen(_tts_request,timeout=90) as _tts_response: _audio_bytes=_tts_response.read()
-                    st.audio(_audio_bytes,format="audio/mpeg")
+                    _magic_result = st.audio(_audio_bytes,format="audio/mpeg")
                 except Exception:
-                    st.caption("Lecture vocale indisponible pour cette réponse. Le texte reste visible ci-dessus.")
+                    _magic_result = st.caption("Lecture vocale indisponible pour cette réponse. Le texte reste visible ci-dessus.")
     if st.session_state.get("issa_ai_messages") and st.button("Effacer cette conversation", key="issa_ai_clear"):
         st.session_state["issa_ai_messages"]=[]
-        st.rerun()
+        _magic_result = st.rerun()
 
 elif page=="Assistant e-mail & documents":
     _ = header("ASSISTANT PERSONNEL", "E-mails, voix et documents ✉️", "Prépare tes messages, dicte-les à la voix, envoie-les depuis Gmail, consulte ta boîte de réception et interroge tes documents importés.")
-    st.info(f"Adresse d’expédition fixe : **{FIXED_SENDER_EMAIL}**. La lecture de la boîte utilise IMAP Gmail et le même mot de passe d’application.")
+    _magic_result = st.info(f"Adresse d’expédition fixe : **{FIXED_SENDER_EMAIL}**. La lecture de la boîte utilise IMAP Gmail et le même mot de passe d’application.")
     mail_tab, docs_tab = st.tabs(["✉️ Messagerie", "📚 Documents & questions"])
     with mail_tab:
         compose_tab, inbox_tab = st.tabs(["📝 Préparer / envoyer", "📥 Ouvrir les e-mails reçus"])
@@ -1928,87 +1928,87 @@ elif page=="Assistant e-mail & documents":
                 st.session_state["assistant_mail_recipient"] = st.session_state.pop("issa_reply_to", "")
                 st.session_state["assistant_mail_subject"] = st.session_state.pop("issa_reply_subject", "Re: votre message")
                 st.session_state["assistant_mail_body"] = "Bonjour,\n\nMerci pour votre message.\n\nCordialement,\nIssa"
-            st.markdown("#### Préparer un message")
+            _magic_result = st.markdown("#### Préparer un message")
             voice = st.audio_input("🎙️ Dicter le message en français", key="assistant_mail_voice")
             if st.button("🗣️ Transcrire la voix dans le brouillon", key="assistant_transcribe_mail", disabled=voice is None):
                 try:
                     spoken = transcribe_audio(voice)
                     previous = st.session_state.get("assistant_mail_body", "")
                     st.session_state["assistant_mail_body"] = (previous.strip() + ("\n\n" if previous.strip() else "") + spoken).strip()
-                    st.success("Transcription ajoutée au brouillon. Relis-la avant l’envoi.")
-                    st.rerun()
-                except Exception as exc: st.error(str(exc))
+                    _magic_result = st.success("Transcription ajoutée au brouillon. Relis-la avant l’envoi.")
+                    _magic_result = st.rerun()
+                except Exception as exc: _magic_result = st.error(str(exc))
             with st.form("assistant_compose_mail"):
                 recipient = st.text_input("Destinataire *", key="assistant_mail_recipient", placeholder="destinataire@exemple.com")
                 subject = st.text_input("Objet *", key="assistant_mail_subject", placeholder="Objet du message")
                 body = st.text_area("Message", key="assistant_mail_body", height=220, placeholder="Écris ici ou utilise la dictée vocale ci-dessus…")
                 send_clicked = st.form_submit_button("📨 Envoyer le message", type="primary")
             if send_clicked:
-                if not re.match(r"^[^\s@]+@[^\s@]+\.[^\s@]+$", recipient.strip()): st.error("Saisis une adresse e-mail destinataire valide.")
-                elif not subject.strip(): st.error("L’objet du message est obligatoire.")
-                elif not body.strip(): st.error("Le message est vide.")
+                if not re.match(r"^[^\s@]+@[^\s@]+\.[^\s@]+$", recipient.strip()): _magic_result = st.error("Saisis une adresse e-mail destinataire valide.")
+                elif not subject.strip(): _magic_result = st.error("L’objet du message est obligatoire.")
+                elif not body.strip(): _magic_result = st.error("Le message est vide.")
                 else:
                     try:
-                        send_email(subject.strip(), body.strip(), recipient.strip())
-                        st.success(f"Message transmis à Gmail pour envoi vers {recipient.strip()}.")
-                    except Exception as exc: st.error(f"Échec d’envoi : {exc}")
-            st.caption("Conseil : vérifie le destinataire, l’objet et le texte avant chaque envoi. L’application n’envoie rien sans cliquer sur le bouton.")
+                        _magic_result = send_email(subject.strip(), body.strip(), recipient.strip())
+                        _magic_result = st.success(f"Message transmis à Gmail pour envoi vers {recipient.strip()}.")
+                    except Exception as exc: _magic_result = st.error(f"Échec d’envoi : {exc}")
+            _magic_result = st.caption("Conseil : vérifie le destinataire, l’objet et le texte avant chaque envoi. L’application n’envoie rien sans cliquer sur le bouton.")
         with inbox_tab:
-            st.markdown("#### Boîte de réception Gmail")
+            _magic_result = st.markdown("#### Boîte de réception Gmail")
             limit = st.selectbox("Nombre de messages récents à charger", [10, 15, 25, 50], index=1)
             if st.button("🔄 Charger mes e-mails", type="primary", key="assistant_load_inbox"):
                 try:
                     st.session_state["issa_inbox_cache"] = fetch_recent_emails(limit)
-                    st.success(f"{len(st.session_state['issa_inbox_cache'])} message(s) chargé(s).")
-                except Exception as exc: st.error(f"Lecture Gmail impossible : {exc}")
+                    _magic_result = st.success(f"{len(st.session_state['issa_inbox_cache'])} message(s) chargé(s).")
+                except Exception as exc: _magic_result = st.error(f"Lecture Gmail impossible : {exc}")
             inbox = st.session_state.get("issa_inbox_cache", [])
             if inbox:
                 labels = [f"{m['date']} · {_decode_mime(m['from'])} · {m['subject']}" for m in inbox]
                 chosen_idx = st.selectbox("Choisir un message à ouvrir", range(len(inbox)), format_func=lambda i: labels[i], key="issa_open_mail_index")
                 chosen = inbox[chosen_idx]
-                st.markdown(f"**Objet :** {chosen['subject']}  \n**De :** {chosen['from']}  \n**Date :** {chosen['date']}")
-                st.text_area("Contenu du message", chosen['body'] or "Aucun texte exploitable dans ce message.", height=280, key=f"issa_mail_content_{chosen['id']}")
+                _magic_result = st.markdown(f"**Objet :** {chosen['subject']}  \n**De :** {chosen['from']}  \n**Date :** {chosen['date']}")
+                _magic_result = st.text_area("Contenu du message", chosen['body'] or "Aucun texte exploitable dans ce message.", height=280, key=f"issa_mail_content_{chosen['id']}")
                 if st.button("↩️ Préparer une réponse à cet expéditeur", key="issa_prepare_reply"):
                     match = re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", chosen['from'], re.I)
                     if match:
                         st.session_state["issa_reply_to"] = match.group(0)
                         st.session_state["issa_reply_subject"] = "Re: " + chosen['subject']
                         st.session_state["issa_pending_reply"] = True
-                        st.success("Réponse préparée dans l’onglet de rédaction. Relis-la avant de l’envoyer.")
-                        st.rerun()
-                    else: st.warning("Impossible d’extraire une adresse e-mail depuis l’expéditeur affiché.")
+                        _magic_result = st.success("Réponse préparée dans l’onglet de rédaction. Relis-la avant de l’envoyer.")
+                        _magic_result = st.rerun()
+                    else: _magic_result = st.warning("Impossible d’extraire une adresse e-mail depuis l’expéditeur affiché.")
             else:
-                st.caption("Clique sur « Charger mes e-mails » pour consulter les messages récents. La lecture ne marque pas les messages comme lus.")
+                _magic_result = st.caption("Clique sur « Charger mes e-mails » pour consulter les messages récents. La lecture ne marque pas les messages comme lus.")
     with docs_tab:
-        st.markdown("#### Importer et conserver un document à consulter")
+        _magic_result = st.markdown("#### Importer et conserver un document à consulter")
         upload = st.file_uploader("Importer un document", type=["pdf", "docx", "txt", "md", "csv"], key="assistant_document_upload")
         if upload is not None and st.button("💾 Enregistrer le document dans ma bibliothèque", key="assistant_save_doc"):
             try:
                 extracted = extract_document_text(upload)
-                if not extracted.strip(): st.warning("Aucun texte n’a été extrait. Pour un PDF scanné, il faut un OCR.")
+                if not extracted.strip(): _magic_result = st.warning("Aucun texte n’a été extrait. Pour un PDF scanné, il faut un OCR.")
                 else:
                     _ = run("INSERT INTO assistant_docs(title,content) VALUES(?,?)", (upload.name, extracted))
-                    st.success(f"Document « {upload.name} » enregistré. Texte extrait : {len(extracted)} caractères.")
-                    st.rerun()
-            except Exception as exc: st.error(str(exc))
+                    _magic_result = st.success(f"Document « {upload.name} » enregistré. Texte extrait : {len(extracted)} caractères.")
+                    _magic_result = st.rerun()
+            except Exception as exc: _magic_result = st.error(str(exc))
         docs = read_df("SELECT id,title,uploaded_at,content FROM assistant_docs ORDER BY id DESC")
         if docs.empty:
-            st.info("Aucun document enregistré. Importe un PDF, DOCX, TXT, MD ou CSV pour pouvoir le retrouver et poser des questions dessus.")
+            _magic_result = st.info("Aucun document enregistré. Importe un PDF, DOCX, TXT, MD ou CSV pour pouvoir le retrouver et poser des questions dessus.")
         else:
             doc_choices = {f"{r.title} · importé le {r.uploaded_at}": int(r.id) for r in docs.itertuples()}
             selected_doc_label = st.selectbox("Document à consulter", list(doc_choices), key="assistant_doc_select")
             selected_doc = docs[docs.id == doc_choices[selected_doc_label]].iloc[0]
             with st.expander("📖 Lire le document", expanded=False):
-                st.text_area("Texte extrait", str(selected_doc["content"]), height=300, key=f"assistant_doc_text_{int(selected_doc['id'])}")
+                _magic_result = st.text_area("Texte extrait", str(selected_doc["content"]), height=300, key=f"assistant_doc_text_{int(selected_doc['id'])}")
             qvoice = st.audio_input("🎙️ Dicter une question", key="assistant_doc_voice")
             if st.button("🗣️ Transcrire la question", key="assistant_transcribe_question", disabled=qvoice is None):
                 try:
                     st.session_state["assistant_doc_question"] = transcribe_audio(qvoice)
-                    st.rerun()
-                except Exception as exc: st.error(str(exc))
+                    _magic_result = st.rerun()
+                except Exception as exc: _magic_result = st.error(str(exc))
             question = st.text_input("Ta question sur ce document", placeholder="Ex. Quelles sont les dates limites mentionnées ?", key="assistant_doc_question")
             if st.button("🔎 Rechercher dans ce document", type="primary", key="assistant_search_doc"):
-                if not question.strip(): st.warning("Saisis ou dicte une question.")
+                if not question.strip(): _magic_result = st.warning("Saisis ou dicte une question.")
                 else:
                     content = str(selected_doc["content"])
                     terms = [w for w in norm(question).split() if len(w) > 2]
@@ -2016,17 +2016,17 @@ elif page=="Assistant e-mail & documents":
                     scored = sorted(((sum(1 for term in terms if term in norm(par)), par) for par in paragraphs), key=lambda x:x[0], reverse=True)
                     hits = [par for score, par in scored if score > 0][:8]
                     if hits:
-                        st.markdown("#### Extraits pertinents du document")
-                        for idx, excerpt in enumerate(hits, 1): st.markdown(f"**Extrait {idx}**\n\n{excerpt[:2500]}")
-                        st.caption("Résultat fondé sur les mots présents dans le document importé ; vérifie le contexte complet avant de prendre une décision.")
-                    else: st.warning("Aucun passage ne correspond clairement aux mots de la question. Essaie avec des termes plus précis ou lis le document complet.")
+                        _magic_result = st.markdown("#### Extraits pertinents du document")
+                        for idx, excerpt in enumerate(hits, 1): _magic_result = st.markdown(f"**Extrait {idx}**\n\n{excerpt[:2500]}")
+                        _magic_result = st.caption("Résultat fondé sur les mots présents dans le document importé ; vérifie le contexte complet avant de prendre une décision.")
+                    else: _magic_result = st.warning("Aucun passage ne correspond clairement aux mots de la question. Essaie avec des termes plus précis ou lis le document complet.")
             if st.button("🗑️ Supprimer ce document", key="assistant_delete_doc"):
-                _ = run("DELETE FROM assistant_docs WHERE id=?", (int(selected_doc["id"]),)); st.rerun()
+                _ = run("DELETE FROM assistant_docs WHERE id=?", (int(selected_doc["id"]),)); _magic_result = st.rerun()
 
 # ---------- Compétences & Carrière ----------
 elif page=="Compétences & Carrière":
     # Profil professionnel inspiré du CV fourni, avec zone modifiable et portfolio public.
-    st.markdown("""
+    _magic_result = st.markdown("""
     <style>
     @keyframes yamGlow {0%,100%{box-shadow:0 10px 30px rgba(36,87,167,.14);transform:translateY(0)}50%{box-shadow:0 18px 42px rgba(59,183,201,.30);transform:translateY(-3px)}}
     @keyframes yamShine {0%{background-position:-200% 0}100%{background-position:200% 0}}
@@ -2059,19 +2059,19 @@ elif page=="Compétences & Carrière":
     photo_col, intro_col = st.columns([1, 2.7], gap="large")
     with photo_col:
         if photo_path.exists():
-            st.image(str(photo_path), caption="Issa Youme · Profil professionnel", use_container_width=True)
+            _magic_result = st.image(str(photo_path), caption="Issa Youme · Profil professionnel", use_container_width=True)
         else:
-            st.image(io.BytesIO(base64.b64decode(PHOTO_CV_EMBEDDED)), caption="Issa Youme · Profil professionnel", format="JPEG", use_container_width=True)
+            _magic_result = st.image(io.BytesIO(base64.b64decode(PHOTO_CV_EMBEDDED)), caption="Issa Youme · Profil professionnel", format="JPEG", use_container_width=True)
     with intro_col:
-        st.markdown('<div class="career-section"><h3>🎯 Profil & objectif professionnel</h3><p>Étudiant en deuxième année de licence en agronomie et sciences alimentaires à l’UAM. Bases théoriques en étude des sols, biologie, botanique, physiologie végétale et animale et biotechnologies. Recherche d’occasions de stage et d’immersion pour mettre en pratique les connaissances et développer des compétences techniques.</p></div>', unsafe_allow_html=True)
-        st.markdown("**Portfolio personnel**")
-        st.link_button("🌐 Ouvrir issayoume.streamlit.app", "https://issayoume.streamlit.app", use_container_width=True)
-        st.caption("Le portfolio s’ouvre dans un nouvel onglet selon le navigateur.")
+        _magic_result = st.markdown('<div class="career-section"><h3>🎯 Profil & objectif professionnel</h3><p>Étudiant en deuxième année de licence en agronomie et sciences alimentaires à l’UAM. Bases théoriques en étude des sols, biologie, botanique, physiologie végétale et animale et biotechnologies. Recherche d’occasions de stage et d’immersion pour mettre en pratique les connaissances et développer des compétences techniques.</p></div>', unsafe_allow_html=True)
+        _magic_result = st.markdown("**Portfolio personnel**")
+        _magic_result = st.link_button("🌐 Ouvrir issayoume.streamlit.app", "https://issayoume.streamlit.app", use_container_width=True)
+        _magic_result = st.caption("Le portfolio s’ouvre dans un nouvel onglet selon le navigateur.")
     with st.expander("✍️ Ajouter ou actualiser les informations de mon profil", expanded=False):
-        st.caption("Les éléments ci-dessous servent à compléter le profil affiché dans cet espace. Les informations du CV fourni sont déjà présentées plus bas.")
+        _magic_result = st.caption("Les éléments ci-dessous servent à compléter le profil affiché dans cet espace. Les informations du CV fourni sont déjà présentées plus bas.")
         # Dictée directement dans le site via le microphone du navigateur.
-        st.markdown("#### 🎙️ Saisie vocale des informations")
-        st.caption("Autorise l’accès au microphone dans ton navigateur, choisis le champ à compléter, puis dicte en français. Tu peux corriger le texte avant de l’enregistrer.")
+        _magic_result = st.markdown("#### 🎙️ Saisie vocale des informations")
+        _magic_result = st.caption("Autorise l’accès au microphone dans ton navigateur, choisis le champ à compléter, puis dicte en français. Tu peux corriger le texte avant de l’enregistrer.")
         try:
             from streamlit_mic_recorder import speech_to_text
             spoken_text = speech_to_text(
@@ -2096,12 +2096,12 @@ elif page=="Compétences & Carrière":
                 target_key = target_keys[voice_target]
                 existing = st.session_state.get(target_key, "")
                 st.session_state[target_key] = (str(existing).strip() + "\n" + voice_text.strip()).strip() if existing and voice_text.strip() else voice_text.strip()
-                st.success("Texte vocal inséré. Vérifie le champ puis clique sur Enregistrer les compléments.")
-                st.rerun()
+                _magic_result = st.success("Texte vocal inséré. Vérifie le champ puis clique sur Enregistrer les compléments.")
+                _magic_result = st.rerun()
         except ImportError:
-            st.warning("La saisie vocale du navigateur n’est pas encore installée. Ajoute `streamlit-mic-recorder` au fichier requirements.txt puis redéploie l’application.")
+            _magic_result = st.warning("La saisie vocale du navigateur n’est pas encore installée. Ajoute `streamlit-mic-recorder` au fichier requirements.txt puis redéploie l’application.")
         except Exception as voice_error:
-            st.info(f"La saisie vocale n’a pas démarré ({type(voice_error).__name__}). Vérifie les permissions du microphone et l’accès HTTPS du site.")
+            _magic_result = st.info(f"La saisie vocale n’a pas démarré ({type(voice_error).__name__}). Vérifie les permissions du microphone et l’accès HTTPS du site.")
         with st.form("career_profile_additions"):
             extra_headline = st.text_input("Titre professionnel complémentaire", value=get_saved_setting("career_extra_headline", "À compléter"), key="career_extra_headline_input")
             extra_skills = st.text_area("Compétences ou logiciels à ajouter", value=get_saved_setting("career_extra_skills", ""), key="career_extra_skills_input")
@@ -2113,38 +2113,38 @@ elif page=="Compétences & Carrière":
             _ = save_setting("career_extra_skills", extra_skills)
             _ = save_setting("career_extra_projects", extra_projects)
             _ = save_setting("career_extra_contact", extra_contact)
-            st.success("Compléments du profil enregistrés.")
-            st.rerun()
-    st.markdown("### 📄 Informations issues du CV")
+            _magic_result = st.success("Compléments du profil enregistrés.")
+            _magic_result = st.rerun()
+    _magic_result = st.markdown("### 📄 Informations issues du CV")
     cv1, cv2 = st.columns(2)
     with cv1:
-        st.markdown("**Formation**")
-        st.markdown("- 2025–2026 : 2e année de Licence en Agronomie — UAM, Sénégal")
-        st.markdown("- 2024–2025 : 1re année de Licence en Agronomie — UAM, Sénégal")
-        st.markdown("- 2023–2024 : Baccalauréat scientifique S2 — Lycée d’Excellence Aimé Césaire, Saint-Louis")
-        st.markdown("**Compétences techniques**")
-        st.markdown("- Agronomie, biotechnologies, botanique et physiologie végétale")
-        st.markdown("- Sols, aménagement, cartographie, géomatique et télédétection (ArcGIS Pro)")
-        st.markdown("- Python, JupyterLab, AlgoBox, Word, Excel et PowerPoint")
-        st.markdown("- Biostatistique et analyse de données agricoles")
+        _magic_result = st.markdown("**Formation**")
+        _magic_result = st.markdown("- 2025–2026 : 2e année de Licence en Agronomie — UAM, Sénégal")
+        _magic_result = st.markdown("- 2024–2025 : 1re année de Licence en Agronomie — UAM, Sénégal")
+        _magic_result = st.markdown("- 2023–2024 : Baccalauréat scientifique S2 — Lycée d’Excellence Aimé Césaire, Saint-Louis")
+        _magic_result = st.markdown("**Compétences techniques**")
+        _magic_result = st.markdown("- Agronomie, biotechnologies, botanique et physiologie végétale")
+        _magic_result = st.markdown("- Sols, aménagement, cartographie, géomatique et télédétection (ArcGIS Pro)")
+        _magic_result = st.markdown("- Python, JupyterLab, AlgoBox, Word, Excel et PowerPoint")
+        _magic_result = st.markdown("- Biostatistique et analyse de données agricoles")
     with cv2:
-        st.markdown("**Leadership & engagement**")
-        st.markdown("- Ancien président du Club d’éducation à la vie sociale et environnementale (EVFS) et ministre des Finances — Lycée d’Excellence Aimé Césaire")
-        st.markdown("- Ancien président du Gouvernement scolaire — Collège Guillabert, Saint-Louis")
-        st.markdown("**Distinctions**")
-        st.markdown("- 2022 : sélectionné en catégorie conte à Créafest (France)")
-        st.markdown("- 2021 : lauréat d’un concours de nouvelles de l’Institut Français de Saint-Louis")
-        st.markdown("**Langues** : français courant, wolof courant, anglais intermédiaire.")
+        _magic_result = st.markdown("**Leadership & engagement**")
+        _magic_result = st.markdown("- Ancien président du Club d’éducation à la vie sociale et environnementale (EVFS) et ministre des Finances — Lycée d’Excellence Aimé Césaire")
+        _magic_result = st.markdown("- Ancien président du Gouvernement scolaire — Collège Guillabert, Saint-Louis")
+        _magic_result = st.markdown("**Distinctions**")
+        _magic_result = st.markdown("- 2022 : sélectionné en catégorie conte à Créafest (France)")
+        _magic_result = st.markdown("- 2021 : lauréat d’un concours de nouvelles de l’Institut Français de Saint-Louis")
+        _magic_result = st.markdown("**Langues** : français courant, wolof courant, anglais intermédiaire.")
     _extra_headline = get_saved_setting("career_extra_headline", "")
     _extra_skills = get_saved_setting("career_extra_skills", "")
     _extra_projects = get_saved_setting("career_extra_projects", "")
     _extra_contact = get_saved_setting("career_extra_contact", "")
     if any([_extra_headline, _extra_skills, _extra_projects, _extra_contact]):
-        st.markdown("### ✨ Compléments ajoutés")
-        if _extra_headline: st.info(_extra_headline)
-        if _extra_skills: st.markdown("**Compétences ajoutées**\n\n" + _extra_skills)
-        if _extra_projects: st.markdown("**Projets et réalisations**\n\n" + _extra_projects)
-        if _extra_contact: st.markdown("**Contact / lien complémentaire :** " + _extra_contact)
+        _magic_result = st.markdown("### ✨ Compléments ajoutés")
+        if _extra_headline: _magic_result = st.info(_extra_headline)
+        if _extra_skills: _magic_result = st.markdown("**Compétences ajoutées**\n\n" + _extra_skills)
+        if _extra_projects: _magic_result = st.markdown("**Projets et réalisations**\n\n" + _extra_projects)
+        if _extra_contact: _magic_result = st.markdown("**Contact / lien complémentaire :** " + _extra_contact)
     _ = header('DÉVELOPPEMENT PROFESSIONNEL','Compétences & Carrière 🚀','Prépare ton avenir professionnel : compétences, formations, certifications, stages et opportunités. Les informations sont conservées dans SQLite.')
     skills=read_df('SELECT * FROM career_skills')
     trainings=read_df('SELECT * FROM career_training')
@@ -2157,34 +2157,34 @@ elif page=="Compétences & Carrière":
     with metrics[3]: _ = card('Candidatures suivies',len(applied),'Démarches déjà engagées')
     tabs=st.tabs(['🧠 Compétences','🎓 Formations & certifications','🌍 Stages & opportunités','📊 Tableau de bord'])
     with tabs[0]:
-        st.markdown('#### Ajouter une compétence')
+        _magic_result = st.markdown('#### Ajouter une compétence')
         with st.form('career_skill_form'):
             a,b,c=st.columns(3); name=a.text_input('Compétence *'); category=b.selectbox('Domaine',['Agronomie','Sciences du sol','SIG / QGIS','Informatique','Bureautique','Communication','Gestion de projet','Langues','Recherche scientifique','Autre']); level=c.selectbox('Niveau actuel',['À évaluer','Débutant','Élémentaire','Intermédiaire','Avancé','Maîtrisé'])
             d,e=st.columns(2); target=d.selectbox('Niveau visé',['Élémentaire','Intermédiaire','Avancé','Maîtrisé']); status=e.selectbox('Statut',['À apprendre','En cours','À pratiquer','Acquise'])
             url=st.text_input('Lien utile (cours, tutoriel ou formation)'); notes=st.text_area('Plan d’apprentissage / observations')
             ok=st.form_submit_button('Enregistrer la compétence',type='primary')
         if ok:
-            if not name.strip(): st.error('Le nom de la compétence est obligatoire.')
-            elif url.strip() and not re.match(r'^https?://',url.strip()): st.error('Le lien doit commencer par http:// ou https://')
+            if not name.strip(): _magic_result = st.error('Le nom de la compétence est obligatoire.')
+            elif url.strip() and not re.match(r'^https?://',url.strip()): _magic_result = st.error('Le lien doit commencer par http:// ou https://')
             else:
                 _ = run('INSERT INTO career_skills(name,category,level,target_level,status,resource_url,notes) VALUES(?,?,?,?,?,?,?)',(name.strip(),category,level,target,status,url.strip(),notes.strip()))
-                st.success('Compétence enregistrée.'); st.rerun()
+                _magic_result = st.success('Compétence enregistrée.'); _magic_result = st.rerun()
         skills=read_df('SELECT * FROM career_skills ORDER BY category,name')
-        if skills.empty: st.info('Aucune compétence enregistrée. Commence par ajouter les logiciels, méthodes ou savoir-faire que tu veux maîtriser.')
+        if skills.empty: _magic_result = st.info('Aucune compétence enregistrée. Commence par ajouter les logiciels, méthodes ou savoir-faire que tu veux maîtriser.')
         else:
             for r in skills.itertuples():
                 with st.container(border=True):
-                    a,b=st.columns([3,1]); a.markdown(f'**{r.name}**'); a.caption(f'{r.category} · Niveau : {r.level} · Objectif : {r.target_level}'); b.markdown(f'**{r.status}**')
-                    if r.resource_url: st.markdown(f'[Ouvrir la ressource]({r.resource_url})')
-                    if r.notes: st.write(r.notes)
+                    a,b=st.columns([3,1]); _magic_result = a.markdown(f'**{r.name}**'); _magic_result = a.caption(f'{r.category} · Niveau : {r.level} · Objectif : {r.target_level}'); _magic_result = b.markdown(f'**{r.status}**')
+                    if r.resource_url: _magic_result = st.markdown(f'[Ouvrir la ressource]({r.resource_url})')
+                    if r.notes: _magic_result = st.write(r.notes)
                     with st.expander('Modifier ou supprimer cette compétence'):
                         with st.form(f'edit_skill_{r.id}'):
                             x,y,z=st.columns(3); ename=x.text_input('Nom',value=r.name); elevel=y.selectbox('Niveau actuel',['À évaluer','Débutant','Élémentaire','Intermédiaire','Avancé','Maîtrisé'],index=['À évaluer','Débutant','Élémentaire','Intermédiaire','Avancé','Maîtrisé'].index(r.level) if r.level in ['À évaluer','Débutant','Élémentaire','Intermédiaire','Avancé','Maîtrisé'] else 0); estatus=z.selectbox('Statut',['À apprendre','En cours','À pratiquer','Acquise'],index=['À apprendre','En cours','À pratiquer','Acquise'].index(r.status) if r.status in ['À apprendre','En cours','À pratiquer','Acquise'] else 0)
                             enotes=st.text_area('Notes',value=r.notes or ''); save=st.form_submit_button('Enregistrer les modifications')
                         if save:
-                            _ = run('UPDATE career_skills SET name=?,level=?,status=?,notes=? WHERE id=?',(ename.strip(),elevel,estatus,enotes.strip(),int(r.id))); st.rerun()
+                            _ = run('UPDATE career_skills SET name=?,level=?,status=?,notes=? WHERE id=?',(ename.strip(),elevel,estatus,enotes.strip(),int(r.id))); _magic_result = st.rerun()
                         if st.button('Supprimer la compétence',key=f'del_skill_{r.id}'):
-                            _ = run('DELETE FROM career_skills WHERE id=?',(int(r.id),)); st.rerun()
+                            _ = run('DELETE FROM career_skills WHERE id=?',(int(r.id),)); _magic_result = st.rerun()
             _ = export_csv(skills,'les compétences','competences_carriere')
     with tabs[1]:
         with st.form('career_training_form'):
@@ -2193,17 +2193,17 @@ elif page=="Compétences & Carrière":
             status=st.selectbox('État',['À envisager','Inscription à faire','En cours','Terminée','Abandonnée']); url=st.text_input('Lien officiel'); notes=st.text_area('Notes / coût / prérequis')
             ok=st.form_submit_button('Enregistrer la formation')
         if ok:
-            if not title.strip(): st.error('Le titre est obligatoire.')
-            elif url.strip() and not re.match(r'^https?://',url.strip()): st.error('Le lien doit commencer par http:// ou https://')
-            elif end<start: st.error('La date de fin ne peut pas précéder la date de début.')
+            if not title.strip(): _magic_result = st.error('Le titre est obligatoire.')
+            elif url.strip() and not re.match(r'^https?://',url.strip()): _magic_result = st.error('Le lien doit commencer par http:// ou https://')
+            elif end<start: _magic_result = st.error('La date de fin ne peut pas précéder la date de début.')
             else:
-                _ = run('INSERT INTO career_training(title,provider,kind,start_date,end_date,status,url,notes) VALUES(?,?,?,?,?,?,?,?)',(title.strip(),provider.strip(),kind,start.isoformat(),end.isoformat(),status,url.strip(),notes.strip())); new_id=int(read_df('SELECT id FROM career_training WHERE title=? ORDER BY id DESC LIMIT 1',(title.strip(),)).iloc[0]['id']); _ = sync_existing_entries_to_reminders(); st.success('Formation enregistrée : ses rappels de début et de fin sont programmés.'); st.rerun()
+                _ = run('INSERT INTO career_training(title,provider,kind,start_date,end_date,status,url,notes) VALUES(?,?,?,?,?,?,?,?)',(title.strip(),provider.strip(),kind,start.isoformat(),end.isoformat(),status,url.strip(),notes.strip())); new_id=int(read_df('SELECT id FROM career_training WHERE title=? ORDER BY id DESC LIMIT 1',(title.strip(),)).iloc[0]['id']); _ = sync_existing_entries_to_reminders(); _magic_result = st.success('Formation enregistrée : ses rappels de début et de fin sont programmés.'); _magic_result = st.rerun()
         trainings=read_df('SELECT * FROM career_training ORDER BY start_date DESC,id DESC')
-        if trainings.empty: st.info('Aucune formation ou certification enregistrée.')
+        if trainings.empty: _magic_result = st.info('Aucune formation ou certification enregistrée.')
         else:
             _ = show_dataframe(trainings[['title','provider','kind','start_date','end_date','status','url','notes']].rename(columns={'title':'Formation','provider':'Organisme','kind':'Type','start_date':'Début','end_date':'Fin','status':'État','url':'Lien','notes':'Notes'}),use_container_width=True,hide_index=True)
             opts={f"#{r.id} · {r.title}":int(r.id) for r in trainings.itertuples()}; pick=st.selectbox('Formation à supprimer',list(opts),key='career_training_delete_pick')
-            if st.button('Supprimer la formation sélectionnée',key='career_training_delete'): _ = run('DELETE FROM career_training WHERE id=?',(opts[pick],)); st.rerun()
+            if st.button('Supprimer la formation sélectionnée',key='career_training_delete'): _ = run('DELETE FROM career_training WHERE id=?',(opts[pick],)); _magic_result = st.rerun()
             _ = export_csv(trainings,'les formations','formations_carriere')
     with tabs[2]:
         with st.form('career_opportunity_form'):
@@ -2212,25 +2212,25 @@ elif page=="Compétences & Carrière":
             url=st.text_input('Lien de l’annonce'); contact=st.text_input('Contact / référence'); notes=st.text_area('Pièces à fournir / prochaines étapes')
             ok=st.form_submit_button('Enregistrer l’opportunité',type='primary')
         if ok:
-            if not title.strip(): st.error('L’intitulé est obligatoire.')
-            elif url.strip() and not re.match(r'^https?://',url.strip()): st.error('Le lien doit commencer par http:// ou https://')
+            if not title.strip(): _magic_result = st.error('L’intitulé est obligatoire.')
+            elif url.strip() and not re.match(r'^https?://',url.strip()): _magic_result = st.error('Le lien doit commencer par http:// ou https://')
             else:
-                _ = run('INSERT INTO career_opportunities(title,organization,kind,location,deadline,url,status,contact,notes) VALUES(?,?,?,?,?,?,?,?,?)',(title.strip(),organization.strip(),kind,location.strip(),deadline.isoformat(),url.strip(),status,contact.strip(),notes.strip())); _ = sync_existing_entries_to_reminders(); st.success('Opportunité enregistrée : rappel de date limite programmé.'); st.rerun()
+                _ = run('INSERT INTO career_opportunities(title,organization,kind,location,deadline,url,status,contact,notes) VALUES(?,?,?,?,?,?,?,?,?)',(title.strip(),organization.strip(),kind,location.strip(),deadline.isoformat(),url.strip(),status,contact.strip(),notes.strip())); _ = sync_existing_entries_to_reminders(); _magic_result = st.success('Opportunité enregistrée : rappel de date limite programmé.'); _magic_result = st.rerun()
         opportunities=read_df('SELECT * FROM career_opportunities ORDER BY deadline,id DESC')
-        if opportunities.empty: st.info('Aucune opportunité enregistrée. Ajoute ici les stages, emplois, bourses ou formations qui t’intéressent.')
+        if opportunities.empty: _magic_result = st.info('Aucune opportunité enregistrée. Ajoute ici les stages, emplois, bourses ou formations qui t’intéressent.')
         else:
             for r in opportunities.itertuples():
                 with st.container(border=True):
-                    st.markdown(f'**{r.title}** · {r.kind} · {r.organization or "Organisation non précisée"}')
-                    st.caption(f'Lieu : {r.location or "Non précisé"} · Échéance : {r.deadline or "Non précisée"} · Statut : {r.status}')
-                    if r.url: st.markdown(f'[Consulter l’annonce]({r.url})')
-                    if r.contact: st.write(f'Contact : {r.contact}')
-                    if r.notes: st.write(r.notes)
+                    _magic_result = st.markdown(f'**{r.title}** · {r.kind} · {r.organization or "Organisation non précisée"}')
+                    _magic_result = st.caption(f'Lieu : {r.location or "Non précisé"} · Échéance : {r.deadline or "Non précisée"} · Statut : {r.status}')
+                    if r.url: _magic_result = st.markdown(f'[Consulter l’annonce]({r.url})')
+                    if r.contact: _magic_result = st.write(f'Contact : {r.contact}')
+                    if r.notes: _magic_result = st.write(r.notes)
                     a,b=st.columns([3,1]); newstatus=a.selectbox('Mettre à jour le statut',['À examiner','À préparer','Candidature envoyée','Entretien','Retenue','Refusée','Expirée'],index=['À examiner','À préparer','Candidature envoyée','Entretien','Retenue','Refusée','Expirée'].index(r.status) if r.status in ['À examiner','À préparer','Candidature envoyée','Entretien','Retenue','Refusée','Expirée'] else 0,key=f'opp_status_{r.id}')
                     if b.button('Enregistrer',key=f'opp_save_{r.id}'):
-                        _ = run('UPDATE career_opportunities SET status=? WHERE id=?',(newstatus,int(r.id))); st.rerun()
+                        _ = run('UPDATE career_opportunities SET status=? WHERE id=?',(newstatus,int(r.id))); _magic_result = st.rerun()
                     if st.button('Supprimer',key=f'del_opp_{r.id}'):
-                        _ = run('DELETE FROM career_opportunities WHERE id=?',(int(r.id),)); st.rerun()
+                        _ = run('DELETE FROM career_opportunities WHERE id=?',(int(r.id),)); _magic_result = st.rerun()
             _ = export_csv(opportunities,'les opportunités','opportunites_carriere')
     with tabs[3]:
         skills=read_df('SELECT * FROM career_skills'); trainings=read_df('SELECT * FROM career_training'); opportunities=read_df('SELECT * FROM career_opportunities')
@@ -2241,14 +2241,14 @@ elif page=="Compétences & Carrière":
         with a: _ = card('Compétences acquises',done_skills,f'sur {len(skills)} suivie(s)')
         with b: _ = card('Formations en cours',in_progress,f'sur {len(trainings)} enregistrée(s)')
         with c: _ = card('Candidatures actives',sent,'Envoyées, entretien ou retenues')
-        st.markdown('#### Mes prochaines échéances')
+        _magic_result = st.markdown('#### Mes prochaines échéances')
         if not opportunities.empty:
             upcoming=opportunities[opportunities.deadline.astype(str)>=date.today().isoformat()].sort_values('deadline').head(8)
-            if upcoming.empty: st.info('Aucune échéance future enregistrée.')
+            if upcoming.empty: _magic_result = st.info('Aucune échéance future enregistrée.')
             else: _ = show_dataframe(upcoming[['deadline','title','organization','kind','status']].rename(columns={'deadline':'Date limite','title':'Opportunité','organization':'Organisation','kind':'Type','status':'Statut'}),use_container_width=True,hide_index=True)
-        else: st.info('Les échéances apparaîtront ici dès que tu enregistres des opportunités.')
-        st.markdown('#### Conseils de départ')
-        st.markdown('- Choisis 3 compétences prioritaires à développer ce mois-ci.\n- Ajoute les formations réellement commencées ou envisagées.\n- Enregistre les liens officiels des stages et opportunités pour retrouver facilement les annonces.')
+        else: _magic_result = st.info('Les échéances apparaîtront ici dès que tu enregistres des opportunités.')
+        _magic_result = st.markdown('#### Conseils de départ')
+        _magic_result = st.markdown('- Choisis 3 compétences prioritaires à développer ce mois-ci.\n- Ajoute les formations réellement commencées ou envisagées.\n- Enregistre les liens officiels des stages et opportunités pour retrouver facilement les annonces.')
 
 # ---------- Sauvegarde ----------
 elif page=="Centre de productivité XXL":
@@ -2263,58 +2263,58 @@ elif page=="Centre de productivité XXL":
                 try:
                     df=read_df(sql,args)
                     if not df.empty:
-                        found+=len(df); st.markdown(f'**{label} — {len(df)} résultat(s)**'); _ = show_dataframe(df,use_container_width=True,hide_index=True)
+                        found+=len(df); _magic_result = st.markdown(f'**{label} — {len(df)} résultat(s)**'); _ = show_dataframe(df,use_container_width=True,hide_index=True)
                 except Exception: pass
-            if not found: st.info('Aucun résultat trouvé dans les modules indexés. Essaie un autre mot-clé.')
+            if not found: _magic_result = st.info('Aucun résultat trouvé dans les modules indexés. Essaie un autre mot-clé.')
     with tabs[1]:
-        st.caption('Capture une idée en quelques secondes et transforme-la directement en tâche.')
+        _magic_result = st.caption('Capture une idée en quelques secondes et transforme-la directement en tâche.')
         with st.form('central_capture_form'):
             idea=st.text_input('Idée / action à capturer *'); domain=st.selectbox('Domaine',['Études','Carrière','Finances','Administratif','Personnel','Projet','Autre']); priority=st.selectbox('Priorité',['Basse','Normale','Haute','Urgente']); due=st.date_input('Échéance (facultative)',value=None); details=st.text_area('Détails')
             submitted=st.form_submit_button('⚡ Capturer et créer la tâche',type='primary')
         if submitted:
-            if not idea.strip(): st.error('Saisis une idée avant de l’enregistrer.')
+            if not idea.strip(): _magic_result = st.error('Saisis une idée avant de l’enregistrer.')
             else:
                 _ = run('INSERT INTO tasks(title,due_date,priority,status,category,notes) VALUES(?,?,?,?,?,?)',(idea.strip(),due.isoformat() if due else '',priority,'À faire',domain,details.strip()))
-                st.success('Idée enregistrée comme tâche.'); st.rerun()
+                _magic_result = st.success('Idée enregistrée comme tâche.'); _magic_result = st.rerun()
         quick=read_df('SELECT id,title,due_date,priority,status,category,notes FROM tasks ORDER BY id DESC LIMIT 20')
         if not quick.empty: _ = show_dataframe(quick,use_container_width=True,hide_index=True)
     with tabs[2]:
         with st.form('central_project_form'):
             title=st.text_input('Nom du projet *'); domain=st.selectbox('Domaine du projet',['Études','Carrière','Finances','Agronomie','Personnel','Association','Entreprise','Autre']); status=st.selectbox('Statut',['À faire','En cours','En pause','Terminé','Abandonné']); progress=st.slider('Progression',0,100,0); a,b=st.columns(2); start=a.date_input('Début',value=date.today()); due=b.date_input('Échéance',value=date.today()+timedelta(days=30)); notes=st.text_area('Description / prochaines étapes'); save=st.form_submit_button('Enregistrer le projet')
         if save:
-            if not title.strip(): st.error('Le nom du projet est obligatoire.')
-            else: _ = run('INSERT INTO productivity_projects(title,domain,status,progress,start_date,due_date,notes) VALUES(?,?,?,?,?,?,?)',(title.strip(),domain,status,progress,start.isoformat(),due.isoformat(),notes.strip())); st.success('Projet enregistré.'); st.rerun()
+            if not title.strip(): _magic_result = st.error('Le nom du projet est obligatoire.')
+            else: _ = run('INSERT INTO productivity_projects(title,domain,status,progress,start_date,due_date,notes) VALUES(?,?,?,?,?,?,?)',(title.strip(),domain,status,progress,start.isoformat(),due.isoformat(),notes.strip())); _magic_result = st.success('Projet enregistré.'); _magic_result = st.rerun()
         projects=read_df('SELECT * FROM productivity_projects ORDER BY due_date,id DESC')
         if not projects.empty:
             for r in projects.itertuples():
                 with st.container(border=True):
-                    st.markdown(f'**{r.title}** · {r.domain} · {r.status}'); st.progress(max(0,min(100,int(r.progress)))/100,text=f'{r.progress}% terminé'); st.caption(f'Début : {r.start_date or "—"} · Échéance : {r.due_date or "—"}'); st.write(r.notes or '')
+                    _magic_result = st.markdown(f'**{r.title}** · {r.domain} · {r.status}'); _magic_result = st.progress(max(0,min(100,int(r.progress)))/100,text=f'{r.progress}% terminé'); _magic_result = st.caption(f'Début : {r.start_date or "—"} · Échéance : {r.due_date or "—"}'); _magic_result = st.write(r.notes or '')
                     a,b=st.columns(2)
                     with a:
                         newp=st.slider('Mettre à jour la progression',0,100,int(r.progress),key=f'proj_prog_{r.id}')
-                        if st.button('Actualiser',key=f'proj_update_{r.id}'): _ = run('UPDATE productivity_projects SET progress=?,status=? WHERE id=?',(newp,'Terminé' if newp==100 else ('En cours' if newp>0 else 'À faire'),int(r.id))); st.rerun()
+                        if st.button('Actualiser',key=f'proj_update_{r.id}'): _ = run('UPDATE productivity_projects SET progress=?,status=? WHERE id=?',(newp,'Terminé' if newp==100 else ('En cours' if newp>0 else 'À faire'),int(r.id))); _magic_result = st.rerun()
                     with b:
-                        if st.button('Supprimer le projet',key=f'proj_del_{r.id}'): _ = run('DELETE FROM productivity_projects WHERE id=?',(int(r.id),)); st.rerun()
+                        if st.button('Supprimer le projet',key=f'proj_del_{r.id}'): _ = run('DELETE FROM productivity_projects WHERE id=?',(int(r.id),)); _magic_result = st.rerun()
             _ = export_csv(projects,'les projets','productivity_projects')
-        else: st.info('Aucun projet enregistré.')
+        else: _magic_result = st.info('Aucun projet enregistré.')
     with tabs[3]:
         with st.form('central_flashcard_form'):
             title=st.text_input('Titre de la fiche *'); category=st.text_input('Catégorie / matière',value='Études'); front=st.text_area('Recto — question ou notion *'); back=st.text_area('Verso — réponse ou explication *'); save=st.form_submit_button('Créer la flashcard')
         if save:
-            if not title.strip() or not front.strip() or not back.strip(): st.error('Complète le titre, le recto et le verso.')
-            else: _ = run('INSERT INTO flashcards(title,front,back,category) VALUES(?,?,?,?)',(title.strip(),front.strip(),back.strip(),category.strip())); st.success('Fiche créée.'); st.rerun()
+            if not title.strip() or not front.strip() or not back.strip(): _magic_result = st.error('Complète le titre, le recto et le verso.')
+            else: _ = run('INSERT INTO flashcards(title,front,back,category) VALUES(?,?,?,?)',(title.strip(),front.strip(),back.strip(),category.strip())); _magic_result = st.success('Fiche créée.'); _magic_result = st.rerun()
         cards=read_df('SELECT * FROM flashcards ORDER BY id DESC')
         if not cards.empty:
             selected=st.selectbox('Choisir une fiche',cards['id'].tolist(),format_func=lambda i: f"#{i} · {cards.loc[cards.id==i,'title'].iloc[0]}")
-            row=cards[cards.id==selected].iloc[0]; st.markdown(f'**{row["title"]}** · {row["category"]}'); st.info('RECTO — '+str(row['front']))
-            if st.button('Afficher le verso',key='flash_show_back'): st.success('VERSO — '+str(row['back']))
+            row=cards[cards.id==selected].iloc[0]; _magic_result = st.markdown(f'**{row["title"]}** · {row["category"]}'); _magic_result = st.info('RECTO — '+str(row['front']))
+            if st.button('Afficher le verso',key='flash_show_back'): _magic_result = st.success('VERSO — '+str(row['back']))
             mastery=st.radio('Auto-évaluation', ['À revoir','En cours d’acquisition','Maîtrisée'],horizontal=True,key=f'flash_mastery_{selected}')
-            if st.button('Enregistrer mon niveau',key='flash_save_mastery'): _ = run('UPDATE flashcards SET mastery=? WHERE id=?',({'À revoir':0,'En cours d’acquisition':1,'Maîtrisée':2}[mastery],int(selected))); st.success('Auto-évaluation enregistrée.'); st.rerun()
+            if st.button('Enregistrer mon niveau',key='flash_save_mastery'): _ = run('UPDATE flashcards SET mastery=? WHERE id=?',({'À revoir':0,'En cours d’acquisition':1,'Maîtrisée':2}[mastery],int(selected))); _magic_result = st.success('Auto-évaluation enregistrée.'); _magic_result = st.rerun()
             _ = export_csv(cards,'les flashcards','flashcards')
-        else: st.info('Crée tes premières fiches recto/verso.')
+        else: _magic_result = st.info('Crée tes premières fiches recto/verso.')
     with tabs[4]:
-        st.markdown("### 🎯 Espace de concentration protégé")
-        st.write("Choisis ton objectif, prépare ton document, puis lance une session. Les autres rubriques du site seront masquées jusqu’à la fin du temps choisi.")
+        _magic_result = st.markdown("### 🎯 Espace de concentration protégé")
+        _magic_result = st.write("Choisis ton objectif, prépare ton document, puis lance une session. Les autres rubriques du site seront masquées jusqu’à la fin du temps choisi.")
         with st.form('central_focus_form'):
             activity=st.text_input('Objectif de la séance',value='Étude / révision')
             duration=st.number_input('Durée de concentration (minutes)',min_value=1,max_value=600,value=45,step=5)
@@ -2328,8 +2328,8 @@ elif page=="Centre de productivité XXL":
             st.session_state['issa_focus_active']=True
             st.session_state['issa_focus_logged']=False
             st.session_state['issa_focus_expired']=False
-            st.rerun()
-        st.markdown("#### 📄 Préparer un document avant de commencer")
+            _magic_result = st.rerun()
+        _magic_result = st.markdown("#### 📄 Préparer un document avant de commencer")
         _prepare_upload=st.file_uploader('Importer un document TXT, MD, PDF ou DOCX',type=['txt','md','pdf','docx'],key='issa_focus_prepare_upload')
         if _prepare_upload is not None:
             _prepare_raw=_prepare_upload.getvalue(); _prepare_text=''
@@ -2338,50 +2338,50 @@ elif page=="Centre de productivité XXL":
                 try:
                     import fitz
                     _prepare_pdf=fitz.open(stream=_prepare_raw,filetype='pdf'); _prepare_text="\n\n".join(pg.get_text() for pg in _prepare_pdf)
-                except Exception: st.warning('Aperçu PDF indisponible ; le fichier pourra être téléchargé pendant la session.')
+                except Exception: _magic_result = st.warning('Aperçu PDF indisponible ; le fichier pourra être téléchargé pendant la session.')
             elif _prepare_upload.name.lower().endswith('.docx'):
                 try:
                     from docx import Document
                     _prepare_doc=Document(io.BytesIO(_prepare_raw)); _prepare_text="\n".join(par.text for par in _prepare_doc.paragraphs)
-                except Exception: st.warning('Aperçu DOCX indisponible ; le fichier pourra être téléchargé pendant la session.')
+                except Exception: _magic_result = st.warning('Aperçu DOCX indisponible ; le fichier pourra être téléchargé pendant la session.')
             if _prepare_text: st.session_state['issa_focus_document_text']=_prepare_text; st.session_state['issa_focus_document_name']=_prepare_upload.name
-            st.download_button('⬇️ Télécharger le document original',data=_prepare_raw,file_name=_prepare_upload.name)
+            _magic_result = st.download_button('⬇️ Télécharger le document original',data=_prepare_raw,file_name=_prepare_upload.name)
         _prepared_text=st.text_area('Notes / document à étudier ou à rédiger',value=st.session_state.get('issa_focus_document_text',''),height=220,key='issa_focus_prepare_editor')
         st.session_state['issa_focus_document_text']=_prepared_text
-        st.download_button('💾 Télécharger mes notes',data=_prepared_text.encode('utf-8'),file_name='notes_etude.txt',mime='text/plain',disabled=not bool(_prepared_text.strip()))
+        _magic_result = st.download_button('💾 Télécharger mes notes',data=_prepared_text.encode('utf-8'),file_name='notes_etude.txt',mime='text/plain',disabled=not bool(_prepared_text.strip()))
         if st.session_state.get('issa_focus_expired'):
-            st.success('⏰ Ta session précédente est terminée. Une nouvelle session peut être lancée.')
+            _magic_result = st.success('⏰ Ta session précédente est terminée. Une nouvelle session peut être lancée.')
             st.session_state['issa_focus_expired']=False
-        focus=read_df('SELECT * FROM focus_sessions ORDER BY id DESC'); total=int(focus.duration_minutes.sum()) if not focus.empty else 0; a,b=st.columns(2); a.metric('Minutes cumulées',total); b.metric('Heures cumulées',round(total/60,1))
+        focus=read_df('SELECT * FROM focus_sessions ORDER BY id DESC'); total=int(focus.duration_minutes.sum()) if not focus.empty else 0; a,b=st.columns(2); _magic_result = a.metric('Minutes cumulées',total); _magic_result = b.metric('Heures cumulées',round(total/60,1))
         if not focus.empty: _ = show_dataframe(focus,use_container_width=True,hide_index=True); _ = export_csv(focus,'les séances de concentration','focus_sessions')
     with tabs[5]:
         today=date.today().isoformat(); existing=read_df('SELECT * FROM daily_journal WHERE entry_date=?',(today,)); default=existing.iloc[0] if not existing.empty else None
         with st.form('central_daily_journal_form'):
             mood=st.selectbox('Humeur',['Très bonne','Bonne','Neutre','Difficile','Très difficile'],index=['Très bonne','Bonne','Neutre','Difficile','Très difficile'].index(default['mood']) if default is not None and default['mood'] in ['Très bonne','Bonne','Neutre','Difficile','Très difficile'] else 2); energy=st.slider('Énergie',1,5,int(default['energy']) if default is not None else 3); successes=st.text_area('Réussites du jour',value=str(default['successes']) if default is not None else ''); improvements=st.text_area('À améliorer',value=str(default['improvements']) if default is not None else ''); priorities=st.text_area('Priorités pour demain',value=str(default['tomorrow_priorities']) if default is not None else ''); save=st.form_submit_button('Enregistrer le journal du jour')
-        if save: _ = run('INSERT INTO daily_journal(entry_date,mood,energy,successes,improvements,tomorrow_priorities) VALUES(?,?,?,?,?,?) ON CONFLICT(entry_date) DO UPDATE SET mood=excluded.mood,energy=excluded.energy,successes=excluded.successes,improvements=excluded.improvements,tomorrow_priorities=excluded.tomorrow_priorities',(today,mood,int(energy),successes.strip(),improvements.strip(),priorities.strip())); st.success('Journal quotidien sauvegardé.'); st.rerun()
+        if save: _ = run('INSERT INTO daily_journal(entry_date,mood,energy,successes,improvements,tomorrow_priorities) VALUES(?,?,?,?,?,?) ON CONFLICT(entry_date) DO UPDATE SET mood=excluded.mood,energy=excluded.energy,successes=excluded.successes,improvements=excluded.improvements,tomorrow_priorities=excluded.tomorrow_priorities',(today,mood,int(energy),successes.strip(),improvements.strip(),priorities.strip())); _magic_result = st.success('Journal quotidien sauvegardé.'); _magic_result = st.rerun()
         journals=read_df('SELECT * FROM daily_journal ORDER BY entry_date DESC');
         if not journals.empty: _ = show_dataframe(journals,use_container_width=True,hide_index=True); _ = export_csv(journals,'le journal quotidien','daily_journal')
     with tabs[6]:
         with st.form('central_meeting_form'):
             title=st.text_input('Objet de la réunion / rencontre *'); meeting_date=st.date_input('Date',value=date.today()); participants=st.text_input('Participants'); summary=st.text_area('Compte rendu'); decisions=st.text_area('Décisions prises'); actions=st.text_area('Actions à mener'); status=st.selectbox('Suivi',['À suivre','En cours','Terminé']); save=st.form_submit_button('Enregistrer le compte rendu')
         if save:
-            if not title.strip(): st.error('Indique l’objet de la rencontre.')
-            else: _ = run('INSERT INTO meeting_minutes(title,meeting_date,participants,summary,decisions,actions,status) VALUES(?,?,?,?,?,?,?)',(title.strip(),meeting_date.isoformat(),participants.strip(),summary.strip(),decisions.strip(),actions.strip(),status)); st.success('Compte rendu enregistré.'); st.rerun()
+            if not title.strip(): _magic_result = st.error('Indique l’objet de la rencontre.')
+            else: _ = run('INSERT INTO meeting_minutes(title,meeting_date,participants,summary,decisions,actions,status) VALUES(?,?,?,?,?,?,?)',(title.strip(),meeting_date.isoformat(),participants.strip(),summary.strip(),decisions.strip(),actions.strip(),status)); _magic_result = st.success('Compte rendu enregistré.'); _magic_result = st.rerun()
         meetings=read_df('SELECT * FROM meeting_minutes ORDER BY meeting_date DESC,id DESC')
         if not meetings.empty: _ = show_dataframe(meetings,use_container_width=True,hide_index=True); _ = export_csv(meetings,'les comptes rendus','meeting_minutes')
     with tabs[7]:
         with st.form('central_life_form'):
             title=st.text_input('Rendez-vous, démarche ou course *'); kind=st.selectbox('Type',['Rendez-vous','Démarche administrative','Courses','Échéance','Autre']); a,b=st.columns(2); event_date=a.date_input('Date',value=date.today()); event_time=b.time_input('Heure',value=time(9,0)); priority=st.selectbox('Priorité',['Basse','Normale','Haute','Urgente']); status=st.selectbox('État',['À faire','En cours','Terminé','Annulé']); notes=st.text_area('Notes'); save=st.form_submit_button('Ajouter à l’organisateur')
         if save:
-            if not title.strip(): st.error('Le titre est obligatoire.')
-            else: _ = run('INSERT INTO life_organizer(title,kind,event_date,event_time,priority,status,notes) VALUES(?,?,?,?,?,?,?)',(title.strip(),kind,event_date.isoformat(),event_time.strftime('%H:%M'),priority,status,notes.strip())); st.success('Élément ajouté à l’organisateur.'); st.rerun()
+            if not title.strip(): _magic_result = st.error('Le titre est obligatoire.')
+            else: _ = run('INSERT INTO life_organizer(title,kind,event_date,event_time,priority,status,notes) VALUES(?,?,?,?,?,?,?)',(title.strip(),kind,event_date.isoformat(),event_time.strftime('%H:%M'),priority,status,notes.strip())); _magic_result = st.success('Élément ajouté à l’organisateur.'); _magic_result = st.rerun()
         organizer=read_df('SELECT * FROM life_organizer ORDER BY event_date,event_time,id DESC')
         if not organizer.empty: _ = show_dataframe(organizer,use_container_width=True,hide_index=True); _ = export_csv(organizer,'les éléments de l’organisateur','life_organizer')
-        else: st.info('Aucun rendez-vous ou démarche enregistré.')
+        else: _magic_result = st.info('Aucun rendez-vous ou démarche enregistré.')
 
 elif page=="Paramètres & sauvegarde":
     _ = header('PARAMÈTRES & DONNÉES','Paramètres & sauvegarde','Les données sont centralisées dans Supabase PostgreSQL ; les tables nécessaires sont créées automatiquement.' if DB_BACKEND in {'postgres','postgresql','supabase'} else 'Les données sont enregistrées dans une base SQLite locale.')
-    st.success('Base active : Supabase PostgreSQL · projet ubxfgbneqmvrblgcyiqi. Les tables sont créées automatiquement ; aucune table existante n’est supprimée.' if DB_BACKEND in {'postgres','postgresql','supabase'} else f'Base active : SQLite locale · {DB_PATH.name}.')
+    _magic_result = st.success('Base active : Supabase PostgreSQL · projet ubxfgbneqmvrblgcyiqi. Les tables sont créées automatiquement ; aucune table existante n’est supprimée.' if DB_BACKEND in {'postgres','postgresql','supabase'} else f'Base active : SQLite locale · {DB_PATH.name}.')
     tables={'Matières':'subjects','Emploi du temps':'events','Tâches':'tasks','Ressources archivées (ancien espace)':'documents','Journal d’étude':'study_logs','Objectifs':'goals','Habitudes':'habits','Historique habitudes':'habit_logs','Budget':'budgets','Notes personnelles':'life_notes','Contacts':'contacts','Compétences':'career_skills','Formations':'career_training','Opportunités professionnelles':'career_opportunities','Rappels e-mail':'reminders','Projets du Central':'productivity_projects','Flashcards':'flashcards','Séances de concentration':'focus_sessions','Journal quotidien':'daily_journal','Comptes rendus':'meeting_minutes','Organisateur de vie':'life_organizer'}
     # Le schéma a déjà été initialisé une fois au démarrage de la session.
     # Ne pas rappeler _ensure_app_schema() ici : cette page se rerend à chaque
@@ -2393,27 +2393,27 @@ elif page=="Paramètres & sauvegarde":
             _available_tables = {row['name'] for row in _db_check.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchall()}
     for label,table in tables.items():
         if table not in _available_tables:
-            st.warning(f'La table « {table} » est absente de la base actuelle ; son export sera disponible après réparation de la base.')
+            _magic_result = st.warning(f'La table « {table} » est absente de la base actuelle ; son export sera disponible après réparation de la base.')
             continue
         try:
             df=read_df(f'SELECT * FROM "{table}"')
             with st.expander(f'{label} — {len(df)} enregistrement(s)'):
                 _ = export_csv(df,label,table)
         except Exception as db_exc:
-            st.warning(f'Export temporairement indisponible pour « {label} » : {str(db_exc)[:200]}')
-    st.info('Les données sont stockées dans Supabase PostgreSQL. Utilise les exports CSV ci-dessus et les sauvegardes automatiques de Supabase pour les restaurer.' if DB_BACKEND in {'postgres','postgresql','supabase'} else 'Pour sauvegarder toutes les données, copie le fichier campus_clair.db après avoir arrêté l’application. Les exports CSV restent disponibles.')
+            _magic_result = st.warning(f'Export temporairement indisponible pour « {label} » : {str(db_exc)[:200]}')
+    _magic_result = st.info('Les données sont stockées dans Supabase PostgreSQL. Utilise les exports CSV ci-dessus et les sauvegardes automatiques de Supabase pour les restaurer.' if DB_BACKEND in {'postgres','postgresql','supabase'} else 'Pour sauvegarder toutes les données, copie le fichier campus_clair.db après avoir arrêté l’application. Les exports CSV restent disponibles.')
     # Les valeurs manquantes sont nettoyées silencieusement avant affichage.
     # Le diagnostic technique est volontairement masqué pour garder une interface propre.
-    st.markdown('### Dépendances facultatives')
-    st.code('streamlit\npandas\nSpeechRecognition>=3.10.0\nstreamlit-mic-recorder>=0.0.8\nopenpyxl\nPyMuPDF\npython-docx',language='text')
-    st.caption('openpyxl permet les imports Excel. PyMuPDF permet de lire le texte des PDF. L’application reste utilisable sans ces deux dépendances si tu utilises CSV et la saisie manuelle.')
+    _magic_result = st.markdown('### Dépendances facultatives')
+    _magic_result = st.code('streamlit\npandas\nSpeechRecognition>=3.10.0\nstreamlit-mic-recorder>=0.0.8\nopenpyxl\nPyMuPDF\npython-docx',language='text')
+    _magic_result = st.caption('openpyxl permet les imports Excel. PyMuPDF permet de lire le texte des PDF. L’application reste utilisable sans ces deux dépendances si tu utilises CSV et la saisie manuelle.')
 
-st.markdown('<div class="issa-footer"><strong>🗂️ Secrétaire Issa</strong><br><small>Un espace personnel de secrétariat, de suivi et d’organisation · Données stockées dans Supabase PostgreSQL.</small></div>',unsafe_allow_html=True)
+_magic_result = st.markdown('<div class="issa-footer"><strong>🗂️ Secrétaire Issa</strong><br><small>Un espace personnel de secrétariat, de suivi et d’organisation · Données stockées dans Supabase PostgreSQL.</small></div>',unsafe_allow_html=True)
 role_icons={
     "Vue d’ensemble":"🏠", "Maquettes & matières":"🎓", "Emploi du temps":"🗓️",
     "Programmes de révision":"🎯", "Suivi & progression":"📈", "Assistant IA XXL":"🤖", "Assistant de vie":"👤", "Rappels automatiques":"🔔", "Assistant e-mail & documents":"✉️",
     "Compétences & Carrière":"🚀", "Centre de productivité XXL":"🧠", "Paramètres & sauvegarde":"⚙️"
 }
 roles_html=''.join(f'<span class="issa-role-pill">{role_icons.get(p, "🤖")} {display_text(PAGE_ROLE.get(p), p)}</span>' for p in PAGES)
-st.markdown(f'<div class="issa-roles"><div class="issa-roles-title">Les rôles de vos secrétaires spécialisés</div><div class="issa-role-pills">{roles_html}</div></div>',unsafe_allow_html=True)
-st.caption('Navigation disponible dans le menu supérieur · Base de données : Supabase PostgreSQL · tables créées automatiquement')
+_magic_result = st.markdown(f'<div class="issa-roles"><div class="issa-roles-title">Les rôles de vos secrétaires spécialisés</div><div class="issa-role-pills">{roles_html}</div></div>',unsafe_allow_html=True)
+_magic_result = st.caption('Navigation disponible dans le menu supérieur · Base de données : Supabase PostgreSQL · tables créées automatiquement')
