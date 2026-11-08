@@ -6,7 +6,7 @@ Dépendances : streamlit, pandas, speechrecognition, openpyxl (facultatif), PyMu
 """
 from pathlib import Path
 from datetime import date, datetime, time, timedelta
-import sqlite3, re, unicodedata, io, math, os, threading, time as time_module, smtplib, ssl, imaplib, email, email.policy, hashlib, hmac, base64, json, urllib.request, urllib.error
+import sqlite3, re, unicodedata, io, math, os, threading, time as time_module, smtplib, ssl, imaplib, email, email.policy, hashlib, hmac, base64, json, urllib.request, urllib.error, urllib.parse
 from email.message import EmailMessage
 import pandas as pd
 import streamlit as st
@@ -722,35 +722,88 @@ def extract_document_text(uploaded_file):
             raise RuntimeError("Lecture DOCX indisponible : ajoute python-docx à requirements.txt.")
     raise RuntimeError("Format non pris en charge. Utilise PDF, DOCX, TXT, MD ou CSV.")
 
+def meta_whatsapp_configured():
+    """Vérifie les identifiants requis pour WhatsApp Cloud API de Meta."""
+    return all(get_config(k) for k in ("META_WHATSAPP_ACCESS_TOKEN", "META_WHATSAPP_PHONE_NUMBER_ID", "META_WHATSAPP_TEMPLATE_NAME"))
+
+def send_whatsapp_reminder(title, details, remind_at, recipient=None):
+    """Envoie un rappel avec le modèle approuvé via WhatsApp Cloud API de Meta."""
+    token = get_config("META_WHATSAPP_ACCESS_TOKEN")
+    phone_id = get_config("META_WHATSAPP_PHONE_NUMBER_ID")
+    template = get_config("META_WHATSAPP_TEMPLATE_NAME")
+    language = get_config("META_WHATSAPP_TEMPLATE_LANGUAGE", "fr") or "fr"
+    version = get_config("META_GRAPH_API_VERSION", "v25.0") or "v25.0"
+    recipient = recipient or get_config("META_WHATSAPP_TO", DEFAULT_REMINDER_PHONE)
+    recipient = re.sub(r"\D", "", str(recipient))
+    if not all((token, phone_id, template)):
+        raise RuntimeError("Configuration Meta incomplète : ajoute META_WHATSAPP_ACCESS_TOKEN, META_WHATSAPP_PHONE_NUMBER_ID et META_WHATSAPP_TEMPLATE_NAME.")
+    if not recipient:
+        raise RuntimeError("Numéro WhatsApp destinataire absent.")
+    payload = {"messaging_product": "whatsapp", "to": recipient, "type": "template", "template": {"name": template, "language": {"code": language}, "components": [{"type": "body", "parameters": [{"type": "text", "text": str(title)[:120]}, {"type": "text", "text": str(remind_at)[:40]}, {"type": "text", "text": str(details or "Rappel prévu dans Secrétaire Issa")[:900]}]}]}}
+    request = urllib.request.Request(f"https://graph.facebook.com/{version}/{phone_id}/messages", data=json.dumps(payload, ensure_ascii=False).encode("utf-8"), headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            result = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")[:300]
+        raise RuntimeError(f"WhatsApp Cloud API HTTP {exc.code}: {detail}") from None
+    messages = result.get("messages") or []
+    return messages[0].get("id", "") if messages else ""
+
 def process_due_reminders():
-    """Envoie par e-mail chaque rappel arrivé à échéance, puis programme la récurrence."""
-    if not email_configured():
+    """Envoie les canaux configurés, avec statut indépendant pour éviter les doublons."""
+    email_on = email_configured()
+    whatsapp_on = meta_whatsapp_configured()
+    if not email_on and not whatsapp_on:
+        return
+    try:
+        ensure_reminders_schema()
+    except Exception:
         return
     now = datetime.now().replace(microsecond=0)
     now_text = now.strftime("%Y-%m-%d %H:%M:%S")
+    stale = (now - timedelta(minutes=20)).strftime("%Y-%m-%d %H:%M:%S")
     try:
-        due = read_df("SELECT * FROM reminders WHERE enabled=1 AND status='En attente' AND remind_at<=? ORDER BY remind_at LIMIT 20", (now_text,))
+        run("UPDATE reminders SET status='Erreur',last_error='Tentative interrompue; nouvelle tentative automatique.' WHERE status='Envoi en cours' AND last_attempt_at<>'' AND last_attempt_at<?", (stale,))
+        due = read_df("SELECT * FROM reminders WHERE enabled=1 AND status IN ('En attente','Erreur') AND remind_at<=? AND (last_attempt_at='' OR last_attempt_at<=?) ORDER BY remind_at LIMIT 20", (now_text, stale))
     except Exception:
         return
     for r in due.itertuples():
         try:
             with connect() as c:
-                cur = c.execute("UPDATE reminders SET status='Envoi en cours' WHERE id=? AND status='En attente' AND enabled=1", (int(r.id),))
+                cur = c.execute("UPDATE reminders SET status='Envoi en cours',last_attempt_at=? WHERE id=? AND status IN ('En attente','Erreur') AND enabled=1", (now_text, int(r.id)))
                 if cur.rowcount != 1:
                     continue
+            errors = []
+            sent_at = datetime.now().replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
             body = f"Bonjour,\n\nVoici ton rappel : {r.title}\n\n" + (f"Détails :\n{r.details}\n\n" if r.details else "") + f"Échéance prévue : {r.remind_at}.\n\n— Secrétaire Issa"
-            _magic_result = send_email(f"🔔 Rappel Secrétaire Issa : {r.title}", body)
-            sent_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            if r.repeat_rule == "Quotidien":
-                next_at = (datetime.strptime(r.remind_at, "%Y-%m-%d %H:%M:%S") + timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
-                _ = run("UPDATE reminders SET remind_at=?,status='En attente',last_sent_at=?,last_error='' WHERE id=?", (next_at, sent_at, int(r.id)))
-            elif r.repeat_rule == "Hebdomadaire":
-                next_at = (datetime.strptime(r.remind_at, "%Y-%m-%d %H:%M:%S") + timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
-                _ = run("UPDATE reminders SET remind_at=?,status='En attente',last_sent_at=?,last_error='' WHERE id=?", (next_at, sent_at, int(r.id)))
+            current = read_df("SELECT * FROM reminders WHERE id=?", (int(r.id),))
+            state = current.iloc[0] if not current.empty else {}
+            if email_on and str(state.get("email_status", "À envoyer")) != "Envoyé":
+                try:
+                    send_email(f"🔔 Rappel Secrétaire Issa : {r.title}", body)
+                    run("UPDATE reminders SET email_status='Envoyé',email_sent_at=?,email_last_error='' WHERE id=?", (sent_at, int(r.id)))
+                except Exception as exc:
+                    errors.append("E-mail : " + str(exc)[:300])
+                    run("UPDATE reminders SET email_status='Erreur',email_last_error=? WHERE id=?", (str(exc)[:500], int(r.id)))
+            if whatsapp_on and str(state.get("whatsapp_status", "À envoyer")) != "Envoyé":
+                try:
+                    message_sid = send_whatsapp_reminder(r.title, r.details, r.remind_at, getattr(r, "phone", "") or None)
+                    run("UPDATE reminders SET whatsapp_status='Envoyé',whatsapp_sent_at=?,whatsapp_last_error='',whatsapp_message_sid=? WHERE id=?", (sent_at, message_sid, int(r.id)))
+                except Exception as exc:
+                    errors.append("WhatsApp : " + str(exc)[:300])
+                    run("UPDATE reminders SET whatsapp_status='Erreur',whatsapp_last_error=? WHERE id=?", (str(exc)[:500], int(r.id)))
+            if errors:
+                run("UPDATE reminders SET status='Erreur',last_error=? WHERE id=?", (" | ".join(errors)[:900], int(r.id)))
+                continue
+            if r.repeat_rule in ("Quotidien", "Hebdomadaire"):
+                days = 1 if r.repeat_rule == "Quotidien" else 7
+                next_at = (datetime.strptime(str(r.remind_at), "%Y-%m-%d %H:%M:%S") + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+                run("UPDATE reminders SET remind_at=?,status='En attente',last_sent_at=?,last_error='',email_status='À envoyer',email_sent_at='',email_last_error='',whatsapp_status='À envoyer',whatsapp_sent_at='',whatsapp_last_error='',whatsapp_message_sid='',last_attempt_at='' WHERE id=?", (next_at, sent_at, int(r.id)))
             else:
-                _ = run("UPDATE reminders SET status='Envoyé',last_sent_at=?,last_error='' WHERE id=?", (sent_at, int(r.id)))
+                run("UPDATE reminders SET status='Envoyé',last_sent_at=?,last_error='' WHERE id=?", (sent_at, int(r.id)))
         except Exception as exc:
-            _ = run("UPDATE reminders SET status='Erreur',last_error=? WHERE id=?", (str(exc)[:500], int(r.id)))
+            run("UPDATE reminders SET status='Erreur',last_error=? WHERE id=?", (str(exc)[:500], int(r.id)))
 
 def _reminder_worker(stop_event):
     while not stop_event.is_set():
@@ -785,14 +838,22 @@ def _clean_missing_value(value, fallback=""):
     return value
 
 
+_REMINDER_SCHEMA_READY = False
+
 def ensure_reminders_schema():
     """Répare à la demande le schéma des rappels avant les requêtes du tableau de bord."""
+    global _REMINDER_SCHEMA_READY
+    if _REMINDER_SCHEMA_READY:
+        return
     if DB_BACKEND in {"postgres", "postgresql", "supabase"}:
         with connect() as c:
-            _magic_result = c.execute("CREATE TABLE IF NOT EXISTS reminders (id BIGSERIAL PRIMARY KEY, title TEXT DEFAULT 'Rappel importé', details TEXT DEFAULT '', remind_at TEXT DEFAULT '', phone TEXT DEFAULT '', repeat_rule TEXT DEFAULT 'Aucun', enabled INTEGER DEFAULT 1, status TEXT DEFAULT 'En attente', last_sent_at TEXT DEFAULT '', last_error TEXT DEFAULT '', source_type TEXT DEFAULT '', source_id BIGINT, created_at TEXT DEFAULT '')")
+            _magic_result = c.execute("CREATE TABLE IF NOT EXISTS reminders (id BIGSERIAL PRIMARY KEY, title TEXT DEFAULT 'Rappel importé', details TEXT DEFAULT '', remind_at TEXT DEFAULT '', phone TEXT DEFAULT '', repeat_rule TEXT DEFAULT 'Aucun', enabled INTEGER DEFAULT 1, status TEXT DEFAULT 'En attente', last_sent_at TEXT DEFAULT '', last_error TEXT DEFAULT '', source_type TEXT DEFAULT '', source_id BIGINT, created_at TEXT DEFAULT '', email_status TEXT DEFAULT 'À envoyer', email_sent_at TEXT DEFAULT '', email_last_error TEXT DEFAULT '', whatsapp_status TEXT DEFAULT 'À envoyer', whatsapp_sent_at TEXT DEFAULT '', whatsapp_last_error TEXT DEFAULT '', whatsapp_message_sid TEXT DEFAULT '', last_attempt_at TEXT DEFAULT '')")
+            for col, definition in {'email_status': "TEXT DEFAULT 'À envoyer'", 'email_sent_at': "TEXT DEFAULT ''", 'email_last_error': "TEXT DEFAULT ''", 'whatsapp_status': "TEXT DEFAULT 'À envoyer'", 'whatsapp_sent_at': "TEXT DEFAULT ''", 'whatsapp_last_error': "TEXT DEFAULT ''", 'whatsapp_message_sid': "TEXT DEFAULT ''", 'last_attempt_at': "TEXT DEFAULT ''"}.items():
+                _magic_result = c.execute(f'ALTER TABLE reminders ADD COLUMN IF NOT EXISTS {col} {definition}')
+        _REMINDER_SCHEMA_READY = True
         return
     with connect() as c:
-        _magic_result = c.execute("CREATE TABLE IF NOT EXISTS reminders (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT DEFAULT 'Rappel importé', details TEXT DEFAULT '', remind_at TEXT DEFAULT '', phone TEXT DEFAULT '', repeat_rule TEXT DEFAULT 'Aucun', enabled INTEGER DEFAULT 1, status TEXT DEFAULT 'En attente', last_sent_at TEXT DEFAULT '', last_error TEXT DEFAULT '', source_type TEXT DEFAULT '', source_id INTEGER, created_at TEXT DEFAULT '')")
+        _magic_result = c.execute("CREATE TABLE IF NOT EXISTS reminders (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT DEFAULT 'Rappel importé', details TEXT DEFAULT '', remind_at TEXT DEFAULT '', phone TEXT DEFAULT '', repeat_rule TEXT DEFAULT 'Aucun', enabled INTEGER DEFAULT 1, status TEXT DEFAULT 'En attente', last_sent_at TEXT DEFAULT '', last_error TEXT DEFAULT '', source_type TEXT DEFAULT '', source_id INTEGER, created_at TEXT DEFAULT '', email_status TEXT DEFAULT 'À envoyer', email_sent_at TEXT DEFAULT '', email_last_error TEXT DEFAULT '', whatsapp_status TEXT DEFAULT 'À envoyer', whatsapp_sent_at TEXT DEFAULT '', whatsapp_last_error TEXT DEFAULT '', whatsapp_message_sid TEXT DEFAULT '', last_attempt_at TEXT DEFAULT '')")
         columns = {row['name'] for row in c.execute('PRAGMA table_info(reminders)').fetchall()}
         migrations = {
             'title': "TEXT DEFAULT 'Rappel importé'",
@@ -807,6 +868,8 @@ def ensure_reminders_schema():
             'source_type': "TEXT DEFAULT ''",
             'source_id': 'INTEGER',
             'created_at': "TEXT DEFAULT ''",
+            'email_status': "TEXT DEFAULT 'À envoyer'", 'email_sent_at': "TEXT DEFAULT ''", 'email_last_error': "TEXT DEFAULT ''",
+            'whatsapp_status': "TEXT DEFAULT 'À envoyer'", 'whatsapp_sent_at': "TEXT DEFAULT ''", 'whatsapp_last_error': "TEXT DEFAULT ''", 'whatsapp_message_sid': "TEXT DEFAULT ''", 'last_attempt_at': "TEXT DEFAULT ''",
         }
         for column, definition in migrations.items():
             if column not in columns:
@@ -818,6 +881,8 @@ def ensure_reminders_schema():
         _magic_result = c.execute("UPDATE reminders SET remind_at='' WHERE remind_at IS NULL")
         _magic_result = c.execute("UPDATE reminders SET enabled=1 WHERE enabled IS NULL")
         _magic_result = c.execute("UPDATE reminders SET status='En attente' WHERE status IS NULL OR TRIM(status)=''")
+
+    _REMINDER_SCHEMA_READY = True
 
 def read_df(sql, params=()):
     """Lit SQLite ; si une table manque dans une ancienne base, répare le schéma puis réessaie."""
@@ -904,7 +969,7 @@ def upsert_auto_reminder(source_type, source_id, title, details, remind_at, repe
                     _magic_result = c.execute("UPDATE reminders SET enabled=1,status='En attente',last_error='' WHERE id=?", (int(existing['id']),))
                 return
             # Une entrée modifiée dans sa rubrique met à jour le rappel associé.
-            _magic_result = c.execute("UPDATE reminders SET title=?,details=?,remind_at=?,phone=?,repeat_rule=?,enabled=1,status='En attente',last_error='' WHERE id=?",
+            _magic_result = c.execute("UPDATE reminders SET title=?,details=?,remind_at=?,phone=?,repeat_rule=?,enabled=1,status='En attente',last_error='',email_status='À envoyer',email_sent_at='',email_last_error='',whatsapp_status='À envoyer',whatsapp_sent_at='',whatsapp_last_error='',whatsapp_message_sid='',last_attempt_at='' WHERE id=?",
                       (title, details or '', dt_text, DEFAULT_REMINDER_PHONE, repeat_rule, int(existing['id'])))
         else:
             # Les éléments déjà en retard doivent tout de même être rappelés rapidement.
@@ -1998,7 +2063,7 @@ elif page=="Assistant de vie":
 
 # ---------- Rappels automatiques issus des rubriques enregistrées ----------
 elif page=="Rappels automatiques":
-    _ = header('SECRÉTARIAT PERSONNEL','Rappels automatiques par e-mail 📧','Les rappels sont générés à partir de ce que tu enregistres déjà dans les onglets : agenda, tâches, objectifs, habitudes, formations et opportunités. Tu n’as pas à ressaisir les mêmes informations ici.')
+    _ = header('SECRÉTARIAT PERSONNEL','Rappels automatiques e-mail + WhatsApp 🔔','Les rappels sont générés à partir de ce que tu enregistres déjà dans les onglets : agenda, tâches, objectifs, habitudes, formations et opportunités. Tu n’as pas à ressaisir les mêmes informations ici.')
     _ = sync_existing_entries_to_reminders()
     current_email = get_recipient_email()
     with st.container(border=True):
@@ -2021,13 +2086,21 @@ elif page=="Rappels automatiques":
         _magic_result = st.markdown('Utilise ton adresse Gmail et un **mot de passe d’application Google de 16 caractères**. Ne mets jamais ton mot de passe Gmail habituel et ne partage pas ce secret.')
         _magic_result = st.code('SMTP_HOST = "smtp.gmail.com"\nSMTP_PORT = 587\nSMTP_USERNAME = "issayoume1801@gmail.com"\nSMTP_PASSWORD = "mot_de_passe_application_google"\nSMTP_SENDER_NAME = "Secrétaire Issa"\nAPP_USERNAME = "identifiant_de_connexion"\nAPP_PASSWORD = "mot_de_passe_de_connexion"\n\nYOUAGRONOME_OWNER_EMAIL = "identifiant_proprietaire"\nYOUAGRONOME_OWNER_PASS = "mot_de_passe_proprietaire"', language="toml")
         _magic_result = st.caption('Dans Streamlit Cloud : Manage app → Settings → Secrets. L’adresse d’expédition est lue depuis SMTP_USERNAME. L’adresse de réception des rappels se règle ci-dessus. Le code essaie STARTTLS sur le port 587 puis SSL sur le port 465 si nécessaire.')
+    with st.expander('📱 Activer les rappels WhatsApp (Meta)', expanded=not meta_whatsapp_configured()):
+        _magic_result = st.markdown('Configure directement l’API WhatsApp Cloud de Meta. Il faut un compte WhatsApp Business/Meta, un jeton d’accès durable, l’identifiant du numéro et un modèle approuvé. Le numéro destinataire par défaut est +221777473170.')
+        _magic_result = st.code('META_WHATSAPP_ACCESS_TOKEN = "jeton_meta"\nMETA_WHATSAPP_PHONE_NUMBER_ID = "identifiant_numero_meta"\nMETA_WHATSAPP_TEMPLATE_NAME = "rappel_issa"\nMETA_WHATSAPP_TEMPLATE_LANGUAGE = "fr"\nMETA_GRAPH_API_VERSION = "v25.0"\nMETA_WHATSAPP_TO = "+221777473170"', language='toml')
+        _magic_result = st.caption('Ajoute ces valeurs dans Streamlit Cloud → Manage app → Settings → Secrets. Le modèle doit être approuvé dans WhatsApp Manager et contenir trois variables dans le corps : titre, date/heure et détails.')
+    if meta_whatsapp_configured():
+        _magic_result = st.success('Envoi WhatsApp configuré via Meta. Les prochains rappels dus partiront vers le numéro enregistré.')
+    else:
+        _magic_result = st.info('WhatsApp attend les identifiants Meta et un modèle de message approuvé; les rappels e-mail continuent indépendamment.')
     if st.button('🧪 Envoyer un e-mail de test', disabled=not (get_config('SMTP_PASSWORD') and get_recipient_email())):
         try:
             _magic_result = send_email('Test — Secrétaire Issa', 'Bonjour,\n\nCeci est un e-mail de test. Si tu le reçois, les rappels e-mail de Secrétaire Issa sont correctement configurés.')
             _magic_result = st.success(f"E-mail de test transmis à {get_recipient_email()}.")
         except Exception as exc:
             _magic_result = st.error(str(exc))
-    reminders=read_df("SELECT id,title,details,remind_at,phone,repeat_rule,status,enabled,last_sent_at,last_error,source_type,source_id FROM reminders ORDER BY remind_at")
+    reminders=read_df("SELECT id,title,details,remind_at,phone,repeat_rule,status,enabled,last_sent_at,last_error,email_status,email_sent_at,whatsapp_status,whatsapp_sent_at,source_type,source_id FROM reminders ORDER BY remind_at")
     if reminders.empty:
         _magic_result = st.info('Aucune échéance détectée. Ajoute une tâche avec une date limite, un cours dans l’agenda, un objectif daté ou une opportunité : le rappel sera créé automatiquement.')
     else:
@@ -2037,8 +2110,8 @@ elif page=="Rappels automatiques":
         with c1: _ = card('Rappels en attente',len(pending),'Échéances à venir ou à traiter')
         with c2: _ = card('À traiter maintenant',len(overdue),'Date/heure du rappel atteinte')
         with c3: _ = card('E-mails envoyés',int((reminders.status=='Envoyé').sum()),'Rappels ponctuels déjà transmis')
-        display=reminders.rename(columns={'title':'Rappel automatique','details':'Détails / rubrique','remind_at':'Date et heure','repeat_rule':'Répétition','status':'État e-mail','enabled':'Actif','last_sent_at':'Dernier e-mail','last_error':'Erreur éventuelle','source_type':'Rubrique source','source_id':'N° entrée'})
-        _ = show_dataframe(display[['Rappel automatique','Détails / rubrique','Date et heure','Rubrique source','État e-mail','Actif','Dernier e-mail','Erreur éventuelle']],use_container_width=True,hide_index=True)
+        display=reminders.rename(columns={'email_status':'État e-mail','email_sent_at':'E-mail envoyé le','whatsapp_status':'État WhatsApp','whatsapp_sent_at':'WhatsApp envoyé le','status':'État général','title':'Rappel automatique','details':'Détails / rubrique','remind_at':'Date et heure','repeat_rule':'Répétition','enabled':'Actif','last_sent_at':'Dernier e-mail','last_error':'Erreur éventuelle','source_type':'Rubrique source','source_id':'N° entrée'})
+        _ = show_dataframe(display[['Rappel automatique','Détails / rubrique','Date et heure','Rubrique source','État e-mail','État WhatsApp','Actif','Dernier e-mail','Erreur éventuelle']],use_container_width=True,hide_index=True)
         choices={f"#{int(r.id)} — {r.title} — {r.remind_at}":int(r.id) for r in reminders.itertuples()}
         selected=st.selectbox('Gérer un rappel automatique',list(choices),key='auto_reminder_manage_pick')
         rid=choices[selected]; a,b=st.columns(2)
@@ -2057,7 +2130,7 @@ elif page=="Rappels automatiques":
                     _ = run("UPDATE reminders SET last_sent_at=?,last_error='' WHERE id=?",(datetime.now().strftime('%Y-%m-%d %H:%M:%S'),rid))
                     _magic_result = st.success('E-mail transmis au serveur de messagerie.')
                 except Exception as exc: _magic_result = st.error(str(exc))
-    _magic_result = st.caption('Vérification des rappels au démarrage de chaque exécution de l’application et contrôle en arrière-plan toutes les 30 secondes tant que le processus Streamlit reste actif. Les rappels sont issus de l’agenda (1 h avant), des tâches et objectifs (veille à 08 h ou immédiatement si déjà en retard), des formations, des stages/concours/bourses, des notes « Rappel » et des habitudes actives. Gmail utilise le port 587 STARTTLS avec secours sur 465 SSL. Streamlit Cloud peut suspendre l’application lorsqu’elle est inactive : un envoi garanti même application endormie nécessite un planificateur externe et une base de données persistante.')
+    _magic_result = st.caption('Vérification des rappels au démarrage de chaque exécution de l’application et contrôle en arrière-plan toutes les 2 minutes tant que le processus Streamlit reste actif. Pour un service fiable même quand Streamlit Cloud est en veille, le dépôt inclut aussi un planificateur GitHub Actions toutes les 5 minutes. Configure ses Secrets comme indiqué dans le fichier guide fourni. Les rappels sont issus de l’agenda (1 h avant), des tâches et objectifs (veille à 08 h ou immédiatement si déjà en retard), des formations, des stages/concours/bourses, des notes « Rappel » et des habitudes actives. Gmail utilise le port 587 STARTTLS avec secours sur 465 SSL. Streamlit Cloud peut suspendre l’application lorsqu’elle est inactive : un envoi garanti même application endormie nécessite un planificateur externe et une base de données persistante.')
 
 # ---------- Assistant e-mail, voix et documents ----------
 elif page=="Assistant IA XXL":
@@ -2648,3 +2721,7 @@ role_icons={
 roles_html=''.join(f'<span class="issa-role-pill">{role_icons.get(p, "🤖")} {display_text(PAGE_ROLE.get(p), p)}</span>' for p in PAGES)
 _magic_result = st.markdown(f'<div class="issa-roles"><div class="issa-roles-title">Les rôles de vos secrétaires spécialisés</div><div class="issa-role-pills">{roles_html}</div></div>',unsafe_allow_html=True)
 _magic_result = st.caption('Navigation disponible dans le menu supérieur · Base de données : Supabase PostgreSQL · tables créées automatiquement')
+
+
+
+
