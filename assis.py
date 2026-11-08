@@ -1830,10 +1830,10 @@ elif page=="Rappels automatiques":
 elif page=="Assistant IA XXL":
     _ = header("ASSISTANT PERSONNEL XXL", "Secrétaire Issa · IA bilingue 🤖", "Parle-moi en français ou en wolof. Je m’appuie sur tes cours, ton planning, tes révisions, tes tâches, ton budget, ta carrière et tes documents.")
     _magic_result = st.caption("L’assistant garde le fil de la conversation pendant cette session et consulte les informations enregistrées dans ton espace XXL.")
-    _ai_key = _startup_secret("OPENAI_API_KEY", "")
-    _ai_model = _startup_secret("OPENAI_MODEL", "gpt-4o-mini")
+    _ai_key = _startup_secret("GEMINI_API_KEY", "")
+    _ai_model = _startup_secret("GEMINI_MODEL", "gemini-3.8-flash")
     if not _ai_key:
-        _magic_result = st.warning("Pour activer les réponses de l’IA, ajoute OPENAI_API_KEY dans les Secrets Streamlit ou dans une variable d’environnement. Les instructions sont dans le fichier LIRE_AVANT_DEMARRER_IA.txt.")
+        _magic_result = st.warning("Pour activer les réponses de l’IA, ajoute GEMINI_API_KEY dans les Secrets Streamlit ou dans une variable d’environnement. Les instructions sont dans le fichier LIRE_AVANT_DEMARRER_IA.txt.")
     _speech_col, _voice_col = st.columns([1, 1])
     with _speech_col:
         _ai_language = st.selectbox("Langue de dictée", ["Français", "Wolof (prise en charge variable)"], key="issa_ai_speech_language")
@@ -1858,7 +1858,7 @@ elif page=="Assistant IA XXL":
     if _ai_question:
         _magic_result = st.session_state["issa_ai_messages"].append({"role":"user", "content":_ai_question})
         if not _ai_key:
-            _ai_answer = "Na nga def, Issa ? Je suis prête à t’accompagner en français ou en wolof. Pour activer la génération des réponses, configure OPENAI_API_KEY dans les Secrets Streamlit comme indiqué dans LIRE_AVANT_DEMARRER_IA.txt."
+            _ai_answer = "Na nga def, Issa ? Je suis prête à t’accompagner en français ou en wolof. Pour activer la génération des réponses, configure GEMINI_API_KEY dans les Secrets Streamlit comme indiqué dans LIRE_AVANT_DEMARRER_IA.txt."
         else:
             _table_queries = {
                 "Matières": "SELECT title,code,semester,ue,credits,teacher,notes FROM subjects ORDER BY title LIMIT 80",
@@ -1890,13 +1890,15 @@ elif page=="Assistant IA XXL":
             "LANGUE : comprends le français et le wolof. Réponds naturellement dans la langue utilisée par Issa ; s’il mélange les langues, réponds dans un mélange fluide français–wolof. Garde un ton chaleureux, professionnel, clair et rigoureux. Ne prétends pas parler ou comprendre parfaitement le wolof si une formulation est incertaine ; demande une précision avec tact.\n\n"
             "UTILISATION DES DONNÉES : appuie-toi sur le contexte enregistré ci-dessous pour croiser les dates d’examens avec les révisions et le niveau de maîtrise, relever les priorités et échéances, résumer le budget et proposer des actions concrètes. Les données peuvent être incomplètes ou anciennes : indique les limites et ne fabrique jamais de faits, de dépenses, de cours, de dates ou d’opportunités. Pour les questions générales, sépare clairement les conseils des faits du dossier. N’affirme pas avoir modifié une donnée, envoyé un e-mail ou connecté un service externe. Réponds de manière concise et propose une prochaine étape utile.\n\n"
             "CONTEXTE ACTUEL DE L’ESPACE XXL :\n"+_context)
-            _api_messages=[{"role":"system","content":_system_prompt}]
-            _magic_result = _api_messages.extend(st.session_state["issa_ai_messages"][-12:])
+            _history=[]
+            for _historic in st.session_state["issa_ai_messages"][-12:]:
+                _history.append({"role":"model" if _historic["role"]=="assistant" else "user","parts":[{"text":_historic["content"]}]})
             try:
-                _payload=json.dumps({"model":_ai_model,"messages":_api_messages,"temperature":0.4},ensure_ascii=False).encode("utf-8")
-                _request=urllib.request.Request("https://api.openai.com/v1/chat/completions",data=_payload,headers={"Authorization":"Bearer "+_ai_key,"Content-Type":"application/json"},method="POST")
+                _payload=json.dumps({"systemInstruction":{"parts":[{"text":_system_prompt}]},"contents":_history,"generationConfig":{"temperature":0.4}},ensure_ascii=False).encode("utf-8")
+                _request=urllib.request.Request(f"https://generativelanguage.googleapis.com/v1beta/models/{_ai_model}:generateContent",data=_payload,headers={"x-goog-api-key":_ai_key,"Content-Type":"application/json"},method="POST")
                 with urllib.request.urlopen(_request,timeout=90) as _response: _result=json.loads(_response.read().decode("utf-8"))
-                _ai_answer=_result["choices"][0]["message"]["content"].strip()
+                _ai_answer="".join(_part.get("text","") for _part in _result["candidates"][0]["content"]["parts"]).strip()
+                if not _ai_answer: raise RuntimeError("Le modèle n’a retourné aucun texte.")
             except urllib.error.HTTPError as _exc:
                 _detail=_exc.read().decode("utf-8",errors="replace")[:700]
                 _ai_answer=f"Le service IA a refusé la demande (HTTP {_exc.code}). Vérifie la clé API, le modèle configuré et le quota. Détail : {_detail}"
@@ -1907,9 +1909,16 @@ elif page=="Assistant IA XXL":
             _magic_result = st.markdown(_ai_answer)
             if _ai_key:
                 try:
-                    _tts_request=urllib.request.Request("https://api.openai.com/v1/audio/speech",data=json.dumps({"model":"gpt-4o-mini-tts","voice":"alloy","input":_ai_answer,"instructions":"Speak clearly and warmly. Preserve the user's French and Wolof wording."},ensure_ascii=False).encode("utf-8"),headers={"Authorization":"Bearer "+_ai_key,"Content-Type":"application/json"},method="POST")
-                    with urllib.request.urlopen(_tts_request,timeout=90) as _tts_response: _audio_bytes=_tts_response.read()
-                    _magic_result = st.audio(_audio_bytes,format="audio/mpeg")
+                    _tts_body={"contents":[{"parts":[{"text":"Lis ce texte à voix haute, clairement et chaleureusement. Garde exactement la langue du texte (français, wolof ou mélange des deux), sans le traduire :\n\n"+_ai_answer[:3500]}]}],"generationConfig":{"responseModalities":["AUDIO"],"speechConfig":{"voiceConfig":{"prebuiltVoiceConfig":{"voiceName":"Kore"}}}}}
+                    _tts_request=urllib.request.Request("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash-tts:generateContent",data=json.dumps(_tts_body,ensure_ascii=False).encode("utf-8"),headers={"x-goog-api-key":_ai_key,"Content-Type":"application/json"},method="POST")
+                    with urllib.request.urlopen(_tts_request,timeout=90) as _tts_response: _tts_result=json.loads(_tts_response.read().decode("utf-8"))
+                    _audio_part=next(_part for _part in _tts_result["candidates"][0]["content"]["parts"] if _part.get("inlineData"))
+                    _pcm=base64.b64decode(_audio_part["inlineData"]["data"])
+                    import wave as _wave
+                    _wav_buffer=io.BytesIO()
+                    with _wave.open(_wav_buffer,"wb") as _wav:
+                        _wav.setnchannels(1); _wav.setsampwidth(2); _wav.setframerate(24000); _wav.writeframes(_pcm)
+                    _magic_result = st.audio(_wav_buffer.getvalue(),format="audio/wav")
                 except Exception:
                     _magic_result = st.caption("Lecture vocale indisponible pour cette réponse. Le texte reste visible ci-dessus.")
     if st.session_state.get("issa_ai_messages") and st.button("Effacer cette conversation", key="issa_ai_clear"):
