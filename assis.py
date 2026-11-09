@@ -306,6 +306,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS productivity_projects(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,domain TEXT DEFAULT 'Personnel',status TEXT DEFAULT 'À faire',progress INTEGER DEFAULT 0,start_date TEXT DEFAULT '',due_date TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS flashcards(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,front TEXT NOT NULL,back TEXT NOT NULL,category TEXT DEFAULT 'Études',mastery INTEGER DEFAULT 0,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS focus_sessions(id INTEGER PRIMARY KEY AUTOINCREMENT,session_date TEXT NOT NULL,duration_minutes INTEGER NOT NULL,duration_seconds INTEGER DEFAULT 0,activity TEXT DEFAULT 'Étude',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS focus_sequence_done(id INTEGER PRIMARY KEY AUTOINCREMENT,source_type TEXT NOT NULL,source_id INTEGER NOT NULL,completed_at TEXT DEFAULT CURRENT_TIMESTAMP,UNIQUE(source_type,source_id));
         CREATE TABLE IF NOT EXISTS daily_journal(id INTEGER PRIMARY KEY AUTOINCREMENT,entry_date TEXT NOT NULL UNIQUE,mood TEXT DEFAULT '',energy INTEGER DEFAULT 3,successes TEXT DEFAULT '',improvements TEXT DEFAULT '',tomorrow_priorities TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS meeting_minutes(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,meeting_date TEXT DEFAULT '',participants TEXT DEFAULT '',summary TEXT DEFAULT '',decisions TEXT DEFAULT '',actions TEXT DEFAULT '',status TEXT DEFAULT 'À suivre',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS life_organizer(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,kind TEXT DEFAULT 'Rendez-vous',event_date TEXT DEFAULT '',event_time TEXT DEFAULT '',priority TEXT DEFAULT 'Normale',status TEXT DEFAULT 'À faire',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
@@ -322,7 +323,7 @@ def init_db():
                 _magic_result = c.execute(f'ALTER TABLE reminders ADD COLUMN "{_column}" {_definition}')
         _magic_result = c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_reminders_source ON reminders(source_type, source_id) WHERE source_type <> '' AND source_id IS NOT NULL")
 
-_APP_SCHEMA_DDL = "\n        CREATE TABLE IF NOT EXISTS subjects(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,code TEXT DEFAULT '',semester TEXT DEFAULT '',ue TEXT DEFAULT '',ue_code TEXT DEFAULT '',credits REAL DEFAULT 0,cm REAL DEFAULT 0,td REAL DEFAULT 0,tp REAL DEFAULT 0,tpe REAL DEFAULT 0,vht REAL DEFAULT 0,teacher TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,event_date TEXT NOT NULL,start_time TEXT DEFAULT '',end_time TEXT DEFAULT '',kind TEXT DEFAULT 'Cours',subject_id INTEGER,location TEXT DEFAULT '',notes TEXT DEFAULT '',source TEXT DEFAULT 'Saisie manuelle',created_at TEXT DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE SET NULL);\n        CREATE TABLE IF NOT EXISTS tasks(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,due_date TEXT DEFAULT '',priority TEXT DEFAULT 'Normale',status TEXT DEFAULT 'À faire',category TEXT DEFAULT 'Travail personnel',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS documents(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,category TEXT DEFAULT 'Autre',url TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS study_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,subject_id INTEGER,study_date TEXT NOT NULL,hours DOUBLE PRECISION NOT NULL,method TEXT DEFAULT 'Révision active',confidence INTEGER DEFAULT 3,notes TEXT DEFAULT '',FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE SET NULL);\n        CREATE TABLE IF NOT EXISTS goals(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,category TEXT DEFAULT 'Études',target_date TEXT DEFAULT '',progress INTEGER DEFAULT 0,notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS habits(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,frequency TEXT DEFAULT 'Quotidienne',notes TEXT DEFAULT '',active INTEGER DEFAULT 1,created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS habit_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,habit_id INTEGER NOT NULL,log_date TEXT NOT NULL,done INTEGER DEFAULT 1,UNIQUE(habit_id,log_date),FOREIGN KEY(habit_id) REFERENCES habits(id) ON DELETE CASCADE);\n        CREATE TABLE IF NOT EXISTS budgets(id INTEGER PRIMARY KEY AUTOINCREMENT,entry_date TEXT NOT NULL,kind TEXT NOT NULL,category TEXT DEFAULT 'Autre',amount DOUBLE PRECISION NOT NULL,description TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS life_notes(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,category TEXT DEFAULT 'Personnel',content TEXT DEFAULT '',reminder_date TEXT DEFAULT '',reminder_time TEXT DEFAULT '08:00',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS contacts(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,role TEXT DEFAULT '',phone TEXT DEFAULT '',email TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS career_skills(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,category TEXT DEFAULT 'Technique',level TEXT DEFAULT 'Débutant',target_level TEXT DEFAULT 'Intermédiaire',status TEXT DEFAULT 'À apprendre',resource_url TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS career_training(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,provider TEXT DEFAULT '',kind TEXT DEFAULT 'Formation',start_date TEXT DEFAULT '',end_date TEXT DEFAULT '',status TEXT DEFAULT 'À envisager',url TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS career_opportunities(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,organization TEXT DEFAULT '',kind TEXT DEFAULT 'Stage',location TEXT DEFAULT '',deadline TEXT DEFAULT '',url TEXT DEFAULT '',status TEXT DEFAULT 'À examiner',contact TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS reminders(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,details TEXT DEFAULT '',remind_at TEXT NOT NULL,phone TEXT NOT NULL DEFAULT '',repeat_rule TEXT DEFAULT 'Aucun',enabled INTEGER DEFAULT 1,status TEXT DEFAULT 'En attente',last_sent_at TEXT DEFAULT '',last_error TEXT DEFAULT '',source_type TEXT DEFAULT '',source_id INTEGER,created_at TEXT DEFAULT CURRENT_TIMESTAMP,template_key TEXT DEFAULT 'custom');\n        CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY, value TEXT DEFAULT '');\n        CREATE TABLE IF NOT EXISTS assistant_docs(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,content TEXT NOT NULL,uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS productivity_projects(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,domain TEXT DEFAULT 'Personnel',status TEXT DEFAULT 'À faire',progress INTEGER DEFAULT 0,start_date TEXT DEFAULT '',due_date TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS flashcards(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,front TEXT NOT NULL,back TEXT NOT NULL,category TEXT DEFAULT 'Études',mastery INTEGER DEFAULT 0,created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS focus_sessions(id INTEGER PRIMARY KEY AUTOINCREMENT,session_date TEXT NOT NULL,duration_minutes INTEGER NOT NULL,duration_seconds INTEGER DEFAULT 0,activity TEXT DEFAULT 'Étude',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS daily_journal(id INTEGER PRIMARY KEY AUTOINCREMENT,entry_date TEXT NOT NULL UNIQUE,mood TEXT DEFAULT '',energy INTEGER DEFAULT 3,successes TEXT DEFAULT '',improvements TEXT DEFAULT '',tomorrow_priorities TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS meeting_minutes(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,meeting_date TEXT DEFAULT '',participants TEXT DEFAULT '',summary TEXT DEFAULT '',decisions TEXT DEFAULT '',actions TEXT DEFAULT '',status TEXT DEFAULT 'À suivre',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS life_organizer(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,kind TEXT DEFAULT 'Rendez-vous',event_date TEXT DEFAULT '',event_time TEXT DEFAULT '',priority TEXT DEFAULT 'Normale',status TEXT DEFAULT 'À faire',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        "
+_APP_SCHEMA_DDL = "\n        CREATE TABLE IF NOT EXISTS subjects(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,code TEXT DEFAULT '',semester TEXT DEFAULT '',ue TEXT DEFAULT '',ue_code TEXT DEFAULT '',credits REAL DEFAULT 0,cm REAL DEFAULT 0,td REAL DEFAULT 0,tp REAL DEFAULT 0,tpe REAL DEFAULT 0,vht REAL DEFAULT 0,teacher TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,event_date TEXT NOT NULL,start_time TEXT DEFAULT '',end_time TEXT DEFAULT '',kind TEXT DEFAULT 'Cours',subject_id INTEGER,location TEXT DEFAULT '',notes TEXT DEFAULT '',source TEXT DEFAULT 'Saisie manuelle',created_at TEXT DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE SET NULL);\n        CREATE TABLE IF NOT EXISTS tasks(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,due_date TEXT DEFAULT '',priority TEXT DEFAULT 'Normale',status TEXT DEFAULT 'À faire',category TEXT DEFAULT 'Travail personnel',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS documents(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,category TEXT DEFAULT 'Autre',url TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS study_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,subject_id INTEGER,study_date TEXT NOT NULL,hours DOUBLE PRECISION NOT NULL,method TEXT DEFAULT 'Révision active',confidence INTEGER DEFAULT 3,notes TEXT DEFAULT '',FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE SET NULL);\n        CREATE TABLE IF NOT EXISTS goals(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,category TEXT DEFAULT 'Études',target_date TEXT DEFAULT '',progress INTEGER DEFAULT 0,notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS habits(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,frequency TEXT DEFAULT 'Quotidienne',notes TEXT DEFAULT '',active INTEGER DEFAULT 1,created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS habit_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,habit_id INTEGER NOT NULL,log_date TEXT NOT NULL,done INTEGER DEFAULT 1,UNIQUE(habit_id,log_date),FOREIGN KEY(habit_id) REFERENCES habits(id) ON DELETE CASCADE);\n        CREATE TABLE IF NOT EXISTS budgets(id INTEGER PRIMARY KEY AUTOINCREMENT,entry_date TEXT NOT NULL,kind TEXT NOT NULL,category TEXT DEFAULT 'Autre',amount DOUBLE PRECISION NOT NULL,description TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS life_notes(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,category TEXT DEFAULT 'Personnel',content TEXT DEFAULT '',reminder_date TEXT DEFAULT '',reminder_time TEXT DEFAULT '08:00',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS contacts(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,role TEXT DEFAULT '',phone TEXT DEFAULT '',email TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS career_skills(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,category TEXT DEFAULT 'Technique',level TEXT DEFAULT 'Débutant',target_level TEXT DEFAULT 'Intermédiaire',status TEXT DEFAULT 'À apprendre',resource_url TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS career_training(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,provider TEXT DEFAULT '',kind TEXT DEFAULT 'Formation',start_date TEXT DEFAULT '',end_date TEXT DEFAULT '',status TEXT DEFAULT 'À envisager',url TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS career_opportunities(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,organization TEXT DEFAULT '',kind TEXT DEFAULT 'Stage',location TEXT DEFAULT '',deadline TEXT DEFAULT '',url TEXT DEFAULT '',status TEXT DEFAULT 'À examiner',contact TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS reminders(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,details TEXT DEFAULT '',remind_at TEXT NOT NULL,phone TEXT NOT NULL DEFAULT '',repeat_rule TEXT DEFAULT 'Aucun',enabled INTEGER DEFAULT 1,status TEXT DEFAULT 'En attente',last_sent_at TEXT DEFAULT '',last_error TEXT DEFAULT '',source_type TEXT DEFAULT '',source_id INTEGER,created_at TEXT DEFAULT CURRENT_TIMESTAMP,template_key TEXT DEFAULT 'custom');\n        CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY, value TEXT DEFAULT '');\n        CREATE TABLE IF NOT EXISTS assistant_docs(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,content TEXT NOT NULL,uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS productivity_projects(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,domain TEXT DEFAULT 'Personnel',status TEXT DEFAULT 'À faire',progress INTEGER DEFAULT 0,start_date TEXT DEFAULT '',due_date TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS flashcards(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,front TEXT NOT NULL,back TEXT NOT NULL,category TEXT DEFAULT 'Études',mastery INTEGER DEFAULT 0,created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS focus_sessions(id INTEGER PRIMARY KEY AUTOINCREMENT,session_date TEXT NOT NULL,duration_minutes INTEGER NOT NULL,duration_seconds INTEGER DEFAULT 0,activity TEXT DEFAULT 'Étude',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS focus_sequence_done(id INTEGER PRIMARY KEY AUTOINCREMENT,source_type TEXT NOT NULL,source_id INTEGER NOT NULL,completed_at TEXT DEFAULT CURRENT_TIMESTAMP,UNIQUE(source_type,source_id));\n        CREATE TABLE IF NOT EXISTS daily_journal(id INTEGER PRIMARY KEY AUTOINCREMENT,entry_date TEXT NOT NULL UNIQUE,mood TEXT DEFAULT '',energy INTEGER DEFAULT 3,successes TEXT DEFAULT '',improvements TEXT DEFAULT '',tomorrow_priorities TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS meeting_minutes(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,meeting_date TEXT DEFAULT '',participants TEXT DEFAULT '',summary TEXT DEFAULT '',decisions TEXT DEFAULT '',actions TEXT DEFAULT '',status TEXT DEFAULT 'À suivre',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS life_organizer(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,kind TEXT DEFAULT 'Rendez-vous',event_date TEXT DEFAULT '',event_time TEXT DEFAULT '',priority TEXT DEFAULT 'Normale',status TEXT DEFAULT 'À faire',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        "
 
 def _split_schema_columns(body):
     parts, start, depth, quoted = [], 0, 0, False
@@ -1086,6 +1087,46 @@ def sync_reminders_if_due(interval_seconds=21600, force=False):
             guard["last_run"] = 0.0
         raise
 
+def build_focus_sequence():
+    """Construit un parcours automatique à partir des tâches et de l’agenda."""
+    today = date.today().isoformat()
+    tasks = read_df("SELECT id,title,due_date,priority,status,category,notes FROM tasks WHERE COALESCE(status,'À faire') NOT IN ('Terminée','Terminé','Rendue','Rendu')")
+    events = read_df("SELECT id,title,event_date,start_time,end_time,kind,location,notes FROM events WHERE event_date >= ?", (today,))
+    done_events = read_df("SELECT source_id FROM focus_sequence_done WHERE source_type='event'")
+    completed_ids = set(done_events['source_id'].dropna().astype(int).tolist()) if not done_events.empty else set()
+    items = []
+    priority_order = {'Urgente': 0, 'Haute': 1, 'Normale': 2, 'Basse': 3}
+    for row in tasks.itertuples():
+        raw_date = str(row.due_date or '').strip()
+        try:
+            due_dt = datetime.combine(datetime.strptime(raw_date, '%Y-%m-%d').date(), time(23, 59)) if raw_date else None
+        except ValueError:
+            due_dt = None
+        items.append({
+            'source_type': 'task', 'source_id': int(row.id), 'title': str(row.title),
+            'kind': 'Tâche', 'scheduled': raw_date or 'Sans échéance',
+            'details': ' · '.join(part for part in [str(row.category or ''), str(row.priority or 'Normale'), str(row.notes or '')] if part),
+            'sort_key': due_dt.timestamp() if due_dt else float('inf'),
+            'priority_key': priority_order.get(str(row.priority or 'Normale'), 2),
+        })
+    for row in events.itertuples():
+        if int(row.id) in completed_ids:
+            continue
+        raw_date = str(row.event_date or '').strip()
+        raw_time = str(row.start_time or '08:00')[:5]
+        try:
+            scheduled_dt = datetime.strptime(f'{raw_date} {raw_time}', '%Y-%m-%d %H:%M')
+        except ValueError:
+            continue
+        details = ' · '.join(part for part in [str(row.kind or 'Agenda'), raw_time, str(row.location or ''), str(row.notes or '')] if part)
+        items.append({
+            'source_type': 'event', 'source_id': int(row.id), 'title': str(row.title),
+            'kind': 'Agenda', 'scheduled': f'{raw_date} · {raw_time}', 'details': details,
+            'sort_key': scheduled_dt.timestamp(), 'priority_key': 1,
+        })
+    items.sort(key=lambda item: (item['sort_key'], item['priority_key'], 0 if item['source_type'] == 'event' else 1, item['source_id']))
+    return items
+
 def display_text(value, fallback=""):
     """Retourne une valeur sûre pour l'interface, sans None/NULL/NaN visibles."""
     cleaned = _clean_missing_value(value, fallback)
@@ -1686,9 +1727,13 @@ _NAV_GROUPS = {
 }
 _GROUP_FOR_PAGE = {item: group for group, items in _NAV_GROUPS.items() for item in items}
 _focus_navigation_locked = bool(st.session_state.get("issa_focus_active", False)) and float(st.session_state.get("issa_focus_until", 0) or 0) > time_module.time()
+_sequence_navigation_locked = bool(st.session_state.get("issa_sequence_strict", False)) and not _focus_navigation_locked
 if _focus_navigation_locked:
     st.session_state["issa_nav_group"] = "🚀 CARRIÈRE & PRODUCTIVITÉ"
     st.session_state["issa_nav_subpage"] = "Centre de productivité XXL"
+elif _sequence_navigation_locked:
+    st.session_state["issa_nav_group"] = "👤 VIE & ASSISTANCE"
+    st.session_state["issa_nav_subpage"] = "Assistant de vie"
 _current_page = st.session_state.get("top_nav", PAGES[0])
 _default_group = _GROUP_FOR_PAGE.get(_current_page, next(iter(_NAV_GROUPS)))
 if st.session_state.get("issa_nav_group") not in _NAV_GROUPS:
@@ -1700,7 +1745,7 @@ _magic_result = st.radio(
     horizontal=True,
     key="issa_nav_group",
     label_visibility="collapsed",
-    disabled=_focus_navigation_locked,
+    disabled=_focus_navigation_locked or _sequence_navigation_locked,
 )
 _active_group = st.session_state["issa_nav_group"]
 _subpages = _NAV_GROUPS[_active_group]
@@ -1716,7 +1761,7 @@ if len(_subpages) > 1:
         format_func=lambda x: PAGE_SHORT[x],
         key="issa_nav_subpage",
         label_visibility="collapsed",
-        disabled=_focus_navigation_locked,
+        disabled=_focus_navigation_locked or _sequence_navigation_locked,
     )
 else:
     st.session_state["issa_nav_subpage"] = _subpages[0]
@@ -1752,22 +1797,23 @@ with st.expander("🆘 Assistance XXL — aide rapide", expanded=False):
 
 # RAPPELS TRANSVERSAUX : visibles depuis TOUS les onglets, sans ressaisie.
 try:
-    _now = datetime.now().replace(microsecond=0)
-    _horizon = (_now + timedelta(hours=24)).strftime('%Y-%m-%d %H:%M:%S')
-    _now_text = _now.strftime('%Y-%m-%d %H:%M:%S')
-    _alerts = read_df("SELECT title,details,remind_at,status FROM reminders WHERE enabled=1 AND status='En attente' AND remind_at<=? ORDER BY remind_at LIMIT 8", (_horizon,))
-    if not _alerts.empty:
-        _late = _alerts[_alerts['remind_at'].astype(str) <= _now_text]
-        if not _late.empty:
-            _magic_result = st.error(f"🔔 **RAPPEL À FAIRE : {len(_late)} tâche(s) ou échéance(s) sont arrivées à échéance.** Ouvre l’onglet « Rappels automatiques » pour les consulter.")
-        _soon = _alerts[_alerts['remind_at'].astype(str) > _now_text]
-        if not _soon.empty:
-            _magic_result = st.warning(f"⏰ **À venir dans les prochaines 24 heures : {len(_soon)} rappel(s).** Consulte l’onglet « Rappels automatiques » pour voir les dates et les détails.")
-        with st.expander('Voir les rappels à faire ou à venir', expanded=not _late.empty):
-            for _item in _alerts.itertuples():
-                _magic_result = st.markdown(f"**{_item.remind_at} — {_item.title}**")
-                if _item.details:
-                    _magic_result = st.caption(str(_item.details))
+    if not st.session_state.get("issa_sequence_strict", False):
+        _now = datetime.now().replace(microsecond=0)
+        _horizon = (_now + timedelta(hours=24)).strftime('%Y-%m-%d %H:%M:%S')
+        _now_text = _now.strftime('%Y-%m-%d %H:%M:%S')
+        _alerts = read_df("SELECT title,details,remind_at,status FROM reminders WHERE enabled=1 AND status='En attente' AND remind_at<=? ORDER BY remind_at LIMIT 8", (_horizon,))
+        if not _alerts.empty:
+            _late = _alerts[_alerts['remind_at'].astype(str) <= _now_text]
+            if not _late.empty:
+                _magic_result = st.error(f"🔔 **RAPPEL À FAIRE : {len(_late)} tâche(s) ou échéance(s) sont arrivées à échéance.** Ouvre l’onglet « Rappels automatiques » pour les consulter.")
+            _soon = _alerts[_alerts['remind_at'].astype(str) > _now_text]
+            if not _soon.empty:
+                _magic_result = st.warning(f"⏰ **À venir dans les prochaines 24 heures : {len(_soon)} rappel(s).** Consulte l’onglet « Rappels automatiques » pour voir les dates et les détails.")
+            with st.expander('Voir les rappels à faire ou à venir', expanded=not _late.empty):
+                for _item in _alerts.itertuples():
+                    _magic_result = st.markdown(f"**{_item.remind_at} — {_item.title}**")
+                    if _item.details:
+                        _magic_result = st.caption(str(_item.details))
 except Exception:
     # Ne pas bloquer l’application principale si une base ancienne est en cours de migration.
     pass
@@ -2039,162 +2085,209 @@ elif page=="Suivi & progression":
 # ---------- Assistant de vie avec sous-onglets ----------
 elif page=="Assistant de vie":
     _ = header('ESPACE PERSONNEL XXL','Assistant de vie 🧭','Un espace central pour tes objectifs, habitudes, budget, tâches, routines, notes et contacts. Les informations sont enregistrées dans SQLite.')
-    tabs=st.tabs(['🎯 Objectifs','✅ Habitudes','💰 Budget','📝 Tâches & démarches','📓 Notes personnelles','👥 Contacts','🌿 Bien-être & routines'])
-    with tabs[0]:
-        with st.form('goal_form'):
-            a,b,c=st.columns(3); title=a.text_input('Objectif *'); category=b.selectbox('Domaine',['Études','Carrière','Finances','Famille','Personnel','Projet','Santé / équilibre']); target=c.date_input('Date cible',date.today()+timedelta(days=30))
-            progress=st.slider('Progression actuelle (%)',0,100,0); notes=st.text_area('Étapes / détails'); ok=st.form_submit_button('Ajouter l’objectif',type='primary')
-        if ok:
-            if title.strip():
-                _ = run('INSERT INTO goals(title,category,target_date,progress,notes) VALUES(?,?,?,?,?)',(title.strip(),category,target.isoformat(),progress,notes.strip()))
-                new_id=int(read_df('SELECT id FROM goals WHERE title=? ORDER BY id DESC LIMIT 1',(title.strip(),)).iloc[0]['id'])
-                remind=datetime.combine(max(date.today(),target-timedelta(days=1)),time(8,0))
-                if remind < datetime.now(): remind=datetime.combine(target,time(8,0))
-                _ = upsert_auto_reminder('goal',new_id,f'Objectif à suivre : {title.strip()}',f'Domaine : {category}. Progression : {progress} %. {notes.strip()}',remind.strftime('%Y-%m-%d %H:%M:%S'))
-                _magic_result = st.rerun()
-            else: _magic_result = st.error('Donne un titre à ton objectif.')
-        goals=read_df('SELECT * FROM goals ORDER BY target_date')
-        if not goals.empty:
-            for r in goals.itertuples():
-                with st.container(border=True):
-                    _magic_result = st.write(f"**{r.title}** · {r.category} · cible : {r.target_date or 'non définie'}")
-                    new=st.slider(f'Progression — {r.title}',0,100,int(r.progress),key=f'goalprog_{r.id}')
-                    if st.button('Mettre à jour',key=f'goalupdate_{r.id}'): _ = run('UPDATE goals SET progress=? WHERE id=?',(new,r.id)); _magic_result = st.rerun()
-                    if r.notes: _magic_result = st.caption(r.notes)
-                    if st.button('Supprimer objectif',key=f'goaldel_{r.id}'): _ = run('DELETE FROM goals WHERE id=?',(r.id,)); _magic_result = st.rerun()
-    with tabs[1]:
-        with st.form('habit_form'):
-            title=st.text_input('Habitude à suivre *',placeholder='Ex. lire 20 minutes, réviser, ranger le bureau'); freq=st.selectbox('Fréquence',['Quotidienne','En semaine','Hebdomadaire']); notes=st.text_input('Pourquoi / rappel'); ok=st.form_submit_button('Créer une habitude')
-        if ok:
-            if title.strip():
-                _ = run('INSERT INTO habits(title,frequency,notes) VALUES(?,?,?)',(title.strip(),freq,notes.strip()))
-                new_id=int(read_df('SELECT id FROM habits WHERE title=? ORDER BY id DESC LIMIT 1',(title.strip(),)).iloc[0]['id'])
-                remind=datetime.combine(date.today(),time(8,0))
-                if remind < datetime.now(): remind += timedelta(days=1)
-                _ = upsert_auto_reminder('habit',new_id,f'Habitude du jour : {title.strip()}',f'Fréquence : {freq}. {notes.strip()}',remind.strftime('%Y-%m-%d %H:%M:%S'),'Quotidien')
-                _magic_result = st.rerun()
-            else: _magic_result = st.error('Saisis le nom de l’habitude.')
-        habits=read_df('SELECT * FROM habits WHERE active=1 ORDER BY title')
-        if habits.empty: _magic_result = st.info('Aucune habitude suivie.')
-        for r in habits.itertuples():
-            a,b,c=st.columns([3,2,1]); _magic_result = a.write(f"**{r.title}** · {r.frequency}"); _magic_result = b.caption(r.notes)
-            done=read_df('SELECT id FROM habit_logs WHERE habit_id=? AND log_date=? AND done=1',(r.id,date.today().isoformat()))
-            if not done.empty: _magic_result = c.success('Fait aujourd’hui')
-            elif c.button('Marquer fait',key=f'habitdone_{r.id}'):
-                _ = run('INSERT OR REPLACE INTO habit_logs(habit_id,log_date,done) VALUES(?,?,1)',(r.id,date.today().isoformat())); _magic_result = st.rerun()
-            last7=read_df('SELECT COUNT(*) AS n FROM habit_logs WHERE habit_id=? AND done=1 AND log_date>=?',(r.id,(date.today()-timedelta(days=6)).isoformat())).iloc[0]['n']
-            _magic_result = st.caption(f'Régularité sur les 7 derniers jours : {int(last7)}/7')
-            if st.button('Supprimer habitude',key=f'habitdel_{r.id}'): _ = run('DELETE FROM habits WHERE id=?',(r.id,)); _magic_result = st.rerun()
-    with tabs[2]:
-        with st.form('budget_form'):
-            a,b,c=st.columns(3); day=a.date_input('Date',date.today()); kind=b.selectbox('Mouvement',['Dépense','Revenu']); amount=c.number_input('Montant (FCFA)',min_value=0.,step=500.)
-            d,e=st.columns(2); category=d.selectbox('Catégorie',['Alimentation','Transport','Logement','Études','Téléphone / Internet','Santé','Loisirs','Salaire / aide','Épargne','Autre']); desc=e.text_input('Description')
-            ok=st.form_submit_button('Enregistrer le mouvement')
-        if ok:
-            if amount>0: _ = run('INSERT INTO budgets(entry_date,kind,category,amount,description) VALUES(?,?,?,?,?)',(day.isoformat(),kind,category,amount,desc.strip())); _magic_result = st.rerun()
-            else: _magic_result = st.error('Le montant doit être supérieur à zéro.')
-        budget=read_df('SELECT * FROM budgets ORDER BY entry_date DESC,id DESC')
-        if not budget.empty:
-            incomes=budget.loc[budget.kind=='Revenu','amount'].sum(); expenses=budget.loc[budget.kind=='Dépense','amount'].sum(); a,b,c=st.columns(3)
-            with a: _ = card('Revenus',f'{incomes:,.0f} FCFA')
-            with b: _ = card('Dépenses',f'{expenses:,.0f} FCFA')
-            with c: _ = card('Solde enregistré',f'{incomes-expenses:,.0f} FCFA')
-            _ = show_dataframe(budget,use_container_width=True,hide_index=True); _ = export_csv(budget,'le budget','budget')
-            opts={f"#{r.id} · {r.entry_date} · {r.kind} · {r.amount:g} FCFA":int(r.id) for r in budget.itertuples()}; pick=st.selectbox('Mouvement à supprimer',list(opts))
-            if st.button('Supprimer le mouvement'): _ = run('DELETE FROM budgets WHERE id=?',(opts[pick],)); _magic_result = st.rerun()
-        else: _magic_result = st.info('Aucun mouvement saisi. Le solde est calculé uniquement à partir des mouvements enregistrés ici.')
-    with tabs[3]:
-        with st.form('life_task_form'):
-            a,b,c=st.columns(3); title=a.text_input('Tâche / démarche *'); due=b.date_input('Date limite',date.today()+timedelta(days=1)); priority=c.selectbox('Priorité',['Basse','Normale','Haute','Urgente'])
-            category=st.selectbox('Domaine',['Administratif','Études','Famille','Finances','Projet','Personnel','Santé','Travail']); notes=st.text_area('Détails / pièces à prévoir'); ok=st.form_submit_button('Ajouter à ma liste')
-        if ok:
-            if title.strip():
-                _ = run('INSERT INTO tasks(title,due_date,priority,status,category,notes) VALUES(?,?,?,?,?,?)',(title.strip(),due.isoformat(),priority,'À faire',category,notes.strip()))
-                new_id=int(read_df('SELECT id FROM tasks WHERE title=? ORDER BY id DESC LIMIT 1',(title.strip(),)).iloc[0]['id'])
-                remind=datetime.combine(max(date.today(), due-timedelta(days=1)), time(8,0))
-                if remind < datetime.now(): remind=datetime.combine(due,time(8,0))
-                _ = upsert_auto_reminder('task',new_id,f'Échéance : {title.strip()}',f'Priorité : {priority}. Domaine : {category}. {notes.strip()}',remind.strftime('%Y-%m-%d %H:%M:%S'))
-                _magic_result = st.rerun()
-            else: _magic_result = st.error('Saisis le titre de la tâche.')
-        tasks=read_df("SELECT * FROM tasks ORDER BY CASE priority WHEN 'Urgente' THEN 1 WHEN 'Haute' THEN 2 WHEN 'Normale' THEN 3 ELSE 4 END, due_date")
-        if not tasks.empty:
-            _ = show_dataframe(tasks[['id','title','due_date','priority','status','category','notes']],use_container_width=True,hide_index=True)
-            opts={f"#{r.id} · {r.title}":int(r.id) for r in tasks.itertuples()}; sel=st.selectbox('Tâche à mettre à jour',list(opts)); tid=opts[sel]
-            status=st.selectbox('Nouveau statut',['À faire','En cours','Terminée'],key='life_task_status')
-            if st.button('Enregistrer le statut',key='life_task_save'): _ = run('UPDATE tasks SET status=? WHERE id=?',(status,tid)); _magic_result = st.rerun()
-            if st.button('Supprimer cette tâche',key='life_task_delete'): _ = run('DELETE FROM tasks WHERE id=?',(tid,)); _magic_result = st.rerun()
-        else: _magic_result = st.info('Ta liste est vide.')
-    with tabs[4]:
-        with st.form('note_form'):
-            title=st.text_input('Titre de la note *'); category=st.selectbox('Catégorie',['Idée','Personnel','Études','Projet','Rappel','Journal','Autre']); content=st.text_area('Contenu',height=140)
-            if category == 'Rappel':
-                a,b=st.columns(2); reminder_date=a.date_input('Date du rappel',date.today()+timedelta(days=1)); reminder_time=b.time_input('Heure du rappel',time(8,0))
-            else:
-                reminder_date=None; reminder_time=None
-            ok=st.form_submit_button('Enregistrer la note')
-        if ok:
-            if title.strip():
-                rd=reminder_date.isoformat() if reminder_date else ''
-                rt=reminder_time.strftime('%H:%M') if reminder_time else '08:00'
-                _ = run('INSERT INTO life_notes(title,category,content,reminder_date,reminder_time) VALUES(?,?,?,?,?)',(title.strip(),category,content.strip(),rd,rt))
-                new_id=int(read_df('SELECT id FROM life_notes WHERE title=? ORDER BY id DESC LIMIT 1',(title.strip(),)).iloc[0]['id'])
-                if category == 'Rappel' and rd:
-                    dt=datetime.combine(reminder_date,reminder_time)
-                    _ = upsert_auto_reminder('note',new_id,f'Note à ne pas oublier : {title.strip()}',content.strip(),dt.strftime('%Y-%m-%d %H:%M:%S'))
-                    _magic_result = st.success('Note enregistrée et rappel automatiquement programmé.')
-                _magic_result = st.rerun()
-            else: _magic_result = st.error('Le titre est obligatoire.')
-        notes=read_df('SELECT * FROM life_notes ORDER BY created_at DESC')
-        if notes.empty: _magic_result = st.info('Aucune note personnelle.')
-        for r in notes.itertuples():
-            with st.container(border=True):
-                _magic_result = st.markdown(f'**{r.title}** · {r.category}'); _magic_result = st.write(r.content)
-                if r.category == 'Rappel' and getattr(r, 'reminder_date', ''): _magic_result = st.caption(f"🔔 Rappel prévu le {r.reminder_date} à {getattr(r, 'reminder_time', '08:00')}")
-                if st.button('Supprimer la note',key=f'note_del_{r.id}'): _ = run('DELETE FROM life_notes WHERE id=?',(r.id,)); _magic_result = st.rerun()
-    with tabs[5]:
-        with st.form('contact_form'):
-            a,b=st.columns(2); name=a.text_input('Nom / organisation *'); role=b.text_input('Rôle / relation'); c,d=st.columns(2); phone=c.text_input('Téléphone'); email=d.text_input('E-mail'); notes=st.text_area('Notes de contact'); ok=st.form_submit_button('Enregistrer le contact')
-        if ok:
-            if name.strip(): _ = run('INSERT INTO contacts(name,role,phone,email,notes) VALUES(?,?,?,?,?)',(name.strip(),role.strip(),phone.strip(),email.strip(),notes.strip())); _magic_result = st.rerun()
-            else: _magic_result = st.error('Le nom est obligatoire.')
-        contacts=read_df('SELECT * FROM contacts ORDER BY name')
-        if contacts.empty:
-            _magic_result = st.info('Aucun contact enregistré.')
-        else:
-            # Nettoyer l'affichage et ne proposer à la suppression que des IDs valides.
-            contacts_view = contacts.drop(columns=['created_at'], errors='ignore').copy()
-            for col in contacts_view.select_dtypes(include=['object']).columns:
-                contacts_view[col] = contacts_view[col].map(lambda value: display_text(value, ''))
-            _ = show_dataframe(contacts_view, use_container_width=True, hide_index=True)
-
-            if 'id' in contacts.columns:
-                contacts['_valid_id'] = pd.to_numeric(contacts['id'], errors='coerce')
-                valid_contacts = contacts[contacts['_valid_id'].notna()]
-            else:
-                valid_contacts = contacts.iloc[0:0]
-
-            opts = {}
-            for _, contact in valid_contacts.iterrows():
-                contact_id = int(contact['_valid_id'])
-                contact_name = display_text(contact.get('name', ''), 'Contact sans nom')
-                opts[f"#{contact_id} · {contact_name}"] = contact_id
-
-            if opts:
-                pick = st.selectbox('Contact à supprimer', list(opts), key='contact_delete_pick')
-                if st.button('Supprimer le contact'):
-                    _ = run('DELETE FROM contacts WHERE id=?', (opts[pick],))
+    _sequence_items = build_focus_sequence()
+    _sequence_strict = bool(st.session_state.get("issa_sequence_strict", False))
+    if _sequence_strict:
+        if not _sequence_items:
+            st.session_state["issa_sequence_strict"] = False
+            _magic_result = st.success("Parcours terminé : toutes les étapes prévues ont été validées. Na nga def, Issa — beau travail !")
+            _magic_result = st.rerun()
+        _current_step = _sequence_items[0]
+        _magic_result = st.markdown("""<div style="padding:24px;border-radius:22px;background:linear-gradient(120deg,#12392e,#27694f,#8aa96c);color:#fff;margin:12px 0"><div style="font-size:.78rem;letter-spacing:.15em;font-weight:800;opacity:.85">PARCOURS SÉQUENTIEL · MODE STRICT</div><h2 style="color:#fff;margin:.4rem 0">Une étape à la fois</h2><p style="margin:0;color:#e5f4e8">Termine cette étape pour déverrouiller automatiquement la suivante.</p></div>""", unsafe_allow_html=True)
+        with st.container(border=True):
+            _magic_result = st.caption(f"ÉTAPE ACTIVE · {_current_step['kind']} · {_current_step['scheduled']}")
+            _magic_result = st.markdown(f"## {_current_step['title']}")
+            if _current_step['details']:
+                _magic_result = st.write(_current_step['details'])
+            _magic_result = st.progress(1 / max(1, len(_sequence_items)), text=f"Étape active · {len(_sequence_items)} étape(s) restante(s)")
+            _complete_step = st.button("✅ Valider cette étape et débloquer la suivante", type="primary", use_container_width=True, key="issa_sequence_complete_step")
+        _pause_sequence = st.button("⏸️ Mettre le parcours en pause", key="issa_sequence_pause")
+        if _complete_step:
+            with connect() as _sequence_db:
+                if _current_step['source_type'] == 'task':
+                    _sequence_db.execute("UPDATE tasks SET status='Terminée' WHERE id=?", (int(_current_step['source_id']),))
+                    _sequence_db.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type='task' AND source_id=? AND status IN ('En attente','Erreur')", (int(_current_step['source_id']),))
+                else:
+                    _sequence_db.execute("INSERT OR IGNORE INTO focus_sequence_done(source_type,source_id) VALUES('event',?)", (int(_current_step['source_id']),))
+            _magic_result = st.toast("Étape validée. La suivante est maintenant débloquée.")
+            _magic_result = st.rerun()
+        if _pause_sequence:
+            st.session_state["issa_sequence_strict"] = False
+            _magic_result = st.rerun()
+        st.stop()
+    else:
+        with st.container(border=True):
+            _magic_result = st.markdown("### 🎯 Parcours automatique, étape par étape")
+            if _sequence_items:
+                _next_step = _sequence_items[0]
+                _magic_result = st.caption(f"Prochaine étape · {_next_step['kind']} · {_next_step['scheduled']}")
+                _magic_result = st.markdown(f"**{_next_step['title']}**")
+                if _next_step['details']:
+                    _magic_result = st.caption(_next_step['details'])
+                _magic_result = st.write(f"{len(_sequence_items)} étape(s) en attente. Le parcours suit automatiquement les dates de ton agenda et de tes tâches.")
+                if st.button("🔒 Démarrer le parcours strict", type="primary", key="issa_sequence_start"):
+                    st.session_state["issa_sequence_strict"] = True
+                    if _next_step['source_type'] == 'task':
+                        _ = run("UPDATE tasks SET status='En cours' WHERE id=? AND status IN ('À faire','En attente')", (int(_next_step['source_id']),))
                     _magic_result = st.rerun()
             else:
-                _magic_result = st.info('Aucun contact avec un identifiant valide à supprimer. Les contacts affichés sont conservés.')
-    with tabs[6]:
-        _magic_result = st.markdown('### Petit bilan personnel')
-        _magic_result = st.caption('Cet espace aide à organiser tes habitudes, sans remplacer un professionnel de santé. Choisis des routines réalistes et adapte-les à tes contraintes.')
-        prompts={'Début de journée':'Quelle est ma priorité du jour ?','Études':'Quel sujet dois-je comprendre plutôt que simplement mémoriser ?','Équilibre':'Ai-je prévu une pause, du sommeil et un moment sans écran ?','Fin de journée':'Qu’ai-je accompli ? Quelle est la prochaine petite étape ?'}
-        for label,q in prompts.items():
-            with st.expander(label): _magic_result = st.write(q); _magic_result = st.text_area('Ma réponse',key='routine_'+norm(label))
-        _magic_result = st.markdown('**Routine suggérée :** planifier 3 priorités, travailler en séances de 25–50 minutes, faire une courte pause, puis noter ce qui reste à revoir.')
+                _magic_result = st.info("Aucune étape ouverte. Ajoute une tâche ou une séance à venir dans ton planning pour démarrer automatiquement le parcours.")
+        tabs=st.tabs(['🎯 Objectifs','✅ Habitudes','💰 Budget','📝 Tâches & démarches','📓 Notes personnelles','👥 Contacts','🌿 Bien-être & routines'])
+        with tabs[0]:
+            with st.form('goal_form'):
+                a,b,c=st.columns(3); title=a.text_input('Objectif *'); category=b.selectbox('Domaine',['Études','Carrière','Finances','Famille','Personnel','Projet','Santé / équilibre']); target=c.date_input('Date cible',date.today()+timedelta(days=30))
+                progress=st.slider('Progression actuelle (%)',0,100,0); notes=st.text_area('Étapes / détails'); ok=st.form_submit_button('Ajouter l’objectif',type='primary')
+            if ok:
+                if title.strip():
+                    _ = run('INSERT INTO goals(title,category,target_date,progress,notes) VALUES(?,?,?,?,?)',(title.strip(),category,target.isoformat(),progress,notes.strip()))
+                    new_id=int(read_df('SELECT id FROM goals WHERE title=? ORDER BY id DESC LIMIT 1',(title.strip(),)).iloc[0]['id'])
+                    remind=datetime.combine(max(date.today(),target-timedelta(days=1)),time(8,0))
+                    if remind < datetime.now(): remind=datetime.combine(target,time(8,0))
+                    _ = upsert_auto_reminder('goal',new_id,f'Objectif à suivre : {title.strip()}',f'Domaine : {category}. Progression : {progress} %. {notes.strip()}',remind.strftime('%Y-%m-%d %H:%M:%S'))
+                    _magic_result = st.rerun()
+                else: _magic_result = st.error('Donne un titre à ton objectif.')
+            goals=read_df('SELECT * FROM goals ORDER BY target_date')
+            if not goals.empty:
+                for r in goals.itertuples():
+                    with st.container(border=True):
+                        _magic_result = st.write(f"**{r.title}** · {r.category} · cible : {r.target_date or 'non définie'}")
+                        new=st.slider(f'Progression — {r.title}',0,100,int(r.progress),key=f'goalprog_{r.id}')
+                        if st.button('Mettre à jour',key=f'goalupdate_{r.id}'): _ = run('UPDATE goals SET progress=? WHERE id=?',(new,r.id)); _magic_result = st.rerun()
+                        if r.notes: _magic_result = st.caption(r.notes)
+                        if st.button('Supprimer objectif',key=f'goaldel_{r.id}'): _ = run('DELETE FROM goals WHERE id=?',(r.id,)); _magic_result = st.rerun()
+        with tabs[1]:
+            with st.form('habit_form'):
+                title=st.text_input('Habitude à suivre *',placeholder='Ex. lire 20 minutes, réviser, ranger le bureau'); freq=st.selectbox('Fréquence',['Quotidienne','En semaine','Hebdomadaire']); notes=st.text_input('Pourquoi / rappel'); ok=st.form_submit_button('Créer une habitude')
+            if ok:
+                if title.strip():
+                    _ = run('INSERT INTO habits(title,frequency,notes) VALUES(?,?,?)',(title.strip(),freq,notes.strip()))
+                    new_id=int(read_df('SELECT id FROM habits WHERE title=? ORDER BY id DESC LIMIT 1',(title.strip(),)).iloc[0]['id'])
+                    remind=datetime.combine(date.today(),time(8,0))
+                    if remind < datetime.now(): remind += timedelta(days=1)
+                    _ = upsert_auto_reminder('habit',new_id,f'Habitude du jour : {title.strip()}',f'Fréquence : {freq}. {notes.strip()}',remind.strftime('%Y-%m-%d %H:%M:%S'),'Quotidien')
+                    _magic_result = st.rerun()
+                else: _magic_result = st.error('Saisis le nom de l’habitude.')
+            habits=read_df('SELECT * FROM habits WHERE active=1 ORDER BY title')
+            if habits.empty: _magic_result = st.info('Aucune habitude suivie.')
+            for r in habits.itertuples():
+                a,b,c=st.columns([3,2,1]); _magic_result = a.write(f"**{r.title}** · {r.frequency}"); _magic_result = b.caption(r.notes)
+                done=read_df('SELECT id FROM habit_logs WHERE habit_id=? AND log_date=? AND done=1',(r.id,date.today().isoformat()))
+                if not done.empty: _magic_result = c.success('Fait aujourd’hui')
+                elif c.button('Marquer fait',key=f'habitdone_{r.id}'):
+                    _ = run('INSERT OR REPLACE INTO habit_logs(habit_id,log_date,done) VALUES(?,?,1)',(r.id,date.today().isoformat())); _magic_result = st.rerun()
+                last7=read_df('SELECT COUNT(*) AS n FROM habit_logs WHERE habit_id=? AND done=1 AND log_date>=?',(r.id,(date.today()-timedelta(days=6)).isoformat())).iloc[0]['n']
+                _magic_result = st.caption(f'Régularité sur les 7 derniers jours : {int(last7)}/7')
+                if st.button('Supprimer habitude',key=f'habitdel_{r.id}'): _ = run('DELETE FROM habits WHERE id=?',(r.id,)); _magic_result = st.rerun()
+        with tabs[2]:
+            with st.form('budget_form'):
+                a,b,c=st.columns(3); day=a.date_input('Date',date.today()); kind=b.selectbox('Mouvement',['Dépense','Revenu']); amount=c.number_input('Montant (FCFA)',min_value=0.,step=500.)
+                d,e=st.columns(2); category=d.selectbox('Catégorie',['Alimentation','Transport','Logement','Études','Téléphone / Internet','Santé','Loisirs','Salaire / aide','Épargne','Autre']); desc=e.text_input('Description')
+                ok=st.form_submit_button('Enregistrer le mouvement')
+            if ok:
+                if amount>0: _ = run('INSERT INTO budgets(entry_date,kind,category,amount,description) VALUES(?,?,?,?,?)',(day.isoformat(),kind,category,amount,desc.strip())); _magic_result = st.rerun()
+                else: _magic_result = st.error('Le montant doit être supérieur à zéro.')
+            budget=read_df('SELECT * FROM budgets ORDER BY entry_date DESC,id DESC')
+            if not budget.empty:
+                incomes=budget.loc[budget.kind=='Revenu','amount'].sum(); expenses=budget.loc[budget.kind=='Dépense','amount'].sum(); a,b,c=st.columns(3)
+                with a: _ = card('Revenus',f'{incomes:,.0f} FCFA')
+                with b: _ = card('Dépenses',f'{expenses:,.0f} FCFA')
+                with c: _ = card('Solde enregistré',f'{incomes-expenses:,.0f} FCFA')
+                _ = show_dataframe(budget,use_container_width=True,hide_index=True); _ = export_csv(budget,'le budget','budget')
+                opts={f"#{r.id} · {r.entry_date} · {r.kind} · {r.amount:g} FCFA":int(r.id) for r in budget.itertuples()}; pick=st.selectbox('Mouvement à supprimer',list(opts))
+                if st.button('Supprimer le mouvement'): _ = run('DELETE FROM budgets WHERE id=?',(opts[pick],)); _magic_result = st.rerun()
+            else: _magic_result = st.info('Aucun mouvement saisi. Le solde est calculé uniquement à partir des mouvements enregistrés ici.')
+        with tabs[3]:
+            with st.form('life_task_form'):
+                a,b,c=st.columns(3); title=a.text_input('Tâche / démarche *'); due=b.date_input('Date limite',date.today()+timedelta(days=1)); priority=c.selectbox('Priorité',['Basse','Normale','Haute','Urgente'])
+                category=st.selectbox('Domaine',['Administratif','Études','Famille','Finances','Projet','Personnel','Santé','Travail']); notes=st.text_area('Détails / pièces à prévoir'); ok=st.form_submit_button('Ajouter à ma liste')
+            if ok:
+                if title.strip():
+                    _ = run('INSERT INTO tasks(title,due_date,priority,status,category,notes) VALUES(?,?,?,?,?,?)',(title.strip(),due.isoformat(),priority,'À faire',category,notes.strip()))
+                    new_id=int(read_df('SELECT id FROM tasks WHERE title=? ORDER BY id DESC LIMIT 1',(title.strip(),)).iloc[0]['id'])
+                    remind=datetime.combine(max(date.today(), due-timedelta(days=1)), time(8,0))
+                    if remind < datetime.now(): remind=datetime.combine(due,time(8,0))
+                    _ = upsert_auto_reminder('task',new_id,f'Échéance : {title.strip()}',f'Priorité : {priority}. Domaine : {category}. {notes.strip()}',remind.strftime('%Y-%m-%d %H:%M:%S'))
+                    _magic_result = st.rerun()
+                else: _magic_result = st.error('Saisis le titre de la tâche.')
+            tasks=read_df("SELECT * FROM tasks ORDER BY CASE priority WHEN 'Urgente' THEN 1 WHEN 'Haute' THEN 2 WHEN 'Normale' THEN 3 ELSE 4 END, due_date")
+            if not tasks.empty:
+                _ = show_dataframe(tasks[['id','title','due_date','priority','status','category','notes']],use_container_width=True,hide_index=True)
+                opts={f"#{r.id} · {r.title}":int(r.id) for r in tasks.itertuples()}; sel=st.selectbox('Tâche à mettre à jour',list(opts)); tid=opts[sel]
+                status=st.selectbox('Nouveau statut',['À faire','En cours','Terminée'],key='life_task_status')
+                if st.button('Enregistrer le statut',key='life_task_save'): _ = run('UPDATE tasks SET status=? WHERE id=?',(status,tid)); _magic_result = st.rerun()
+                if st.button('Supprimer cette tâche',key='life_task_delete'): _ = run('DELETE FROM tasks WHERE id=?',(tid,)); _magic_result = st.rerun()
+            else: _magic_result = st.info('Ta liste est vide.')
+        with tabs[4]:
+            with st.form('note_form'):
+                title=st.text_input('Titre de la note *'); category=st.selectbox('Catégorie',['Idée','Personnel','Études','Projet','Rappel','Journal','Autre']); content=st.text_area('Contenu',height=140)
+                if category == 'Rappel':
+                    a,b=st.columns(2); reminder_date=a.date_input('Date du rappel',date.today()+timedelta(days=1)); reminder_time=b.time_input('Heure du rappel',time(8,0))
+                else:
+                    reminder_date=None; reminder_time=None
+                ok=st.form_submit_button('Enregistrer la note')
+            if ok:
+                if title.strip():
+                    rd=reminder_date.isoformat() if reminder_date else ''
+                    rt=reminder_time.strftime('%H:%M') if reminder_time else '08:00'
+                    _ = run('INSERT INTO life_notes(title,category,content,reminder_date,reminder_time) VALUES(?,?,?,?,?)',(title.strip(),category,content.strip(),rd,rt))
+                    new_id=int(read_df('SELECT id FROM life_notes WHERE title=? ORDER BY id DESC LIMIT 1',(title.strip(),)).iloc[0]['id'])
+                    if category == 'Rappel' and rd:
+                        dt=datetime.combine(reminder_date,reminder_time)
+                        _ = upsert_auto_reminder('note',new_id,f'Note à ne pas oublier : {title.strip()}',content.strip(),dt.strftime('%Y-%m-%d %H:%M:%S'))
+                        _magic_result = st.success('Note enregistrée et rappel automatiquement programmé.')
+                    _magic_result = st.rerun()
+                else: _magic_result = st.error('Le titre est obligatoire.')
+            notes=read_df('SELECT * FROM life_notes ORDER BY created_at DESC')
+            if notes.empty: _magic_result = st.info('Aucune note personnelle.')
+            for r in notes.itertuples():
+                with st.container(border=True):
+                    _magic_result = st.markdown(f'**{r.title}** · {r.category}'); _magic_result = st.write(r.content)
+                    if r.category == 'Rappel' and getattr(r, 'reminder_date', ''): _magic_result = st.caption(f"🔔 Rappel prévu le {r.reminder_date} à {getattr(r, 'reminder_time', '08:00')}")
+                    if st.button('Supprimer la note',key=f'note_del_{r.id}'): _ = run('DELETE FROM life_notes WHERE id=?',(r.id,)); _magic_result = st.rerun()
+        with tabs[5]:
+            with st.form('contact_form'):
+                a,b=st.columns(2); name=a.text_input('Nom / organisation *'); role=b.text_input('Rôle / relation'); c,d=st.columns(2); phone=c.text_input('Téléphone'); email=d.text_input('E-mail'); notes=st.text_area('Notes de contact'); ok=st.form_submit_button('Enregistrer le contact')
+            if ok:
+                if name.strip(): _ = run('INSERT INTO contacts(name,role,phone,email,notes) VALUES(?,?,?,?,?)',(name.strip(),role.strip(),phone.strip(),email.strip(),notes.strip())); _magic_result = st.rerun()
+                else: _magic_result = st.error('Le nom est obligatoire.')
+            contacts=read_df('SELECT * FROM contacts ORDER BY name')
+            if contacts.empty:
+                _magic_result = st.info('Aucun contact enregistré.')
+            else:
+                # Nettoyer l'affichage et ne proposer à la suppression que des IDs valides.
+                contacts_view = contacts.drop(columns=['created_at'], errors='ignore').copy()
+                for col in contacts_view.select_dtypes(include=['object']).columns:
+                    contacts_view[col] = contacts_view[col].map(lambda value: display_text(value, ''))
+                _ = show_dataframe(contacts_view, use_container_width=True, hide_index=True)
 
-# ---------- Rappels automatiques issus des rubriques enregistrées ----------
+                if 'id' in contacts.columns:
+                    contacts['_valid_id'] = pd.to_numeric(contacts['id'], errors='coerce')
+                    valid_contacts = contacts[contacts['_valid_id'].notna()]
+                else:
+                    valid_contacts = contacts.iloc[0:0]
+
+                opts = {}
+                for _, contact in valid_contacts.iterrows():
+                    contact_id = int(contact['_valid_id'])
+                    contact_name = display_text(contact.get('name', ''), 'Contact sans nom')
+                    opts[f"#{contact_id} · {contact_name}"] = contact_id
+
+                if opts:
+                    pick = st.selectbox('Contact à supprimer', list(opts), key='contact_delete_pick')
+                    if st.button('Supprimer le contact'):
+                        _ = run('DELETE FROM contacts WHERE id=?', (opts[pick],))
+                        _magic_result = st.rerun()
+                else:
+                    _magic_result = st.info('Aucun contact avec un identifiant valide à supprimer. Les contacts affichés sont conservés.')
+        with tabs[6]:
+            _magic_result = st.markdown('### Petit bilan personnel')
+            _magic_result = st.caption('Cet espace aide à organiser tes habitudes, sans remplacer un professionnel de santé. Choisis des routines réalistes et adapte-les à tes contraintes.')
+            prompts={'Début de journée':'Quelle est ma priorité du jour ?','Études':'Quel sujet dois-je comprendre plutôt que simplement mémoriser ?','Équilibre':'Ai-je prévu une pause, du sommeil et un moment sans écran ?','Fin de journée':'Qu’ai-je accompli ? Quelle est la prochaine petite étape ?'}
+            for label,q in prompts.items():
+                with st.expander(label): _magic_result = st.write(q); _magic_result = st.text_area('Ma réponse',key='routine_'+norm(label))
+            _magic_result = st.markdown('**Routine suggérée :** planifier 3 priorités, travailler en séances de 25–50 minutes, faire une courte pause, puis noter ce qui reste à revoir.')
+
+    # ---------- Rappels automatiques issus des rubriques enregistrées ----------
 elif page=="Rappels automatiques":
     _ = header('SECRÉTARIAT PERSONNEL','Rappels automatiques par e-mail 🔔','Les rappels sont générés à partir de ce que tu enregistres déjà dans les onglets : agenda, tâches, objectifs, habitudes, formations et opportunités. Tu n’as pas à ressaisir les mêmes informations ici.')
     try:
