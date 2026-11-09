@@ -1499,7 +1499,8 @@ PAGE_ROLE={
     "Centre de productivité XXL":"Centre centralisé : recherche globale, capture rapide, projets, flashcards, concentration, journal et organisation quotidienne",
     "Paramètres & sauvegarde":"Secrétaire chargé des paramètres, des exports et de la sauvegarde des données"
 }
-_magic_result = st.markdown('''<div class="issa-brand"><span class="issa-badge">Organisation · Pédagogie · Assistance</span><h1>🗂️ Secrétaire Issa</h1><p>Votre espace de secrétariat intelligent : chaque espace correspond à un secrétaire chargé d’une mission précise.</p></div>''',unsafe_allow_html=True)
+if not st.session_state.get("issa_focus_active", False):
+    _magic_result = st.markdown('''<div class="issa-brand"><span class="issa-badge">Organisation · Pédagogie · Assistance</span><h1>🗂️ Secrétaire Issa</h1><p>Votre espace de secrétariat intelligent : chaque espace correspond à un secrétaire chargé d’une mission précise.</p></div>''',unsafe_allow_html=True)
 # Navigation vocale bilingue + lanceur d'applications externes. Les applications s'ouvrent dans un nouvel onglet via des liens explicites.
 _NAV_APPS = {
     "Gmail": ("https://mail.google.com/", ("gmail", "mail", "e mail", "email", "courriel", "saññ email", "email yi")),
@@ -1668,193 +1669,268 @@ if _focus_active:
     </script></body></html>"""
     _focus_html = _focus_html.replace("__TARGET__", str(int(_focus_until*1000))).replace("__ACTIVITY__", _focus_activity_json).replace("__QUOTES__", _focus_motivation_json)
     _magic_result = st.components.v1.html(_focus_html, height=450, scrolling=False)
-    _magic_result = st.info("Pendant cette session, seuls les outils de recherche ci-dessous et ton document de travail sont proposés dans l’application.")
-    _focus_control_cols = st.columns(2)
-    if _focus_control_cols[0].button("⏸️ Mettre en pause", key="focus_pause_locked", use_container_width=True):
-        st.session_state["issa_focus_elapsed_seconds"] = _focus_elapsed_seconds()
-        st.session_state["issa_focus_status"] = "paused"
-        st.session_state["issa_focus_active"] = False
-        st.session_state["issa_focus_until"] = 0
-        _magic_result = st.rerun()
-    if _focus_control_cols[1].button("⏹️ Terminer et enregistrer", key="focus_finish_locked", type="primary", use_container_width=True):
-        try:
-            _focus_seconds = _focus_elapsed_seconds()
-            _ = _finish_focus_session(_focus_seconds)
-            _magic_result = st.success(f"Séance enregistrée : {_focus_seconds // 60} min {_focus_seconds % 60} s.")
-        except Exception as _focus_save_error:
-            _magic_result = st.error(f"Impossible d’enregistrer cette séance : {str(_focus_save_error)[:200]}")
-        _magic_result = st.rerun()
-    _focus_cols = st.columns(2)
-    with _focus_cols[0]:
-        _magic_result = st.link_button("🤖 Ouvrir ChatGPT", "https://chatgpt.com/", use_container_width=True)
-    with _focus_cols[1]:
-        _magic_result = st.link_button("🔎 Recherche Google (dans le navigateur)", "https://www.google.com/", use_container_width=True)
-    _magic_result = st.caption("Ces liens s’ouvrent dans ton navigateur par défaut. Si Chrome est ton navigateur par défaut, ils s’ouvriront dans Chrome ; un site hébergé ne peut pas imposer le lancement d’une application locale.")
-    _magic_result = st.markdown("### 📄 Document de travail")
-    _active_upload = st.file_uploader("Ouvrir un document (TXT, MD, PDF ou DOCX)", type=["txt","md","pdf","docx"], key="issa_focus_active_upload")
-    if _active_upload is not None:
-        _raw = _active_upload.getvalue()
-        _text = ""
-        if _active_upload.name.lower().endswith((".txt", ".md")):
-            _text = _raw.decode("utf-8", errors="replace")
-        elif _active_upload.name.lower().endswith(".pdf"):
+    _focus_started_at = float(st.session_state.get("issa_focus_segment_started", time_module.time()) or time_module.time())
+    _focus_total = int(st.session_state.get("issa_focus_duration_seconds", 0) or 0)
+    _focus_notes_text = str(st.session_state.get("issa_focus_notes", "") or "").strip()
+    with st.container(border=True):
+        _magic_result = st.caption("SESSION EN COURS · MODE STRICT")
+        _focus_meta_cols = st.columns(2)
+        with _focus_meta_cols[0]:
+            _magic_result = st.metric("Durée prévue", f"{_focus_total // 60} min")
+        with _focus_meta_cols[1]:
+            _magic_result = st.metric("Fin prévue", datetime.fromtimestamp(_focus_until, ZoneInfo("Africa/Dakar")).strftime("%H:%M"))
+        if _focus_notes_text:
+            _magic_result = st.markdown("**Détails de la session**")
+            _magic_result = st.write(_focus_notes_text)
+        if st.button("⏹️ Arrêter la session et enregistrer", key="focus_finish_locked", type="primary", use_container_width=True):
             try:
-                import fitz
-                _pdf = fitz.open(stream=_raw, filetype="pdf")
-                _text = "\\n\\n".join(pg.get_text() for pg in _pdf)
-            except Exception:
-                _magic_result = st.warning("Aperçu PDF indisponible : tu peux tout de même télécharger le fichier ci-dessous.")
-        elif _active_upload.name.lower().endswith(".docx"):
-            try:
-                from docx import Document
-                _doc = Document(io.BytesIO(_raw))
-                _text = "\\n".join(par.text for par in _doc.paragraphs)
-            except Exception:
-                _magic_result = st.warning("Aperçu DOCX indisponible : tu peux tout de même télécharger le fichier ci-dessous.")
-        if _text:
-            st.session_state["issa_focus_document_text"] = _text
-            st.session_state["issa_focus_document_name"] = _active_upload.name
-        _magic_result = st.download_button("⬇️ Télécharger / ouvrir le fichier original", data=_raw, file_name=_active_upload.name, use_container_width=True)
-    _doc_text = st.text_area("Espace de lecture, d’étude ou de saisie", value=st.session_state.get("issa_focus_document_text", ""), height=360, key="issa_focus_document_editor", placeholder="Colle tes notes, rédige ton devoir ou travaille sur le texte extrait du document…")
-    st.session_state["issa_focus_document_text"] = _doc_text
-    _magic_result = st.download_button("💾 Enregistrer mon travail en fichier texte", data=_doc_text.encode("utf-8"), file_name="mon_travail_concentration.txt", mime="text/plain", use_container_width=True, disabled=not bool(_doc_text.strip()))
-    _magic_result = st.caption("Le texte saisi ici reste dans la session de cette application ; télécharge régulièrement ton travail pour en garder une copie.")
-    _left, _right = st.columns([3,1])
-    with _left:
-        _magic_result = st.caption("Le verrouillage empêche de naviguer vers les autres rubriques de Secrétaire Issa pendant le compte à rebours. Il ne bloque pas le système d’exploitation ni les autres applications du PC.")
-    with _right:
-        if st.button("Arrêt d’urgence", type="secondary", use_container_width=True):
-            st.session_state["issa_focus_active"] = False
-            st.session_state["issa_focus_until"] = 0
-            st.session_state["issa_focus_logged"] = True
-            _magic_result = st.warning("Session interrompue manuellement.")
-            _magic_result = st.rerun()
-    _magic_result = st.stop()
-
+                _focus_seconds = _focus_elapsed_seconds()
+                _ = _finish_focus_session(_focus_seconds)
+                _magic_result = st.rerun()
+            except Exception as _focus_save_error:
+                _magic_result = st.error(f"Impossible d’enregistrer cette séance : {str(_focus_save_error)[:200]}")
+    st.stop()
 # ---------- Centre de lancement XXL : sites, applications web et fonctions internes ----------
+
 _magic_result = st.markdown('<div class="issa-nav-title">🚀 Lanceur universel XXL · Applications, sites et outils</div>', unsafe_allow_html=True)
+
 with st.container(border=True):
+
     _magic_result = st.markdown("**Ouvrir rapidement un service**")
+
     _launcher_categories = {
+
         "Communication": ["Gmail", "WhatsApp Web", "Telegram Web", "Outlook", "Microsoft Teams", "Zoom", "Google Meet", "Discord"],
+
         "Google & Microsoft": ["Google Drive", "Google Calendar", "Google Docs", "Google Sheets", "Google Slides", "Google Photos", "Microsoft 365", "OneDrive", "Microsoft Word en ligne", "Microsoft Excel en ligne", "PowerPoint en ligne"],
+
         "Réseaux & médias": ["YouTube", "Facebook", "Instagram", "TikTok", "Spotify", "LinkedIn", "X", "Reddit"],
+
         "Études & création": ["ChatGPT", "Canva", "Notion", "Coursera", "Moodle", "Khan Academy", "Wikipedia", "DeepL", "Google Translate", "GitHub"],
+
         "Web & achats": ["Google Search", "Google Maps", "Amazon"],
+
     }
+
     _launch_tab_names = list(_launcher_categories)
+
     _launch_tabs = st.tabs(_launch_tab_names)
+
     for _tab, _category in zip(_launch_tabs, _launch_tab_names):
+
         with _tab:
+
             _names = _launcher_categories[_category]
+
             _cols = st.columns(4)
+
             for _idx, _app in enumerate(_names):
+
                 _app_url = _NAV_APPS[_app][0]
+
                 with _cols[_idx % 4]:
+
                     _magic_result = st.link_button("↗ " + _app, _app_url, use_container_width=True)
+
     _magic_result = st.markdown("**Ouvrir n’importe quel site**")
+
     _custom_site = st.text_input("Adresse du site ou nom de domaine", placeholder="Ex. : https://www.senegalservices.sn ou wikipedia.org", key="issa_custom_site")
+
     if st.button("🌐 Ouvrir ce site", key="issa_open_custom_site", disabled=not _custom_site.strip(), use_container_width=True):
+
         from urllib.parse import urlparse
+
         _candidate = _custom_site.strip()
+
         if not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", _candidate):
+
             _candidate = "https://" + _candidate
+
         _parsed = urlparse(_candidate)
+
         if _parsed.scheme in ("http", "https") and _parsed.netloc and "." in _parsed.netloc and not any(ch.isspace() for ch in _candidate):
+
             st.session_state["issa_custom_site_validated"] = _candidate
+
         else:
+
             _magic_result = st.error("Adresse invalide. Entre un domaine comme exemple.com ou une adresse commençant par https://.")
+
     if st.session_state.get("issa_custom_site_validated"):
+
         _magic_result = st.link_button("🚀 Continuer vers " + st.session_state["issa_custom_site_validated"], st.session_state["issa_custom_site_validated"], use_container_width=True)
+
     _magic_result = st.caption("Les liens ouvrent des services web dans un nouvel onglet selon le navigateur. Pour des logiciels installés sur le téléphone/PC, le navigateur exige une intégration native et une autorisation : aucun site Streamlit ne peut lancer librement toutes les applications locales.")
 
+
+
 _magic_result = st.markdown('''
+
 <div class="issa-main-menu-head">
+
   <div class="issa-main-menu-kicker">🧭 ESPACE DE NAVIGATION</div>
+
   <div class="issa-main-menu-title">MENU PRINCIPAL</div>
+
   <div class="issa-main-menu-subtitle">Choisissez un grand espace, puis son sous-espace juste en dessous.</div>
+
 </div>''',unsafe_allow_html=True)
 
+
+
 # Navigation en deux niveaux : grands onglets principaux, puis sous-onglets dédiés.
+
 _NAV_GROUPS = {
+
     "🏠 ACCUEIL": ["Vue d’ensemble"],
+
     "🎓 ESPACE ACADÉMIQUE": ["Maquettes & matières", "Emploi du temps", "Programmes de révision", "Suivi & progression"],
+
     "🤖 ASSISTANT IA": ["Assistant IA XXL"],
+
     "👤 VIE & ASSISTANCE": ["Assistant de vie", "Rappels automatiques", "Assistant e-mail & documents"],
+
     "🚀 CARRIÈRE & PRODUCTIVITÉ": ["Compétences & Carrière", "Centre de productivité XXL"],
+
     "⚙️ CONFIGURATION": ["Paramètres & sauvegarde"],
+
 }
+
 _GROUP_FOR_PAGE = {item: group for group, items in _NAV_GROUPS.items() for item in items}
+
 _focus_navigation_locked = bool(st.session_state.get("issa_focus_active", False)) and float(st.session_state.get("issa_focus_until", 0) or 0) > time_module.time()
 _sequence_navigation_locked = bool(st.session_state.get("issa_sequence_strict", False)) and not _focus_navigation_locked
+
 if _focus_navigation_locked:
     st.session_state["issa_nav_group"] = "🚀 CARRIÈRE & PRODUCTIVITÉ"
     st.session_state["issa_nav_subpage"] = "Centre de productivité XXL"
 elif _sequence_navigation_locked:
     st.session_state["issa_nav_group"] = "👤 VIE & ASSISTANCE"
     st.session_state["issa_nav_subpage"] = "Assistant de vie"
+
 _current_page = st.session_state.get("top_nav", PAGES[0])
+
 _default_group = _GROUP_FOR_PAGE.get(_current_page, next(iter(_NAV_GROUPS)))
+
 if st.session_state.get("issa_nav_group") not in _NAV_GROUPS:
+
     st.session_state["issa_nav_group"] = _default_group
 
+
+
 _magic_result = st.radio(
+
     "Grands espaces",
+
     list(_NAV_GROUPS.keys()),
+
     horizontal=True,
+
     key="issa_nav_group",
+
     label_visibility="collapsed",
+
     disabled=_focus_navigation_locked or _sequence_navigation_locked,
+
 )
+
 _active_group = st.session_state["issa_nav_group"]
+
 _subpages = _NAV_GROUPS[_active_group]
+
 if st.session_state.get("issa_nav_subpage") not in _subpages:
+
     st.session_state["issa_nav_subpage"] = _current_page if _current_page in _subpages else _subpages[0]
 
+
+
 if len(_subpages) > 1:
+
     _magic_result = st.markdown('<div class="issa-subnav-label">SOUS-ONGLETS · Choisissez une rubrique</div>', unsafe_allow_html=True)
+
     _magic_result = st.radio(
+
         "Sous-espaces",
+
         _subpages,
+
         horizontal=True,
+
         format_func=lambda x: PAGE_SHORT[x],
+
         key="issa_nav_subpage",
+
         label_visibility="collapsed",
+
         disabled=_focus_navigation_locked or _sequence_navigation_locked,
+
     )
+
 else:
+
     st.session_state["issa_nav_subpage"] = _subpages[0]
 
+
+
 page = st.session_state["issa_nav_subpage"]
+
 st.session_state["top_nav"] = page
+
 _logout_col, _empty_col = st.columns([1, 8])
+
 if _logout_col.button('🔒 Déconnexion', key='issa_logout'):
+
     st.session_state['issa_authenticated'] = False
+
     _magic_result = st.rerun()
+
 _magic_result = st.markdown(f'<div class="cc-card" style="padding:12px 16px;margin:10px 0 16px"><div class="cc-eyebrow">Votre secrétaire spécialisé</div><div style="font-size:1.05rem;font-weight:800;color:#17345c;margin-top:4px">🧭 {PAGE_ROLE[page]}</div></div>',unsafe_allow_html=True)
 
+
+
 # Assistance XXL : raccourcis d'aide utilisables sur ordinateur, tablette et mobile.
+
 with st.expander("🆘 Assistance XXL — aide rapide", expanded=False):
+
     _magic_result = st.markdown("""
+
     **Besoin d'aide ?** Choisis l'assistant adapté à ta tâche. Les raccourcis changent directement de rubrique.
+
     - **Assistant de vie** : organisation personnelle, objectifs, habitudes et tâches.
+
     - **Assistant e-mail & documents** : rédaction, messagerie et documents.
+
     - **Centre de productivité XXL** : concentration, projets, notes et outils de travail.
+
     """)
+
     _help_cols = st.columns(3)
+
     _help_targets = [
+
         ("👤 Assistant de vie", "Assistant de vie", "👤 VIE & ASSISTANCE"),
+
         ("✉️ E-mails & documents", "Assistant e-mail & documents", "👤 VIE & ASSISTANCE"),
+
         ("🧠 Productivité XXL", "Centre de productivité XXL", "🚀 CARRIÈRE & PRODUCTIVITÉ"),
+
     ]
+
     for _help_col, (_help_label, _help_page, _help_group) in zip(_help_cols, _help_targets):
+
         with _help_col:
+
             if st.button(_help_label, key="help_xxl_" + _help_page, use_container_width=True):
+
                 st.session_state["issa_nav_group"] = _help_group
+
                 st.session_state["issa_nav_subpage"] = _help_page
+
                 _magic_result = st.rerun()
 
-# RAPPELS TRANSVERSAUX : visibles depuis TOUS les onglets, sans ressaisie.
+
+
+# RAPPELS TRANSVERSAUX : visibles depuis TOUS les onglets, sauf pendant le parcours strict.
 try:
     if not st.session_state.get("issa_sequence_strict", False):
         _now = datetime.now().replace(microsecond=0)
@@ -1878,272 +1954,537 @@ except Exception:
     pass
 
 # ---------- Tableau de bord ----------
+
 if page=="Vue d’ensemble":
+
     _ = header("ESPACE CENTRAL","Ton tableau de bord 👋","Une vue simple de tes cours, de tes révisions et de tes objectifs. Les indicateurs reposent sur tes saisies réelles.")
+
     subjects=read_df('SELECT * FROM subjects'); events=read_df('SELECT * FROM events'); tasks=read_df('SELECT * FROM tasks'); logs=read_df('SELECT * FROM study_logs'); goals=read_df('SELECT * FROM goals')
+
     today=date.today().isoformat()
+
     upcoming=events[events.event_date>=today] if not events.empty else events
+
     open_tasks=tasks[~tasks.status.isin(['Terminée','Terminé','Rendue','Rendu'])] if not tasks.empty else tasks
+
     hours=float(logs.hours.sum()) if not logs.empty else 0
+
     cols=st.columns(4)
+
     with cols[0]: _ = card('Matières enregistrées',len(subjects),'Maquette pédagogique')
+
     with cols[1]: _ = card('Séances à venir',len(upcoming),'Cours, TD, TP, examens…')
+
     with cols[2]: _ = card('Tâches ouvertes',len(open_tasks),'À faire ou en cours')
+
     with cols[3]: _ = card('Heures étudiées',round(hours,1),'Journal de révision')
+
     # Résumé des rappels issus des autres rubriques, visible dès l'ouverture de l'application.
+
     try:
+
         _magic_result = ensure_reminders_schema()
+
         soon=read_df("SELECT title,details,remind_at,status FROM reminders WHERE enabled=1 AND status='En attente' ORDER BY remind_at LIMIT 6")
+
     except Exception as _reminders_dashboard_error:
+
         # Ne pas faire tomber tout le tableau de bord si une base déployée est encore incompatible.
+
         _magic_result = _NONE_RUNTIME_LOG.append({"where": "dashboard_reminders", "error": str(_reminders_dashboard_error)[:300]})
+
         soon = pd.DataFrame(columns=["title", "details", "remind_at", "status"])
+
         _magic_result = st.warning("Les rappels ne peuvent pas être chargés pour le moment. Le reste du tableau de bord reste disponible. Vérifie les logs de l’application et la connexion Supabase.")
+
     _magic_result = st.subheader('🔔 Ce que tu dois faire bientôt')
+
     if soon.empty:
+
         _magic_result = st.info('Aucun rappel en attente. Les rappels apparaîtront automatiquement dès que tu enregistres une tâche, un cours, un objectif, une formation, une opportunité ou une note de type « Rappel ».')
+
     else:
+
         for rr in soon.itertuples():
+
             _magic_result = st.markdown(f"- **{rr.title}** — {rr.remind_at}")
+
             if rr.details: _magic_result = st.caption(rr.details)
+
     _magic_result = st.subheader('📅 Prochaines séances')
+
     if upcoming.empty: _magic_result = st.info('Aucune séance future. Saisis ton emploi du temps dans l’onglet correspondant.')
+
     else: _ = show_dataframe(upcoming.sort_values(['event_date','start_time']).head(8)[['event_date','start_time','end_time','title','kind','location']].rename(columns={'event_date':'Date','start_time':'Début','end_time':'Fin','title':'Séance','kind':'Type','location':'Lieu'}),use_container_width=True,hide_index=True)
+
     a,b=st.columns(2)
+
     with a:
+
         _magic_result = st.subheader('🎯 Tâches prioritaires')
+
         if open_tasks.empty: _magic_result = st.success('Aucune tâche ouverte enregistrée.')
+
         else: _ = show_dataframe(open_tasks.head(7)[['title','due_date','priority','status']].rename(columns={'title':'Tâche','due_date':'Échéance','priority':'Priorité','status':'Statut'}),use_container_width=True,hide_index=True)
+
     with b:
+
         _magic_result = st.subheader('🚀 Objectifs personnels')
+
         if goals.empty: _magic_result = st.info('Ajoute tes objectifs dans Assistant de vie → Objectifs.')
+
         else:
+
             for r in goals.sort_values('target_date').head(5).itertuples(): _magic_result = st.write(f"**{r.title}** — {r.progress}%" ); _magic_result = st.progress(int(r.progress)/100)
+
     _magic_result = st.caption('Conseil : commence par saisir ta maquette, puis ton emploi du temps. Le programme de révision sera calculé à partir de ces informations.')
 
+
+
 # ---------- Maquettes ----------
+
 elif page=="Maquettes & matières":
+
     _ = header('PÉDAGOGIE','Maquettes & matières','Saisie manuelle, import en lot par CSV/Excel et contrôle des doublons. Les PDF peuvent être lus, mais leur conversion nécessite une vérification.')
+
     tab1,tab2,tab3=st.tabs(['➕ Saisie directe','📥 Import en lot','📚 Maquette enregistrée'])
+
     with tab1:
+
         with st.form('add_subject'):
+
             a,b,c=st.columns(3); title=a.text_input('Intitulé de la matière *'); code=b.text_input('Code matière'); semester=c.selectbox('Semestre',['À préciser']+[f'Semestre {i}' for i in range(1,7)])
+
             d,e,f=st.columns(3); ue=d.text_input('Unité d’enseignement (UE)'); ue_code=e.text_input('Code UE'); teacher=f.text_input('Enseignant')
+
             x=st.columns(6); cm=x[0].number_input('CM (h)',min_value=0.,step=1.); td=x[1].number_input('TD (h)',min_value=0.,step=1.); tp=x[2].number_input('TP (h)',min_value=0.,step=1.); tpe=x[3].number_input('TPE (h)',min_value=0.,step=1.); vht=x[4].number_input('VHT (h)',min_value=0.,step=1.); credits=x[5].number_input('Crédits',min_value=0.,step=1.)
+
             notes=st.text_area('Notes / compétences / coefficient')
+
             ok=st.form_submit_button('Enregistrer la matière',type='primary')
+
         if ok:
+
             if not title.strip(): _magic_result = st.error('L’intitulé est obligatoire.')
+
             else:
+
                 _ = run('INSERT INTO subjects(title,code,semester,ue,ue_code,credits,cm,td,tp,tpe,vht,teacher,notes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(title.strip(),code.strip(),semester,ue.strip(),ue_code.strip(),credits,cm,td,tp,tpe,vht,teacher.strip(),notes.strip()))
+
                 _magic_result = st.success('Matière enregistrée.'); _magic_result = st.rerun()
+
     with tab2:
+
         _magic_result = st.markdown('**Pour une saisie massive**, prépare un CSV ou Excel avec les colonnes ci-dessous. Les noms de colonnes sont reconnus sans tenir compte des majuscules et accents.')
+
         template=pd.DataFrame([{'title':'Pédologie','code':'AGR101','semester':'Semestre 1','ue':'Sciences du sol','ue_code':'UE01','credits':4,'cm':20,'td':10,'tp':15,'tpe':10,'vht':55,'teacher':'Nom enseignant','notes':''}])
+
         _magic_result = st.download_button('Télécharger un modèle CSV',template.to_csv(index=False).encode('utf-8-sig'),'modele_maquette.csv','text/csv')
+
         upl=st.file_uploader('Importer les matières (CSV ou XLSX)',type=['csv','xlsx'],key='subjects_bulk')
+
         if upl:
+
             try:
+
                 imp=pd.read_csv(upl) if upl.name.lower().endswith('.csv') else pd.read_excel(upl)
+
                 _ = show_dataframe(imp.head(30),use_container_width=True,hide_index=True)
+
                 if st.button('Importer les lignes affichées',type='primary'):
+
                     aliases={'intitule':'title','matiere':'title','matiere title':'title','code matiere':'code','semestre':'semester','unite enseignement':'ue','code ue':'ue_code','credits ects':'credits','enseignant':'teacher','heures cm':'cm','heures td':'td','heures tp':'tp'}
+
                     imp=imp.rename(columns={col:aliases.get(norm(col),norm(col).replace(' ','_')) for col in imp.columns})
+
                     allowed=['title','code','semester','ue','ue_code','credits','cm','td','tp','tpe','vht','teacher','notes']
+
                     count=0
+
                     for _,r in imp.iterrows():
+
                         t=str(r.get('title','')).strip()
+
                         if not t or t.lower()=='nan': continue
+
                         exists=read_df('SELECT id FROM subjects WHERE lower(title)=lower(?) AND lower(semester)=lower(?) AND lower(ue)=lower(?)',(t,str(r.get('semester','À préciser')),str(r.get('ue',''))))
+
                         if not exists.empty: continue
+
                         vals=[]
+
                         for k in allowed:
+
                             v=r.get(k,'')
+
                             if pd.isna(v): v=''
+
                             if k in ['credits','cm','td','tp','tpe','vht']:
+
                                 try: v=float(v or 0)
+
                                 except: v=0.
+
                             _magic_result = vals.append(v)
+
                         _ = run('INSERT INTO subjects(title,code,semester,ue,ue_code,credits,cm,td,tp,tpe,vht,teacher,notes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',tuple(vals))
+
                         count+=1
+
                     _magic_result = st.success(f'{count} matière(s) importée(s). Les doublons exacts ont été ignorés.'); _magic_result = st.rerun()
+
             except Exception as ex: _magic_result = st.error(f'Lecture impossible : {ex}')
+
         _magic_result = st.caption('Pour un PDF, utilise la saisie directe après vérification du texte extrait : les tableaux PDF ont souvent des colonnes difficiles à reconstruire automatiquement.')
+
         pdf=st.file_uploader('Lecture de contrôle facultative d’une maquette PDF',type=['pdf'],key='subject_pdf')
+
         if pdf and st.button('Extraire le texte du PDF',key='read_subject_pdf'):
+
             try:
+
                 import fitz
+
                 doc=fitz.open(stream=pdf.getvalue(),filetype='pdf'); _magic_result = st.text_area('Texte extrait à contrôler', '\n\n'.join(pg.get_text() for pg in doc),height=250)
+
             except ImportError: _magic_result = st.warning('Installe PyMuPDF : python -m pip install PyMuPDF')
+
             except Exception as ex: _magic_result = st.error(f'PDF illisible : {ex}')
+
     with tab3:
+
         df=read_df('SELECT * FROM subjects ORDER BY semester,ue,title')
+
         if df.empty: _magic_result = st.info('Aucune matière enregistrée.')
+
         else:
+
             _ = show_dataframe(df.drop(columns=['created_at'],errors='ignore'),use_container_width=True,hide_index=True)
+
             _ = export_csv(df,'la maquette','maquette')
+
             opts={f"#{r.id} — {r.title} ({r.semester})":int(r.id) for r in df.itertuples()}; chosen=st.selectbox('Fiche à supprimer (si nécessaire)',list(opts),key='del_subject_pick')
+
             if st.button('Supprimer la matière choisie',key='delete_subject'):
+
                 _ = run('DELETE FROM subjects WHERE id=?',(opts[chosen],)); _magic_result = st.success('Matière supprimée.'); _magic_result = st.rerun()
+
             dup=df.assign(n=df.title.map(norm),s=df.semester.map(norm),u=df.ue.map(norm)).groupby(['n','s','u']).filter(lambda g:len(g)>1)
+
             if not dup.empty: _magic_result = st.warning('Doublons potentiels détectés : vérifie-les avant suppression.'); _ = show_dataframe(dup[['id','title','semester','ue']],hide_index=True)
 
+
+
 # ---------- EDT ----------
+
 elif page=="Emploi du temps":
+
     _ = header('AGENDA','Emploi du temps','Saisis les séances une à une ou importe un tableau CSV/Excel. Toute ligne importée est affichée avant enregistrement.')
+
     subjects,subopts=subject_choices(); tab1,tab2,tab3=st.tabs(['➕ Ajouter une séance','📥 Importer un EDT','🗓️ Agenda enregistré'])
+
     with tab1:
+
         with st.form('add_event'):
+
             a,b,c=st.columns(3); title=a.text_input('Cours / événement *'); day=b.date_input('Date',date.today()); kind=c.selectbox('Type',['Cours','TD','TP','Examen','Devoir','Révision','Stage','Personnel','Autre'])
+
             d,e,f=st.columns(3); start=d.time_input('Début',time(8,0)); end=e.time_input('Fin',time(9,0)); location=f.text_input('Salle / lieu')
+
             sl=st.selectbox('Matière associée',list(subopts)); notes=st.text_input('Notes')
+
             ok=st.form_submit_button('Ajouter à l’agenda',type='primary')
+
         if ok:
+
             if not title.strip(): _magic_result = st.error('Le titre est obligatoire.')
+
             elif end<=start: _magic_result = st.error('La fin doit être après le début.')
+
             else:
+
                 _ = run('INSERT INTO events(title,event_date,start_time,end_time,kind,subject_id,location,notes) VALUES(?,?,?,?,?,?,?,?)',(title.strip(),day.isoformat(),start.strftime('%H:%M'),end.strftime('%H:%M'),kind,subopts[sl],location.strip(),notes.strip()))
+
                 new_id = int(read_df('SELECT id FROM events WHERE title=? AND event_date=? ORDER BY id DESC LIMIT 1', (title.strip(),day.isoformat())).iloc[0]['id'])
+
                 reminder_dt = datetime.combine(day, start) - timedelta(hours=1)
+
                 if reminder_dt < datetime.now(): reminder_dt = datetime.combine(day, start)
+
                 _ = upsert_auto_reminder('event', new_id, f'{kind} : {title.strip()}', f'Lieu : {location.strip() or "non précisé"}. {notes.strip()}', reminder_dt.strftime('%Y-%m-%d %H:%M:%S'))
+
                 _magic_result = st.success('Séance ajoutée. Un rappel est automatiquement créé dans Rappels.'); _magic_result = st.rerun()
+
     with tab2:
+
         _magic_result = st.markdown('Colonnes conseillées : **title, event_date, start_time, end_time, kind, subject, location, notes**. Date au format AAAA-MM-JJ et heures HH:MM.')
+
         template=pd.DataFrame([{'title':'Cours de pédologie','event_date':date.today().isoformat(),'start_time':'08:00','end_time':'10:00','kind':'Cours','subject':'Pédologie','location':'Salle 2','notes':''}])
+
         _magic_result = st.download_button('Télécharger le modèle EDT CSV',template.to_csv(index=False).encode('utf-8-sig'),'modele_edt.csv','text/csv')
+
         up=st.file_uploader('Importer un EDT CSV/XLSX',type=['csv','xlsx'],key='edt_bulk')
+
         if up:
+
             try:
+
                 imp=pd.read_csv(up) if up.name.lower().endswith('.csv') else pd.read_excel(up)
+
                 _ = show_dataframe(imp,use_container_width=True,hide_index=True)
+
                 if st.button('Enregistrer les séances importées',type='primary'):
+
                     alias={'intitule':'title','cours':'title','date':'event_date','jour':'event_date','debut':'start_time','heure debut':'start_time','fin':'end_time','heure fin':'end_time','type':'kind','matiere':'subject','salle':'location','lieu':'location','remarques':'notes'}
+
                     imp=imp.rename(columns={col:alias.get(norm(col),norm(col).replace(' ','_')) for col in imp.columns})
+
                     count=0; errors=[]
+
                     for ix,r in imp.iterrows():
+
                         try:
+
                             t=str(r.get('title','')).strip(); ds=pd.to_datetime(r.get('event_date'),dayfirst=True,errors='raise').date().isoformat()
+
                             stime=str(r.get('start_time','08:00')).strip()[:5]; etime=str(r.get('end_time','09:00')).strip()[:5]
+
                             _magic_result = datetime.strptime(stime,'%H:%M'); _magic_result = datetime.strptime(etime,'%H:%M')
+
                             if not t or etime<=stime: raise ValueError('titre manquant ou horaires invalides')
+
                             subname=norm(r.get('subject','')); sid=None
+
                             if subname:
+
                                 found=subjects[subjects.title.map(norm)==subname]
+
                                 if not found.empty: sid=int(found.iloc[0].id)
+
                             _ = run('INSERT INTO events(title,event_date,start_time,end_time,kind,subject_id,location,notes,source) VALUES(?,?,?,?,?,?,?,?,?)',(t,ds,stime,etime,str(r.get('kind','Cours')),sid,str(r.get('location','')),str(r.get('notes','')),'Import CSV/Excel'))
+
                             count+=1
+
                         except Exception as ex: _magic_result = errors.append(f'Ligne {ix+2}: {ex}')
+
                     _magic_result = st.success(f'{count} séance(s) enregistrée(s).');
+
                     if errors: _magic_result = st.warning('Certaines lignes ont été ignorées :'); _magic_result = st.write('\n'.join(errors[:20]))
+
                     _magic_result = st.rerun()
+
             except Exception as ex: _magic_result = st.error(f'Fichier impossible à lire : {ex}')
+
         pdf=st.file_uploader('Lecture de contrôle facultative d’un EDT PDF',type=['pdf'],key='edt_pdf')
+
         if pdf and st.button('Lire le texte du PDF',key='read_edt_pdf'):
+
             try:
+
                 import fitz
+
                 doc=fitz.open(stream=pdf.getvalue(),filetype='pdf'); _magic_result = st.text_area('Texte extrait — à vérifier', '\n\n'.join(pg.get_text() for pg in doc),height=250)
+
                 _magic_result = st.info('L’extraction PDF ne garantit pas la reconnaissance des cellules. Vérifie les jours, dates et horaires puis saisis/importes un tableau propre.')
+
             except ImportError: _magic_result = st.warning('Installe PyMuPDF : python -m pip install PyMuPDF')
+
             except Exception as ex: _magic_result = st.error(str(ex))
+
     with tab3:
+
         ev=read_df('SELECT e.*,s.title AS subject_title FROM events e LEFT JOIN subjects s ON s.id=e.subject_id ORDER BY event_date,start_time')
+
         if ev.empty: _magic_result = st.info('Aucune séance enregistrée.')
+
         else:
+
             d1,d2=st.columns(2); filt=d1.selectbox('Période',['Toutes','À venir','Passées']); query=d2.text_input('Rechercher')
+
             view=ev.copy()
+
             if filt=='À venir': view=view[view.event_date>=date.today().isoformat()]
+
             if filt=='Passées': view=view[view.event_date<date.today().isoformat()]
+
             if query.strip(): view=view[view.title.str.contains(query,case=False,na=False)]
+
             _ = show_dataframe(view[['id','event_date','start_time','end_time','title','kind','subject_title','location','source']].rename(columns={'id':'ID','event_date':'Date','start_time':'Début','end_time':'Fin','title':'Événement','kind':'Type','subject_title':'Matière','location':'Lieu','source':'Origine'}),use_container_width=True,hide_index=True)
+
             _ = export_csv(view,'l’emploi du temps','edt')
+
             eopts={f"#{r.id} — {r.event_date} {r.title}":int(r.id) for r in ev.itertuples()}; pick=st.selectbox('Séance à supprimer',list(eopts))
+
             if st.button('Supprimer la séance sélectionnée'): _ = run('DELETE FROM events WHERE id=?',(eopts[pick],)); _magic_result = st.rerun()
 
+
+
 # ---------- Génération du programme de révision ----------
+
 elif page=="Programmes de révision":
+
     _ = header('PLANIFICATION INTELLIGENTE','Programme de révision','Un planning indicatif construit à partir de ta maquette, de tes disponibilités et de la date cible. Tu peux ajuster les séances ensuite.')
+
     subjects=read_df('SELECT * FROM subjects ORDER BY title')
+
     if subjects.empty: _magic_result = st.warning('Commence par enregistrer tes matières dans « Maquettes & matières ».'); _magic_result = st.stop()
+
     with st.form('revision_generator'):
+
         a,b,c=st.columns(3); startday=a.date_input('Début du programme',date.today()); endday=b.date_input('Date cible / examen',date.today()+timedelta(days=21)); weekly=c.slider('Heures disponibles par semaine',2,40,10)
+
         d,e=st.columns(2); days=d.multiselect('Jours de révision',['Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi','Dimanche'],default=['Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi']); session=e.selectbox('Durée d’une séance',['30 minutes','45 minutes','1 heure','1 h 30','2 heures'],index=2)
+
         generate=st.form_submit_button('Générer mon programme',type='primary')
+
     if generate:
+
         if endday<startday: _magic_result = st.error('La date cible doit être après le début.')
+
         elif not days: _magic_result = st.error('Choisis au moins un jour de révision.')
+
         else:
+
             daymap={'Lundi':0,'Mardi':1,'Mercredi':2,'Jeudi':3,'Vendredi':4,'Samedi':5,'Dimanche':6}; allowed=[daymap[d] for d in days]
+
             duration={'30 minutes':.5,'45 minutes':.75,'1 heure':1,'1 h 30':1.5,'2 heures':2}[session]
+
             date_list=[]; cur=startday
+
             while cur<=endday:
+
                 if cur.weekday() in allowed: _magic_result = date_list.append(cur)
+
                 cur+=timedelta(days=1)
+
             if not date_list: _magic_result = st.error('Aucune date ne correspond à tes choix.')
+
             else:
+
                 weights=[]
+
                 for r in subjects.itertuples(): _magic_result = weights.append(max(float(r.vht or 0),float(r.credits or 0)*8,4))
+
                 total=sum(weights); total_hours=min(weekly*max(1,(endday-startday).days/7),sum(weights))
+
                 quota=[total_hours*w/total for w in weights]; remaining=list(quota); rows=[]; idx=0
+
                 for day in date_list:
+
                     daily=min(weekly/len(allowed),max(duration,1))
+
                     slots=max(1,int(daily/duration))
+
                     for _ in range(slots):
+
                         available=[i for i,x in enumerate(remaining) if x>=min(duration,.25)]
+
                         if not available: break
+
                         i=max(available,key=lambda j:remaining[j]); hrs=min(duration,remaining[i]); r=subjects.iloc[i]
+
                         methods=['Relire le cours puis faire une fiche','Rappel actif sans regarder le cours','Exercices / problèmes corrigés','Questions-réponses et mini-test']
+
                         _magic_result = rows.append({'Date':day.isoformat(),'Jour':day.strftime('%A'),'Horaire conseillé':f'{8+(idx%8)*1:02d}:00','Matière':r.title,'Durée (h)':round(hrs,2),'Séance proposée':methods[idx%len(methods)],'État':'À faire'})
+
                         remaining[i]-=hrs; idx+=1
+
                 plan=pd.DataFrame(rows)
+
                 st.session_state['generated_plan']=plan
+
                 _magic_result = st.success(f'Programme indicatif généré : {len(plan)} séances. Il ne connaît pas le contenu réel des cours ; ajuste les priorités selon les examens et difficultés.')
+
     if st.session_state.get('generated_plan') is not None:
+
         plan=st.session_state['generated_plan']
+
         edited=st.data_editor(plan,use_container_width=True,num_rows='dynamic',hide_index=True,key='plan_editor')
+
         _magic_result = st.download_button('Télécharger le programme CSV',edited.to_csv(index=False).encode('utf-8-sig'),'programme_revision.csv','text/csv')
+
         if st.button('Créer des tâches à partir de ce programme',type='primary'):
+
             for r in edited.to_dict('records'):
+
                 _ = run('INSERT INTO tasks(title,due_date,priority,status,category,notes) VALUES(?,?,?,?,?,?)',(f"Réviser : {r.get('Matière','')}",str(r.get('Date','')), 'Normale', 'À faire','Révision',f"{r.get('Durée (h)','')} h · {r.get('Séance proposée','')}"))
+
             _magic_result = st.success('Séances ajoutées à Tâches & révisions.'); _magic_result = st.rerun()
+
     _magic_result = st.divider(); _magic_result = st.subheader('Tâches de révision déjà planifiées')
+
     rt=read_df("SELECT * FROM tasks WHERE category='Révision' ORDER BY due_date")
+
     if rt.empty: _magic_result = st.caption('Aucune tâche de révision enregistrée pour le moment.')
+
     else: _ = show_dataframe(rt[['title','due_date','priority','status','notes']],use_container_width=True,hide_index=True)
 
+
+
 # ---------- Journal et progression ----------
+
 elif page=="Suivi & progression":
+
     _ = header('BAROMÈTRE PÉDAGOGIQUE','Suivi & progression','Enregistre chaque séance réellement étudiée, ton niveau de maîtrise et tes heures cumulées par matière.')
+
     subjects=read_df('SELECT id,title,semester,vht FROM subjects ORDER BY title')
+
     if subjects.empty: _magic_result = st.info('Ajoute d’abord les matières dans la maquette.')
+
     else:
+
         opts={f"{r.title} · {r.semester}":int(r.id) for r in subjects.itertuples()}
+
         with st.form('study_log_form'):
+
             a,b,c=st.columns(3); subject=a.selectbox('Matière',list(opts)); day=b.date_input('Date de travail',date.today()); hours=c.number_input('Durée étudiée (heures)',min_value=.25,max_value=16.,value=1.,step=.25)
+
             d,e=st.columns(2); method=d.selectbox('Méthode',['Rappel actif','Exercices','Fiche de synthèse','Lecture active','Révision espacée','Travail pratique','Préparation examen']); confidence=e.slider('Maîtrise après la séance (1 à 5)',1,5,3)
+
             notes=st.text_area('Ce qui est compris / reste à revoir')
+
             ok=st.form_submit_button('Enregistrer ma séance',type='primary')
+
         if ok:
+
             _ = run('INSERT INTO study_logs(subject_id,study_date,hours,method,confidence,notes) VALUES(?,?,?,?,?,?)',(opts[subject],day.isoformat(),hours,method,confidence,notes.strip())); _magic_result = st.success('Séance enregistrée.'); _magic_result = st.rerun()
+
         logs=read_df('SELECT l.*,s.title AS subject FROM study_logs l LEFT JOIN subjects s ON s.id=l.subject_id ORDER BY study_date DESC,id DESC')
+
         summary=read_df('SELECT s.id,s.title,s.semester,s.vht,COALESCE(SUM(l.hours),0) AS studied,AVG(l.confidence) AS confidence FROM subjects s LEFT JOIN study_logs l ON l.subject_id=s.id GROUP BY s.id ORDER BY s.title')
+
         _magic_result = st.subheader('Progression par matière')
+
         for r in summary.itertuples():
+
             target=float(r.vht or 0); studied=float(r.studied or 0); progress=min(1,studied/target) if target>0 else 0
+
             _magic_result = st.markdown(f'**{r.title}** · {r.semester} — {studied:.1f} h étudiée(s) / {target:.1f} h de VHT')
+
             _magic_result = st.progress(progress, text=f'{progress*100:.0f}% de la VHT' if target>0 else 'VHT non renseignée')
+
             _magic_result = st.caption(f"Maîtrise moyenne déclarée : {float(r.confidence):.1f}/5" if pd.notna(r.confidence) else 'Aucune évaluation de maîtrise enregistrée.')
+
         _magic_result = st.subheader('Historique des séances')
+
         if logs.empty: _magic_result = st.info('Le journal est vide.')
+
         else:
+
             _ = show_dataframe(logs[['study_date','subject','hours','method','confidence','notes']].rename(columns={'study_date':'Date','subject':'Matière','hours':'Heures','method':'Méthode','confidence':'Maîtrise /5','notes':'Notes'}),use_container_width=True,hide_index=True)
+
             _ = export_csv(logs,'le journal d’étude','journal_etude')
+
             choices={f"#{r.id} · {r.study_date} · {r.subject}":int(r.id) for r in logs.itertuples()}; sel=st.selectbox('Entrée à supprimer',list(choices))
+
             if st.button('Supprimer cette entrée du journal'): _ = run('DELETE FROM study_logs WHERE id=?',(choices[sel],)); _magic_result = st.rerun()
 
+
+
 # ---------- Assistant de vie avec sous-onglets ----------
+
 elif page=="Assistant de vie":
-    _ = header('ESPACE PERSONNEL XXL','Assistant de vie 🧭','Un espace central pour tes objectifs, habitudes, budget, tâches, routines, notes et contacts. Les informations sont enregistrées dans SQLite.')
+    _ = header('ESPACE PERSONNEL XXL','Assistant de vie 🧭','Un espace central pour tes objectifs, habitudes, budget, tâches, routines, notes et contacts.')
     _sequence_items = build_focus_sequence()
     _sequence_strict = bool(st.session_state.get("issa_sequence_strict", False))
     if _sequence_strict:
@@ -2166,7 +2507,8 @@ elif page=="Assistant de vie":
                     _magic_result = st.rerun()
             else:
                 _pending_html = """<div style="padding:22px;border-radius:20px;background:linear-gradient(120deg,#143c32,#377253);color:#fff;text-align:center;font-family:system-ui"><div style="letter-spacing:.15em;font-weight:800;font-size:12px">PROCHAINE SÉANCE AU PROGRAMME</div><h2 style="color:white;margin:.45em 0">__TITLE__</h2><div style="font-size:clamp(38px,8vw,72px);font-weight:850;font-variant-numeric:tabular-nums" id="wait">--:--:--</div><p>Le mode Focus démarrera automatiquement à l’heure prévue dans ton agenda.</p></div><script>const start=__START__,o=document.getElementById('wait');function tick(){let x=Math.max(0,Math.floor(start-Date.now()/1000)),h=Math.floor(x/3600),m=Math.floor((x%3600)/60),s=x%60;o.textContent=[h,m,s].map(v=>String(v).padStart(2,'0')).join(':');if(x<=0){clearInterval(t);try{window.parent.location.reload()}catch(e){}}}tick();const t=setInterval(tick,500);</script>"""
-                _pending_html = _pending_html.replace('__TITLE__', json.dumps(_current_step['title'], ensure_ascii=False)[1:-1]).replace('__START__', str(int(_pending_focus['start_at'])))
+                _pending_title = json.dumps(_current_step['title'], ensure_ascii=False)[1:-1].replace('<', '&lt;').replace('>', '&gt;')
+                _pending_html = _pending_html.replace('__TITLE__', _pending_title).replace('__START__', str(int(_pending_focus['start_at'])))
                 _magic_result = st.components.v1.html(_pending_html, height=260, scrolling=False)
         _magic_result = st.markdown("""<div style="padding:24px;border-radius:22px;background:linear-gradient(120deg,#12392e,#27694f,#8aa96c);color:#fff;margin:12px 0"><div style="font-size:.78rem;letter-spacing:.15em;font-weight:800;opacity:.85">PARCOURS SÉQUENTIEL · MODE STRICT</div><h2 style="color:#fff;margin:.4rem 0">Une étape à la fois</h2><p style="margin:0;color:#e5f4e8">Le chrono suit les horaires de l’agenda. Valide l’étape pour débloquer la suivante.</p></div>""", unsafe_allow_html=True)
         with st.container(border=True):
@@ -2191,7 +2533,7 @@ elif page=="Assistant de vie":
                 if _finish_col.button('⏹️ Terminer le chrono', key='sequence_finish_focus', use_container_width=True):
                     _ = _finish_focus_session(_paused_seconds)
                     _magic_result = st.rerun()
-            elif _pending_focus and (_pending_focus.get('source_type'), _pending_focus.get('source_id')) == (_current_step['source_type'], _current_step['source_id']) and time_module.time() < float(_pending_focus.get('start_at', 0)):
+            elif _sequence_waiting:
                 _magic_result = st.caption("La séance est programmée. Le chrono démarrera automatiquement à l’heure de début enregistrée dans l’agenda.")
             else:
                 _magic_result = st.caption("Le chrono de concentration démarre automatiquement pour cette étape.")
