@@ -14,6 +14,13 @@ import streamlit as st
 
 APP_DIR = Path(__file__).resolve().parent
 DB_PATH = APP_DIR / "campus_clair.db"
+
+def _invalidate_read_cache():
+    for cached_name in ("read_df", "_issa_ai_context"):
+        cached_function = globals().get(cached_name)
+        if cached_function is not None and hasattr(cached_function, "clear"):
+            cached_function.clear()
+
 def _startup_secret(name, default=""):
     """Lit une valeur Streamlit Secrets ou variable d'environnement sans exposer None."""
     try:
@@ -177,27 +184,23 @@ if not st.session_state["issa_authenticated"]:
 class _PostgresConnection:
     """Adaptateur léger conservant l'API SQL utilisée par l'application."""
     def __init__(self):
-        try:
-            import psycopg2
-            from psycopg2.extras import RealDictCursor
-        except ImportError as exc:
-            raise RuntimeError("Pilote PostgreSQL absent. Installe : pip install psycopg2-binary") from exc
         cfg = _postgres_config()
         if not cfg.get("password"):
             raise RuntimeError("Mot de passe Supabase manquant. Ajoute SUPABASE_DB_PASSWORD dans .streamlit/secrets.toml.")
-        self.raw = psycopg2.connect(
-            host=cfg["host"], port=cfg["port"], dbname=cfg["database"],
-            user=cfg["user"], password=cfg["password"], sslmode="require",
-            connect_timeout=15, cursor_factory=RealDictCursor,
-            options="-c statement_timeout=30000"
-        )
-        self._cursor_factory = RealDictCursor
+        self.pool = _postgres_connection_pool(cfg["host"], cfg["port"], cfg["database"], cfg["user"], cfg["password"])
+        try:
+            self.raw = self.pool.getconn()
+        except Exception as exc:
+            raise RuntimeError("Le pool de connexions à Supabase est temporairement saturé. Réessaie dans quelques secondes.") from exc
+        self._dirty = False
     def __enter__(self): return self
     def __exit__(self, typ, value, tb):
         try:
             self.raw.commit() if typ is None else self.raw.rollback()
         finally:
-            _magic_result = self.raw.close()
+            self.pool.putconn(self.raw, close=typ is not None)
+            if typ is None and self._dirty:
+                _invalidate_read_cache()
         return False
     @staticmethod
     def _sql(sql):
@@ -212,10 +215,13 @@ class _PostgresConnection:
             sql += " ON CONFLICT (habit_id, log_date) DO UPDATE SET done=EXCLUDED.done"
         return sql
     def execute(self, sql, params=()):
+        if str(sql).lstrip().split(None, 1)[0].upper() not in {"SELECT", "SHOW", "VALUES"}:
+            self._dirty = True
         cur = self.raw.cursor()
         _magic_result = cur.execute(self._sql(sql), params or ())
         return cur
     def executescript(self, script):
+        self._dirty = True
         cur = self.raw.cursor()
         for statement in script.split(';'):
             if statement.strip(): _magic_result = cur.execute(self._sql(statement))
@@ -245,6 +251,21 @@ def _postgres_config():
     }
 
 
+@st.cache_resource(show_spinner=False)
+def _postgres_connection_pool(host, port, database, user, password):
+    """Réutilise des connexions TLS au lieu d'en établir une à chaque requête."""
+    try:
+        from psycopg2.pool import ThreadedConnectionPool
+        from psycopg2.extras import RealDictCursor
+    except ImportError as exc:
+        raise RuntimeError("Pilote PostgreSQL absent. Installe : pip install psycopg2-binary") from exc
+    return ThreadedConnectionPool(
+        1, 12, host=host, port=int(port), dbname=database, user=user,
+        password=password, sslmode="require", connect_timeout=10,
+        cursor_factory=RealDictCursor, options="-c statement_timeout=20000",
+    )
+
+
 def _postgres_schema_sql():
     # DDL partagé : conversion des identifiants auto-incrémentés SQLite en BIGSERIAL.
     ddl = _APP_SCHEMA_DDL
@@ -261,14 +282,23 @@ class _SQLiteConnection:
         _magic_result = self.raw.execute("PRAGMA foreign_keys=ON")
         _magic_result = self.raw.execute("PRAGMA journal_mode=WAL")
         _magic_result = self.raw.execute("PRAGMA busy_timeout=30000")
+        self._dirty = False
     def __enter__(self): return self
     def __exit__(self, typ, value, tb):
         try:
             self.raw.commit() if typ is None else self.raw.rollback()
-        finally: _magic_result = self.raw.close()
+        finally:
+            _magic_result = self.raw.close()
+            if typ is None and self._dirty:
+                _invalidate_read_cache()
         return False
-    def execute(self, sql, params=()): return self.raw.execute(sql, params or ())
-    def executescript(self, script): return self.raw.executescript(script)
+    def execute(self, sql, params=()):
+        if str(sql).lstrip().split(None, 1)[0].upper() not in {"SELECT", "SHOW", "PRAGMA", "VALUES"}:
+            self._dirty = True
+        return self.raw.execute(sql, params or ())
+    def executescript(self, script):
+        self._dirty = True
+        return self.raw.executescript(script)
     def __getattr__(self, name): return getattr(self.raw, name)
 
 
@@ -833,6 +863,7 @@ def _clean_missing_value(value, fallback=""):
 
 _REMINDER_SCHEMA_READY = False
 
+@st.cache_resource(show_spinner=False)
 def ensure_reminders_schema():
     """Répare à la demande le schéma des rappels avant les requêtes du tableau de bord."""
     global _REMINDER_SCHEMA_READY
@@ -877,6 +908,7 @@ def ensure_reminders_schema():
 
     _REMINDER_SCHEMA_READY = True
 
+@st.cache_data(ttl=20, show_spinner=False)
 def read_df(sql, params=()):
     """Lit SQLite ; si une table manque dans une ancienne base, répare le schéma puis réessaie."""
     try:
@@ -1195,6 +1227,63 @@ def build_focus_sequence():
         items.append(item)
     return items
 
+def load_focus_agenda():
+    """Charge tous les éléments encore prévus pour le parcours Focus."""
+    ensure_focus_sequence_schema()
+    sql = """SELECT source_type,source_id,title,scheduled,start_time,category,details FROM (
+        SELECT 'event' AS source_type,e.id AS source_id,e.title,e.event_date AS scheduled,
+               COALESCE(NULLIF(e.start_time,''),'') AS start_time,COALESCE(NULLIF(e.kind,''),'Autre') AS category,
+               COALESCE(e.location,'') || CASE WHEN COALESCE(e.notes,'')<>'' THEN ' · ' || e.notes ELSE '' END AS details
+        FROM events e WHERE e.event_date>=?
+          AND NOT EXISTS (SELECT 1 FROM focus_sequence_done d WHERE d.source_type='event' AND d.source_id=e.id)
+        UNION ALL
+        SELECT 'task' AS source_type,t.id AS source_id,t.title,
+               CASE WHEN COALESCE(t.due_date,'')='' THEN 'Sans échéance' ELSE t.due_date END AS scheduled,
+               '' AS start_time,COALESCE(NULLIF(t.category,''),'Personnel') AS category,
+               COALESCE(t.priority,'Normale') || ' · ' || COALESCE(t.status,'À faire') || CASE WHEN COALESCE(t.notes,'')<>'' THEN ' · ' || t.notes ELSE '' END AS details
+        FROM tasks t WHERE COALESCE(t.status,'À faire') NOT IN ('Terminée','Terminé','Rendue','Rendu')
+    ) AS planned ORDER BY CASE WHEN scheduled='Sans échéance' THEN 1 ELSE 0 END,scheduled,start_time,source_type,source_id"""
+    return read_df(sql, (date.today().isoformat(),))
+
+def render_focus_agenda(key_prefix):
+    """Affiche, classe et supprime les éléments planifiés pour le mode Focus."""
+    _magic_result = st.markdown("### 🗓️ Agenda du mode Focus")
+    _agenda = load_focus_agenda()
+    if _agenda.empty:
+        _magic_result = st.info("Aucun cours, rendez-vous ou tâche prévu dans le parcours Focus. Ajoute un élément dans l’agenda ou les tâches pour le retrouver ici.")
+        return
+    _agenda_filter = st.selectbox("Afficher", ["Tout le planning", "Agenda", "Tâches"], key=f"{key_prefix}_filter")
+    _shown_agenda = _agenda if _agenda_filter == "Tout le planning" else _agenda[_agenda.source_type == ("event" if _agenda_filter == "Agenda" else "task")]
+    _display_agenda = _shown_agenda.rename(columns={"source_type":"Origine", "title":"Élément", "scheduled":"Date prévue", "start_time":"Heure", "category":"Catégorie", "details":"Détails"}).copy()
+    _display_agenda["Origine"] = _display_agenda["Origine"].map({"event":"Agenda", "task":"Tâche"}).fillna("Autre")
+    _magic_result = st.dataframe(_display_agenda[["Origine", "Date prévue", "Heure", "Élément", "Catégorie", "Détails"]], use_container_width=True, hide_index=True)
+    _choices = {
+        f"{row.scheduled} · {row.title} · {'Agenda' if row.source_type == 'event' else 'Tâche'} · #{int(row.source_id)}": (str(row.source_type), int(row.source_id))
+        for row in _agenda.itertuples(index=False)
+    }
+    _choice = st.selectbox("Classer ou supprimer un élément", list(_choices), key=f"{key_prefix}_item")
+    _source_type, _source_id = _choices[_choice]
+    _selected_agenda = _agenda[(_agenda.source_type == _source_type) & (_agenda.source_id == _source_id)].iloc[0]
+    with st.form(f"{key_prefix}_manage_form"):
+        _category = st.text_input("Catégorie", value=str(_selected_agenda["category"] or "Autre"), help="Ex. Cours, Examen, Révision, Stage, Personnel…")
+        _confirm_delete = st.checkbox("Je confirme la suppression de cet élément et de son entrée de planning", key=f"{key_prefix}_confirm_delete")
+        _save_category = st.form_submit_button("💾 Enregistrer la catégorie")
+        _delete_item = st.form_submit_button("🗑️ Supprimer cet élément")
+    if _save_category:
+        _table, _column = ("events", "kind") if _source_type == "event" else ("tasks", "category")
+        with connect() as _agenda_db:
+            _agenda_db.execute(f'UPDATE "{_table}" SET "{_column}"=? WHERE id=?', (_category.strip() or "Autre", _source_id))
+        _magic_result = st.rerun()
+    if _delete_item:
+        if not _confirm_delete:
+            _magic_result = st.warning("Coche la confirmation avant de supprimer cet élément.")
+        else:
+            _delete_table = "events" if _source_type == "event" else "tasks"
+            with connect() as _agenda_db:
+                _agenda_db.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type=? AND source_id=? AND status IN ('En attente','Erreur')", (_source_type, _source_id))
+                _agenda_db.execute(f'DELETE FROM "{_delete_table}" WHERE id=?', (_source_id,))
+            _magic_result = st.rerun()
+
 def _start_focus_for_sequence(item):
     """Lance le chrono lié à l’étape; attend l’heure de début d’un événement futur."""
     now = time_module.time()
@@ -1243,6 +1332,7 @@ def card(label,value,note=''):
     _magic_result = st.markdown(f'<div class="cc-card"><div class="cc-label">{label}</div><div class="cc-value">{value}</div><div class="cc-note">{note}</div></div>',unsafe_allow_html=True)
 def export_csv(df,name,key):
     if not df.empty: _magic_result = st.download_button(f"Exporter {name} en CSV",df.to_csv(index=False).encode('utf-8-sig'),file_name=f"campusclair_{key}.csv",mime='text/csv',key=f"csv_{key}")
+@st.cache_data(ttl=20, show_spinner=False)
 def _issa_ai_context():
     """Contexte compact construit à la demande depuis les données de l'application."""
     queries={
@@ -1807,6 +1897,7 @@ if _focus_active:
         if _focus_notes_text:
             _magic_result = st.markdown("**Détails de la session**")
             _magic_result = st.write(_focus_notes_text)
+        render_focus_agenda("issa_focus_active_agenda")
         _magic_result = st.markdown("### 📚 Espace de travail Focus")
         _magic_result = st.caption("Ajoute tes supports ici. L’assistant peut ensuite en tirer un résumé, des exercices ou des informations précises. Les pièces jointes restent dans cette session de navigateur.")
         if "issa_focus_attachments" not in st.session_state:
@@ -2138,25 +2229,25 @@ if page=="Vue d’ensemble":
 
     _ = header("ESPACE CENTRAL","Ton tableau de bord 👋","Une vue simple de tes cours, de tes révisions et de tes objectifs. Les indicateurs reposent sur tes saisies réelles.")
 
-    subjects=read_df('SELECT * FROM subjects'); events=read_df('SELECT * FROM events'); tasks=read_df('SELECT * FROM tasks'); logs=read_df('SELECT * FROM study_logs'); goals=read_df('SELECT * FROM goals')
-
     today=date.today().isoformat()
-
-    upcoming=events[events.event_date>=today] if not events.empty else events
-
-    open_tasks=tasks[~tasks.status.isin(['Terminée','Terminé','Rendue','Rendu'])] if not tasks.empty else tasks
-
-    hours=float(logs.hours.sum()) if not logs.empty else 0
+    _dashboard_stats=read_df("""SELECT
+        (SELECT COUNT(*) FROM subjects) AS subjects_count,
+        (SELECT COUNT(*) FROM events WHERE event_date>=?) AS upcoming_count,
+        (SELECT COUNT(*) FROM tasks WHERE COALESCE(status,'À faire') NOT IN ('Terminée','Terminé','Rendue','Rendu')) AS open_tasks_count,
+        (SELECT COALESCE(SUM(hours),0) FROM study_logs) AS studied_hours""", (today,)).iloc[0]
+    upcoming=read_df("SELECT event_date,start_time,end_time,title,kind,location FROM events WHERE event_date>=? ORDER BY event_date,start_time LIMIT 8", (today,))
+    open_tasks=read_df("SELECT title,due_date,priority,status FROM tasks WHERE COALESCE(status,'À faire') NOT IN ('Terminée','Terminé','Rendue','Rendu') ORDER BY CASE priority WHEN 'Urgente' THEN 1 WHEN 'Haute' THEN 2 WHEN 'Normale' THEN 3 ELSE 4 END,due_date LIMIT 7")
+    goals=read_df("SELECT title,target_date,progress FROM goals ORDER BY target_date LIMIT 5")
 
     cols=st.columns(4)
 
-    with cols[0]: _ = card('Matières enregistrées',len(subjects),'Maquette pédagogique')
+    with cols[0]: _ = card('Matières enregistrées',int(_dashboard_stats.subjects_count),'Maquette pédagogique')
 
-    with cols[1]: _ = card('Séances à venir',len(upcoming),'Cours, TD, TP, examens…')
+    with cols[1]: _ = card('Séances à venir',int(_dashboard_stats.upcoming_count),'Cours, TD, TP, examens…')
 
-    with cols[2]: _ = card('Tâches ouvertes',len(open_tasks),'À faire ou en cours')
+    with cols[2]: _ = card('Tâches ouvertes',int(_dashboard_stats.open_tasks_count),'À faire ou en cours')
 
-    with cols[3]: _ = card('Heures étudiées',round(hours,1),'Journal de révision')
+    with cols[3]: _ = card('Heures étudiées',round(float(_dashboard_stats.studied_hours),1),'Journal de révision')
 
     # Résumé des rappels issus des autres rubriques, visible dès l'ouverture de l'application.
 
@@ -2194,7 +2285,7 @@ if page=="Vue d’ensemble":
 
     if upcoming.empty: _magic_result = st.info('Aucune séance future. Saisis ton emploi du temps dans l’onglet correspondant.')
 
-    else: _ = show_dataframe(upcoming.sort_values(['event_date','start_time']).head(8)[['event_date','start_time','end_time','title','kind','location']].rename(columns={'event_date':'Date','start_time':'Début','end_time':'Fin','title':'Séance','kind':'Type','location':'Lieu'}),use_container_width=True,hide_index=True)
+    else: _ = show_dataframe(upcoming.rename(columns={'event_date':'Date','start_time':'Début','end_time':'Fin','title':'Séance','kind':'Type','location':'Lieu'}),use_container_width=True,hide_index=True)
 
     a,b=st.columns(2)
 
@@ -2204,7 +2295,7 @@ if page=="Vue d’ensemble":
 
         if open_tasks.empty: _magic_result = st.success('Aucune tâche ouverte enregistrée.')
 
-        else: _ = show_dataframe(open_tasks.head(7)[['title','due_date','priority','status']].rename(columns={'title':'Tâche','due_date':'Échéance','priority':'Priorité','status':'Statut'}),use_container_width=True,hide_index=True)
+        else: _ = show_dataframe(open_tasks.rename(columns={'title':'Tâche','due_date':'Échéance','priority':'Priorité','status':'Statut'}),use_container_width=True,hide_index=True)
 
     with b:
 
@@ -2214,7 +2305,7 @@ if page=="Vue d’ensemble":
 
         else:
 
-            for r in goals.sort_values('target_date').head(5).itertuples(): _magic_result = st.write(f"**{r.title}** — {r.progress}%" ); _magic_result = st.progress(int(r.progress)/100)
+            for r in goals.itertuples(): _magic_result = st.write(f"**{r.title}** — {r.progress}%" ); _magic_result = st.progress(int(r.progress)/100)
 
     _magic_result = st.caption('Conseil : commence par saisir ta maquette, puis ton emploi du temps. Le programme de révision sera calculé à partir de ces informations.')
 
@@ -3520,6 +3611,7 @@ elif page=="Centre de productivité XXL":
     with tabs[4]:
         _magic_result = st.markdown("### 🎯 Espace de concentration protégé")
         _magic_result = st.write("Choisis ton objectif, prépare ton document, puis lance une session. Les autres rubriques du site seront masquées jusqu’à la fin du temps choisi.")
+        render_focus_agenda("issa_focus_planned_agenda")
         with st.form('central_focus_form'):
             activity=st.text_input('Objectif de la séance',value='Étude / révision')
             duration=st.number_input('Durée de concentration (minutes)',min_value=1,max_value=600,value=45,step=5)
