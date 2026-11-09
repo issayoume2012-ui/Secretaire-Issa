@@ -2249,6 +2249,9 @@ if page=="Vue d’ensemble":
 
     with cols[3]: _ = card('Heures étudiées',round(float(_dashboard_stats.studied_hours),1),'Journal de révision')
 
+    with st.expander('🗓️ AGENDA DU MODE FOCUS · cours, tâches et révisions planifiés', expanded=True):
+        render_focus_agenda('issa_focus_home_agenda')
+
     # Résumé des rappels issus des autres rubriques, visible dès l'ouverture de l'application.
 
     try:
