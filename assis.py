@@ -305,7 +305,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS assistant_docs(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,content TEXT NOT NULL,uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS productivity_projects(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,domain TEXT DEFAULT 'Personnel',status TEXT DEFAULT 'À faire',progress INTEGER DEFAULT 0,start_date TEXT DEFAULT '',due_date TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS flashcards(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,front TEXT NOT NULL,back TEXT NOT NULL,category TEXT DEFAULT 'Études',mastery INTEGER DEFAULT 0,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
-        CREATE TABLE IF NOT EXISTS focus_sessions(id INTEGER PRIMARY KEY AUTOINCREMENT,session_date TEXT NOT NULL,duration_minutes INTEGER NOT NULL,activity TEXT DEFAULT 'Étude',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS focus_sessions(id INTEGER PRIMARY KEY AUTOINCREMENT,session_date TEXT NOT NULL,duration_minutes INTEGER NOT NULL,duration_seconds INTEGER DEFAULT 0,activity TEXT DEFAULT 'Étude',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS daily_journal(id INTEGER PRIMARY KEY AUTOINCREMENT,entry_date TEXT NOT NULL UNIQUE,mood TEXT DEFAULT '',energy INTEGER DEFAULT 3,successes TEXT DEFAULT '',improvements TEXT DEFAULT '',tomorrow_priorities TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS meeting_minutes(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,meeting_date TEXT DEFAULT '',participants TEXT DEFAULT '',summary TEXT DEFAULT '',decisions TEXT DEFAULT '',actions TEXT DEFAULT '',status TEXT DEFAULT 'À suivre',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS life_organizer(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,kind TEXT DEFAULT 'Rendez-vous',event_date TEXT DEFAULT '',event_time TEXT DEFAULT '',priority TEXT DEFAULT 'Normale',status TEXT DEFAULT 'À faire',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
@@ -322,7 +322,7 @@ def init_db():
                 _magic_result = c.execute(f'ALTER TABLE reminders ADD COLUMN "{_column}" {_definition}')
         _magic_result = c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_reminders_source ON reminders(source_type, source_id) WHERE source_type <> '' AND source_id IS NOT NULL")
 
-_APP_SCHEMA_DDL = "\n        CREATE TABLE IF NOT EXISTS subjects(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,code TEXT DEFAULT '',semester TEXT DEFAULT '',ue TEXT DEFAULT '',ue_code TEXT DEFAULT '',credits REAL DEFAULT 0,cm REAL DEFAULT 0,td REAL DEFAULT 0,tp REAL DEFAULT 0,tpe REAL DEFAULT 0,vht REAL DEFAULT 0,teacher TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,event_date TEXT NOT NULL,start_time TEXT DEFAULT '',end_time TEXT DEFAULT '',kind TEXT DEFAULT 'Cours',subject_id INTEGER,location TEXT DEFAULT '',notes TEXT DEFAULT '',source TEXT DEFAULT 'Saisie manuelle',created_at TEXT DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE SET NULL);\n        CREATE TABLE IF NOT EXISTS tasks(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,due_date TEXT DEFAULT '',priority TEXT DEFAULT 'Normale',status TEXT DEFAULT 'À faire',category TEXT DEFAULT 'Travail personnel',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS documents(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,category TEXT DEFAULT 'Autre',url TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS study_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,subject_id INTEGER,study_date TEXT NOT NULL,hours DOUBLE PRECISION NOT NULL,method TEXT DEFAULT 'Révision active',confidence INTEGER DEFAULT 3,notes TEXT DEFAULT '',FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE SET NULL);\n        CREATE TABLE IF NOT EXISTS goals(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,category TEXT DEFAULT 'Études',target_date TEXT DEFAULT '',progress INTEGER DEFAULT 0,notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS habits(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,frequency TEXT DEFAULT 'Quotidienne',notes TEXT DEFAULT '',active INTEGER DEFAULT 1,created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS habit_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,habit_id INTEGER NOT NULL,log_date TEXT NOT NULL,done INTEGER DEFAULT 1,UNIQUE(habit_id,log_date),FOREIGN KEY(habit_id) REFERENCES habits(id) ON DELETE CASCADE);\n        CREATE TABLE IF NOT EXISTS budgets(id INTEGER PRIMARY KEY AUTOINCREMENT,entry_date TEXT NOT NULL,kind TEXT NOT NULL,category TEXT DEFAULT 'Autre',amount DOUBLE PRECISION NOT NULL,description TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS life_notes(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,category TEXT DEFAULT 'Personnel',content TEXT DEFAULT '',reminder_date TEXT DEFAULT '',reminder_time TEXT DEFAULT '08:00',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS contacts(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,role TEXT DEFAULT '',phone TEXT DEFAULT '',email TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS career_skills(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,category TEXT DEFAULT 'Technique',level TEXT DEFAULT 'Débutant',target_level TEXT DEFAULT 'Intermédiaire',status TEXT DEFAULT 'À apprendre',resource_url TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS career_training(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,provider TEXT DEFAULT '',kind TEXT DEFAULT 'Formation',start_date TEXT DEFAULT '',end_date TEXT DEFAULT '',status TEXT DEFAULT 'À envisager',url TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS career_opportunities(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,organization TEXT DEFAULT '',kind TEXT DEFAULT 'Stage',location TEXT DEFAULT '',deadline TEXT DEFAULT '',url TEXT DEFAULT '',status TEXT DEFAULT 'À examiner',contact TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS reminders(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,details TEXT DEFAULT '',remind_at TEXT NOT NULL,phone TEXT NOT NULL DEFAULT '',repeat_rule TEXT DEFAULT 'Aucun',enabled INTEGER DEFAULT 1,status TEXT DEFAULT 'En attente',last_sent_at TEXT DEFAULT '',last_error TEXT DEFAULT '',source_type TEXT DEFAULT '',source_id INTEGER,created_at TEXT DEFAULT CURRENT_TIMESTAMP,template_key TEXT DEFAULT 'custom');\n        CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY, value TEXT DEFAULT '');\n        CREATE TABLE IF NOT EXISTS assistant_docs(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,content TEXT NOT NULL,uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS productivity_projects(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,domain TEXT DEFAULT 'Personnel',status TEXT DEFAULT 'À faire',progress INTEGER DEFAULT 0,start_date TEXT DEFAULT '',due_date TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS flashcards(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,front TEXT NOT NULL,back TEXT NOT NULL,category TEXT DEFAULT 'Études',mastery INTEGER DEFAULT 0,created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS focus_sessions(id INTEGER PRIMARY KEY AUTOINCREMENT,session_date TEXT NOT NULL,duration_minutes INTEGER NOT NULL,activity TEXT DEFAULT 'Étude',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS daily_journal(id INTEGER PRIMARY KEY AUTOINCREMENT,entry_date TEXT NOT NULL UNIQUE,mood TEXT DEFAULT '',energy INTEGER DEFAULT 3,successes TEXT DEFAULT '',improvements TEXT DEFAULT '',tomorrow_priorities TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS meeting_minutes(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,meeting_date TEXT DEFAULT '',participants TEXT DEFAULT '',summary TEXT DEFAULT '',decisions TEXT DEFAULT '',actions TEXT DEFAULT '',status TEXT DEFAULT 'À suivre',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS life_organizer(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,kind TEXT DEFAULT 'Rendez-vous',event_date TEXT DEFAULT '',event_time TEXT DEFAULT '',priority TEXT DEFAULT 'Normale',status TEXT DEFAULT 'À faire',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        "
+_APP_SCHEMA_DDL = "\n        CREATE TABLE IF NOT EXISTS subjects(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,code TEXT DEFAULT '',semester TEXT DEFAULT '',ue TEXT DEFAULT '',ue_code TEXT DEFAULT '',credits REAL DEFAULT 0,cm REAL DEFAULT 0,td REAL DEFAULT 0,tp REAL DEFAULT 0,tpe REAL DEFAULT 0,vht REAL DEFAULT 0,teacher TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,event_date TEXT NOT NULL,start_time TEXT DEFAULT '',end_time TEXT DEFAULT '',kind TEXT DEFAULT 'Cours',subject_id INTEGER,location TEXT DEFAULT '',notes TEXT DEFAULT '',source TEXT DEFAULT 'Saisie manuelle',created_at TEXT DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE SET NULL);\n        CREATE TABLE IF NOT EXISTS tasks(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,due_date TEXT DEFAULT '',priority TEXT DEFAULT 'Normale',status TEXT DEFAULT 'À faire',category TEXT DEFAULT 'Travail personnel',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS documents(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,category TEXT DEFAULT 'Autre',url TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS study_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,subject_id INTEGER,study_date TEXT NOT NULL,hours DOUBLE PRECISION NOT NULL,method TEXT DEFAULT 'Révision active',confidence INTEGER DEFAULT 3,notes TEXT DEFAULT '',FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE SET NULL);\n        CREATE TABLE IF NOT EXISTS goals(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,category TEXT DEFAULT 'Études',target_date TEXT DEFAULT '',progress INTEGER DEFAULT 0,notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS habits(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,frequency TEXT DEFAULT 'Quotidienne',notes TEXT DEFAULT '',active INTEGER DEFAULT 1,created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS habit_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,habit_id INTEGER NOT NULL,log_date TEXT NOT NULL,done INTEGER DEFAULT 1,UNIQUE(habit_id,log_date),FOREIGN KEY(habit_id) REFERENCES habits(id) ON DELETE CASCADE);\n        CREATE TABLE IF NOT EXISTS budgets(id INTEGER PRIMARY KEY AUTOINCREMENT,entry_date TEXT NOT NULL,kind TEXT NOT NULL,category TEXT DEFAULT 'Autre',amount DOUBLE PRECISION NOT NULL,description TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS life_notes(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,category TEXT DEFAULT 'Personnel',content TEXT DEFAULT '',reminder_date TEXT DEFAULT '',reminder_time TEXT DEFAULT '08:00',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS contacts(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,role TEXT DEFAULT '',phone TEXT DEFAULT '',email TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS career_skills(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,category TEXT DEFAULT 'Technique',level TEXT DEFAULT 'Débutant',target_level TEXT DEFAULT 'Intermédiaire',status TEXT DEFAULT 'À apprendre',resource_url TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS career_training(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,provider TEXT DEFAULT '',kind TEXT DEFAULT 'Formation',start_date TEXT DEFAULT '',end_date TEXT DEFAULT '',status TEXT DEFAULT 'À envisager',url TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS career_opportunities(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,organization TEXT DEFAULT '',kind TEXT DEFAULT 'Stage',location TEXT DEFAULT '',deadline TEXT DEFAULT '',url TEXT DEFAULT '',status TEXT DEFAULT 'À examiner',contact TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS reminders(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,details TEXT DEFAULT '',remind_at TEXT NOT NULL,phone TEXT NOT NULL DEFAULT '',repeat_rule TEXT DEFAULT 'Aucun',enabled INTEGER DEFAULT 1,status TEXT DEFAULT 'En attente',last_sent_at TEXT DEFAULT '',last_error TEXT DEFAULT '',source_type TEXT DEFAULT '',source_id INTEGER,created_at TEXT DEFAULT CURRENT_TIMESTAMP,template_key TEXT DEFAULT 'custom');\n        CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY, value TEXT DEFAULT '');\n        CREATE TABLE IF NOT EXISTS assistant_docs(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,content TEXT NOT NULL,uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS productivity_projects(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,domain TEXT DEFAULT 'Personnel',status TEXT DEFAULT 'À faire',progress INTEGER DEFAULT 0,start_date TEXT DEFAULT '',due_date TEXT DEFAULT '',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS flashcards(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,front TEXT NOT NULL,back TEXT NOT NULL,category TEXT DEFAULT 'Études',mastery INTEGER DEFAULT 0,created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS focus_sessions(id INTEGER PRIMARY KEY AUTOINCREMENT,session_date TEXT NOT NULL,duration_minutes INTEGER NOT NULL,duration_seconds INTEGER DEFAULT 0,activity TEXT DEFAULT 'Étude',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS daily_journal(id INTEGER PRIMARY KEY AUTOINCREMENT,entry_date TEXT NOT NULL UNIQUE,mood TEXT DEFAULT '',energy INTEGER DEFAULT 3,successes TEXT DEFAULT '',improvements TEXT DEFAULT '',tomorrow_priorities TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS meeting_minutes(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,meeting_date TEXT DEFAULT '',participants TEXT DEFAULT '',summary TEXT DEFAULT '',decisions TEXT DEFAULT '',actions TEXT DEFAULT '',status TEXT DEFAULT 'À suivre',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        CREATE TABLE IF NOT EXISTS life_organizer(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,kind TEXT DEFAULT 'Rendez-vous',event_date TEXT DEFAULT '',event_time TEXT DEFAULT '',priority TEXT DEFAULT 'Normale',status TEXT DEFAULT 'À faire',notes TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);\n        "
 
 def _split_schema_columns(body):
     parts, start, depth, quoted = [], 0, 0, False
@@ -1445,25 +1445,65 @@ _NAV_APPS = {
     "Khan Academy": ("https://www.khanacademy.org/", ("khan academy", "khan")),
     "ChatGPT": ("https://chatgpt.com/", ("chatgpt", "assistant ia", "intelligence artificielle", "seugn bi ak ia")),
 }
+@st.cache_resource(show_spinner=False)
+def ensure_focus_sessions_schema():
+    """Ajoute le champ de secondes exact sans toucher aux anciennes séances."""
+    if DB_BACKEND in {"postgres", "postgresql", "supabase"}:
+        with connect() as _focus_db:
+            _focus_db.execute("ALTER TABLE focus_sessions ADD COLUMN IF NOT EXISTS duration_seconds INTEGER DEFAULT 0")
+    else:
+        with connect() as _focus_db:
+            _focus_columns = {row["name"] for row in _focus_db.execute("PRAGMA table_info(focus_sessions)").fetchall()}
+            if "duration_seconds" not in _focus_columns:
+                _focus_db.execute("ALTER TABLE focus_sessions ADD COLUMN duration_seconds INTEGER DEFAULT 0")
+
+def _focus_elapsed_seconds(now=None):
+    now = float(now if now is not None else time_module.time())
+    elapsed = int(st.session_state.get("issa_focus_elapsed_seconds", 0) or 0)
+    if st.session_state.get("issa_focus_status") == "running":
+        started = float(st.session_state.get("issa_focus_segment_started", now) or now)
+        elapsed += max(0, int(now - started))
+    return elapsed
+
+def _save_focus_session(seconds):
+    """Enregistre automatiquement une séance terminée avec sa durée exacte."""
+    if st.session_state.get("issa_focus_logged", False):
+        return False
+    seconds = max(1, int(seconds))
+    ensure_focus_sessions_schema()
+    minutes = max(1, int(round(seconds / 60)))
+    activity = str(st.session_state.get("issa_focus_activity", "Étude") or "Étude").strip() or "Étude"
+    notes = str(st.session_state.get("issa_focus_notes", "") or "").strip()
+    with connect() as _focus_db:
+        _focus_db.execute(
+            "INSERT INTO focus_sessions(session_date,duration_minutes,duration_seconds,activity,notes) VALUES(?,?,?,?,?)",
+            (date.today().isoformat(), minutes, seconds, activity, notes),
+        )
+    st.session_state["issa_focus_logged"] = True
+    return True
+
+def _finish_focus_session(seconds=None):
+    if seconds is None:
+        seconds = _focus_elapsed_seconds()
+    _save_focus_session(seconds)
+    st.session_state["issa_focus_status"] = "finished"
+    st.session_state["issa_focus_active"] = False
+    st.session_state["issa_focus_until"] = 0
+    st.session_state["issa_focus_expired"] = True
+
 # ---------- Mode concentration renforcé : verrouillage de la navigation dans le site ----------
 # Le verrouillage est volontairement limité à cette application web. Un site Streamlit
 # ne peut pas bloquer Windows/macOS, Alt+Tab, le gestionnaire des tâches ou les autres apps.
 _focus_until = float(st.session_state.get("issa_focus_until", 0) or 0)
 _focus_active = bool(st.session_state.get("issa_focus_active", False))
 if _focus_active and _focus_until and time_module.time() >= _focus_until:
-    if not st.session_state.get("issa_focus_logged", False):
-        _elapsed = max(1, int((time_module.time() - float(st.session_state.get("issa_focus_started", time_module.time()))) / 60))
-        try:
-            _magic_result = run(
-                'INSERT INTO focus_sessions(session_date,duration_minutes,activity,notes) VALUES(?,?,?,?)',
-                (date.today().isoformat(), _elapsed, str(st.session_state.get("issa_focus_activity", "Étude")), str(st.session_state.get("issa_focus_notes", "Séance chronométrée")))
-            )
-        except Exception:
-            pass
-        st.session_state["issa_focus_logged"] = True
-    st.session_state["issa_focus_active"] = False
-    st.session_state["issa_focus_until"] = 0
-    st.session_state["issa_focus_expired"] = True
+    try:
+        _magic_result = _finish_focus_session(_focus_elapsed_seconds(_focus_until))
+    except Exception as _focus_save_error:
+        _magic_result = _NONE_RUNTIME_LOG.append({"where": "focus_session_save", "error": str(_focus_save_error)[:200]})
+        st.session_state["issa_focus_status"] = "paused"
+        st.session_state["issa_focus_active"] = False
+        st.session_state["issa_focus_elapsed_seconds"] = _focus_elapsed_seconds()
     _focus_active = False
 
 if _focus_active:
@@ -1487,6 +1527,21 @@ if _focus_active:
       }})();
       </script></div>''', height=190)
     _magic_result = st.info("Pendant cette session, seuls les outils de recherche ci-dessous et ton document de travail sont proposés dans l’application.")
+    _focus_control_cols = st.columns(2)
+    if _focus_control_cols[0].button("⏸️ Mettre en pause", key="focus_pause_locked", use_container_width=True):
+        st.session_state["issa_focus_elapsed_seconds"] = _focus_elapsed_seconds()
+        st.session_state["issa_focus_status"] = "paused"
+        st.session_state["issa_focus_active"] = False
+        st.session_state["issa_focus_until"] = 0
+        _magic_result = st.rerun()
+    if _focus_control_cols[1].button("⏹️ Terminer et enregistrer", key="focus_finish_locked", type="primary", use_container_width=True):
+        try:
+            _focus_seconds = _focus_elapsed_seconds()
+            _ = _finish_focus_session(_focus_seconds)
+            _magic_result = st.success(f"Séance enregistrée : {_focus_seconds // 60} min {_focus_seconds % 60} s.")
+        except Exception as _focus_save_error:
+            _magic_result = st.error(f"Impossible d’enregistrer cette séance : {str(_focus_save_error)[:200]}")
+        _magic_result = st.rerun()
     _focus_cols = st.columns(2)
     with _focus_cols[0]:
         _magic_result = st.link_button("🤖 Ouvrir ChatGPT", "https://chatgpt.com/", use_container_width=True)
@@ -2702,14 +2757,42 @@ elif page=="Centre de productivité XXL":
             notes=st.text_area('Consignes ou résultat attendu',placeholder='Ex. : revoir le chapitre 2 et faire 10 exercices…')
             start_focus=st.form_submit_button('▶️ Démarrer le mode concentration',type='primary',use_container_width=True)
         if start_focus:
-            st.session_state['issa_focus_activity']=activity.strip() or 'Étude'
+            _focus_now = time_module.time()
+            st.session_state['issa_focus_activity']=activity.strip() or 'Étude / révision'
             st.session_state['issa_focus_notes']=notes.strip()
-            st.session_state['issa_focus_started']=time_module.time()
-            st.session_state['issa_focus_until']=time_module.time()+int(duration)*60
+            st.session_state['issa_focus_duration_seconds']=int(duration)*60
+            st.session_state['issa_focus_elapsed_seconds']=0
+            st.session_state['issa_focus_started']=_focus_now
+            st.session_state['issa_focus_segment_started']=_focus_now
+            st.session_state['issa_focus_until']=_focus_now+int(duration)*60
+            st.session_state['issa_focus_status']='running'
             st.session_state['issa_focus_active']=True
             st.session_state['issa_focus_logged']=False
             st.session_state['issa_focus_expired']=False
             _magic_result = st.rerun()
+        _focus_status = st.session_state.get('issa_focus_status', 'idle')
+        if _focus_status == 'paused':
+            _paused_seconds = _focus_elapsed_seconds()
+            _magic_result = st.info(f"Session en pause · {st.session_state.get('issa_focus_activity', 'Étude')} · {_paused_seconds // 60} min {_paused_seconds % 60} s écoulées.")
+            _resume_col, _finish_col = st.columns(2)
+            if _resume_col.button('▶️ Reprendre', key='focus_resume_paused', type='primary', use_container_width=True):
+                _focus_now = time_module.time()
+                _remaining_seconds = max(0, int(st.session_state.get('issa_focus_duration_seconds', 0)) - _paused_seconds)
+                st.session_state['issa_focus_segment_started'] = _focus_now
+                st.session_state['issa_focus_until'] = _focus_now + _remaining_seconds
+                st.session_state['issa_focus_status'] = 'running'
+                st.session_state['issa_focus_active'] = True
+                _magic_result = st.rerun()
+            if _finish_col.button('⏹️ Terminer et enregistrer', key='focus_finish_paused', use_container_width=True):
+                try:
+                    _ = _finish_focus_session(_paused_seconds)
+                    _magic_result = st.success(f"Séance enregistrée : {_paused_seconds // 60} min {_paused_seconds % 60} s.")
+                except Exception as _focus_save_error:
+                    _magic_result = st.error(f"Impossible d’enregistrer cette séance : {str(_focus_save_error)[:200]}")
+                _magic_result = st.rerun()
+        elif _focus_status == 'finished':
+            _magic_result = st.success('La dernière séance a été enregistrée dans tes sessions de concentration.')
+            st.session_state['issa_focus_status'] = 'idle'
         _magic_result = st.markdown("#### 📄 Préparer un document avant de commencer")
         _prepare_upload=st.file_uploader('Importer un document TXT, MD, PDF ou DOCX',type=['txt','md','pdf','docx'],key='issa_focus_prepare_upload')
         if _prepare_upload is not None:
@@ -2733,7 +2816,7 @@ elif page=="Centre de productivité XXL":
         if st.session_state.get('issa_focus_expired'):
             _magic_result = st.success('⏰ Ta session précédente est terminée. Une nouvelle session peut être lancée.')
             st.session_state['issa_focus_expired']=False
-        focus=read_df('SELECT * FROM focus_sessions ORDER BY id DESC'); total=int(focus.duration_minutes.sum()) if not focus.empty else 0; a,b=st.columns(2); _magic_result = a.metric('Minutes cumulées',total); _magic_result = b.metric('Heures cumulées',round(total/60,1))
+        ensure_focus_sessions_schema(); focus=read_df('SELECT * FROM focus_sessions ORDER BY id DESC'); total_seconds=int(focus.duration_seconds.fillna(0).sum()) if not focus.empty and 'duration_seconds' in focus else 0; legacy_minutes=int(focus.loc[focus.duration_seconds.fillna(0)==0,'duration_minutes'].sum()) if not focus.empty and 'duration_seconds' in focus else (int(focus.duration_minutes.sum()) if not focus.empty else 0); total_seconds += legacy_minutes*60; a,b=st.columns(2); _magic_result = a.metric('Temps cumulé',f'{total_seconds//3600} h {(total_seconds%3600)//60} min'); _magic_result = b.metric('Séances enregistrées',len(focus))
         if not focus.empty: _ = show_dataframe(focus,use_container_width=True,hide_index=True); _ = export_csv(focus,'les séances de concentration','focus_sessions')
     with tabs[5]:
         today=date.today().isoformat(); existing=read_df('SELECT * FROM daily_journal WHERE entry_date=?',(today,)); default=existing.iloc[0] if not existing.empty else None
