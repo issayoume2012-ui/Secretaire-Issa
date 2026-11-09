@@ -1543,6 +1543,34 @@ def _issa_gemini_reply(question, history=None, context=None, audio=None):
         _magic_result = contents.append({"role":"user","parts":tool_parts})
     return "L’assistant a atteint la limite d’étapes pour cette demande. Précise l’action ou sépare-la en deux demandes."
 
+def _issa_gemini_document_action(action, document_text, activity=""):
+    """Produit une aide pédagogique fondée uniquement sur les documents joints au Focus."""
+    key = _startup_secret("GEMINI_API_KEY", "")
+    if not key:
+        return "Ajoute GEMINI_API_KEY dans les Secrets Streamlit pour utiliser la génération IA."
+    source = str(document_text or "").strip()[:18000]
+    if not source:
+        return "Ajoute d’abord un document lisible à l’espace Focus."
+    prompt = (
+        "Tu es l'assistant pédagogique de Secrétaire Issa XXL. Réponds en français, en wolof si la demande est en wolof, "
+        "ou dans un mélange naturel si les deux langues sont utilisées. Utilise le document fourni comme seule source factuelle. "
+        "N'invente pas de contenu absent ; signale clairement toute limite. Présente le résultat avec des titres et des étapes lisibles.\n"
+        f"Activité de la séance : {activity or 'Étude'}\nTâche demandée : {action}\n\n"
+        f"DOCUMENTS JOINTS (extraits limités aux 18 000 caractères) :\n{source}"
+    )
+    body = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.25, "maxOutputTokens": 1400},
+    }
+    request = urllib.request.Request(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent",
+        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+        headers={"x-goog-api-key": key, "Content-Type": "application/json"}, method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=20) as response:
+        result = json.loads(response.read().decode("utf-8"))
+    return "".join(part.get("text", "") for part in result["candidates"][0]["content"].get("parts", []) if "text" in part).strip() or "L’IA n’a pas renvoyé de texte. Essaie avec une demande plus précise."
+
 REMINDER_WORKER = start_reminder_worker()
 # Traitement allégé : ne pas refaire toutes les synchronisations SQL à chaque clic.
 # Les appels sont explicitement affectés à une variable pour éviter qu'une valeur
@@ -1779,6 +1807,60 @@ if _focus_active:
         if _focus_notes_text:
             _magic_result = st.markdown("**Détails de la session**")
             _magic_result = st.write(_focus_notes_text)
+        _magic_result = st.markdown("### 📚 Espace de travail Focus")
+        _magic_result = st.caption("Ajoute tes supports ici. L’assistant peut ensuite en tirer un résumé, des exercices ou des informations précises. Les pièces jointes restent dans cette session de navigateur.")
+        if "issa_focus_attachments" not in st.session_state:
+            st.session_state["issa_focus_attachments"] = []
+        if not st.session_state["issa_focus_attachments"] and st.session_state.get("issa_focus_document_text", "").strip():
+            st.session_state["issa_focus_attachments"].append({
+                "title": str(st.session_state.get("issa_focus_document_name", "Document préparé")),
+                "content": str(st.session_state["issa_focus_document_text"]),
+            })
+        _focus_docs = read_df("SELECT id,title FROM assistant_docs ORDER BY id DESC LIMIT 100")
+        if not _focus_docs.empty:
+            _focus_saved_labels = {f"#{int(row.id)} · {row.title}": int(row.id) for row in _focus_docs.itertuples()}
+            _focus_doc_choice = st.selectbox("Joindre un document de ta bibliothèque", ["— Choisir —"] + list(_focus_saved_labels), key="issa_focus_library_doc")
+            if _focus_doc_choice != "— Choisir —" and st.button("📎 Ajouter ce document à la séance", key="issa_focus_attach_library"):
+                _focus_doc_row = _focus_docs[_focus_docs["id"] == _focus_saved_labels[_focus_doc_choice]].iloc[0]
+                _focus_doc_content = read_df("SELECT content FROM assistant_docs WHERE id=?", (int(_focus_doc_row["id"]),))
+                _focus_attached = st.session_state["issa_focus_attachments"]
+                if not any(item.get("title") == str(_focus_doc_row["title"]) for item in _focus_attached):
+                    _focus_attached.append({"title": str(_focus_doc_row["title"]), "content": str(_focus_doc_content.iloc[0]["content"] or "") if not _focus_doc_content.empty else ""})
+                _magic_result = st.rerun()
+        _focus_upload = st.file_uploader("Joindre un cours (PDF, DOCX, TXT ou MD)", type=["pdf", "docx", "txt", "md"], key="issa_focus_live_upload")
+        if _focus_upload is not None and st.button("📎 Ajouter le fichier à la séance", key="issa_focus_attach_upload"):
+            try:
+                _focus_upload_text = extract_document_text(_focus_upload)
+                if not _focus_upload_text.strip():
+                    st.warning("Aucun texte lisible dans ce fichier. Les PDF scannés sans couche texte ne peuvent pas encore être analysés.")
+                else:
+                    st.session_state["issa_focus_attachments"].append({"title": _focus_upload.name, "content": _focus_upload_text})
+                    _magic_result = st.rerun()
+            except Exception as _focus_doc_error:
+                _magic_result = st.error(f"Lecture du fichier impossible : {str(_focus_doc_error)[:220]}")
+        _focus_attachments = st.session_state.get("issa_focus_attachments", [])
+        _focus_doc_text = "\n\n".join(f"### {item.get('title', 'Document')}\n{item.get('content', '')}" for item in _focus_attachments)
+        if _focus_attachments:
+            _magic_result = st.write(" · ".join(item.get("title", "Document") for item in _focus_attachments))
+            if st.button("🧹 Retirer les documents de cette séance", key="issa_focus_clear_attachments"):
+                st.session_state["issa_focus_attachments"] = []
+                _magic_result = st.rerun()
+            _focus_ai_action = st.selectbox("Aide IA à produire", ["Faire un résumé structuré", "Créer des exercices avec corrigé", "Extraire les notions, dates et définitions", "Répondre à ma consigne"], key="issa_focus_ai_action")
+            _focus_ai_custom = st.text_input("Consigne (pour l’action personnalisée)", placeholder="Ex. Explique les notions difficiles avec des exemples agricoles", key="issa_focus_ai_custom")
+            if st.button("✨ Demander à l’assistant sur ces documents", key="issa_focus_generate_doc", type="primary"):
+                if _focus_ai_action == "Répondre à ma consigne" and not _focus_ai_custom.strip():
+                    _magic_result = st.warning("Écris la consigne que tu veux donner à l’assistant.")
+                else:
+                    _focus_action_text = _focus_ai_custom.strip() if _focus_ai_action == "Répondre à ma consigne" else _focus_ai_action
+                    try:
+                        with st.spinner("L’assistant lit les documents et prépare le résultat…"):
+                            st.session_state["issa_focus_ai_result"] = _issa_gemini_document_action(_focus_action_text, _focus_doc_text, st.session_state.get("issa_focus_activity", "Étude"))
+                    except Exception as _focus_ai_error:
+                        st.session_state["issa_focus_ai_result"] = f"Je n’ai pas pu analyser les documents ({type(_focus_ai_error).__name__}). Vérifie la connexion, la clé IA et réessaie."
+            if st.session_state.get("issa_focus_ai_result"):
+                with st.container(border=True):
+                    _magic_result = st.markdown("#### Résultat de l’assistant")
+                    _magic_result = st.markdown(st.session_state["issa_focus_ai_result"])
         if st.button("⏹️ Arrêter la session et enregistrer", key="focus_finish_locked", type="primary", use_container_width=True):
             try:
                 _focus_seconds = _focus_elapsed_seconds()
@@ -2595,6 +2677,8 @@ elif page=="Assistant de vie":
             _focus_start_result = _start_focus_for_sequence(_current_step)
             if _focus_start_result == 'started':
                 _magic_result = st.rerun()
+            elif _focus_start_result == 'waiting':
+                _magic_result = st.rerun()
         _pending_focus = st.session_state.get('issa_sequence_pending_focus')
         _sequence_waiting = bool(_pending_focus and (_pending_focus.get('source_type'), _pending_focus.get('source_id')) == (_current_step['source_type'], _current_step['source_id']) and time_module.time() < float(_pending_focus.get('start_at', 0)))
         if _pending_focus and (_pending_focus.get('source_type'), _pending_focus.get('source_id')) == (_current_step['source_type'], _current_step['source_id']):
@@ -2633,7 +2717,10 @@ elif page=="Assistant de vie":
             elif _sequence_waiting:
                 _magic_result = st.caption("La séance est programmée. Le chrono démarrera automatiquement à l’heure de début enregistrée dans l’agenda.")
             else:
-                _magic_result = st.caption("Le chrono de concentration démarre automatiquement pour cette étape.")
+                _magic_result = st.caption("Cette étape est prête. Le chrono ne démarre qu’après ton action.")
+                if st.button("▶️ Démarrer le chrono de cette étape", key=f"issa_sequence_start_step_{_current_step['source_type']}_{_current_step['source_id']}", use_container_width=True):
+                    _focus_start_result = _start_focus_for_sequence(_current_step)
+                    _magic_result = st.rerun()
             _complete_step = st.button("✅ Valider cette étape et débloquer la suivante", type="primary", use_container_width=True, key="issa_sequence_complete_step", disabled=_sequence_waiting)
         _pause_sequence = st.button("⏸️ Mettre le parcours en pause", key="issa_sequence_pause")
         if _complete_step:
@@ -2644,8 +2731,8 @@ elif page=="Assistant de vie":
                 else:
                     _sequence_db.execute("INSERT OR IGNORE INTO focus_sequence_done(source_type,source_id) VALUES('event',?)", (int(_current_step['source_id']),))
             st.session_state.pop('issa_sequence_pending_focus', None)
-            st.session_state['issa_sequence_autostart_next'] = bool(len(_sequence_items) > 1)
-            _magic_result = st.toast("Étape validée. Préparation automatique de la suivante.")
+            st.session_state['issa_sequence_autostart_next'] = False
+            _magic_result = st.toast("Étape validée. La suivante est débloquée ; démarre-la quand tu es prêt.")
             _magic_result = st.rerun()
         if _pause_sequence:
             st.session_state["issa_sequence_strict"] = False
@@ -2662,7 +2749,7 @@ elif page=="Assistant de vie":
                 if _next_step['details']:
                     _magic_result = st.caption(_next_step['details'])
                 _magic_result = st.write(f"{len(_sequence_items)} étape(s) en attente. Le parcours suit automatiquement les dates de ton agenda et de tes tâches.")
-                if st.button("🔒 Démarrer le parcours strict avec chrono automatique", type="primary", key="issa_sequence_start"):
+                if st.button("🔒 Activer le parcours strict étape par étape", type="primary", key="issa_sequence_start"):
                     st.session_state["issa_sequence_strict"] = True
                     st.session_state['issa_sequence_autostart_next'] = True
                     _magic_result = st.rerun()
