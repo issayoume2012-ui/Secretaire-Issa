@@ -1261,7 +1261,8 @@ def render_focus_agenda(key_prefix):
         f"{row.scheduled} · {row.title} · {'Agenda' if row.source_type == 'event' else 'Tâche'} · #{int(row.source_id)}": (str(row.source_type), int(row.source_id))
         for row in _agenda.itertuples(index=False)
     }
-    _choice = st.selectbox("Classer ou supprimer un élément", list(_choices), key=f"{key_prefix}_item")
+    _focus_choice_key=f"{key_prefix}_item"
+    _choice = st.selectbox("Classer ou supprimer un élément", normalize_widget_choice(_focus_choice_key, _choices), key=_focus_choice_key)
     _source_type, _source_id = _choices[_choice]
     _selected_agenda = _agenda[(_agenda.source_type == _source_type) & (_agenda.source_id == _source_id)].iloc[0]
     with st.form(f"{key_prefix}_manage_form"):
@@ -1321,6 +1322,13 @@ def display_text(value, fallback=""):
     """Retourne une valeur sûre pour l'interface, sans None/NULL/NaN visibles."""
     cleaned = _clean_missing_value(value, fallback)
     return fallback if cleaned == "" else str(cleaned)
+
+def normalize_widget_choice(key, options):
+    """Évite qu'un selectbox conserve l'identifiant d'une fiche supprimée."""
+    choices = list(options)
+    if choices and st.session_state.get(key) not in choices:
+        st.session_state[key] = choices[0]
+    return choices
 
 def norm(s):
     return re.sub(r'[^a-z0-9]+',' ',unicodedata.normalize('NFKD',str(s or '')).encode('ascii','ignore').decode().lower()).strip()
@@ -3010,23 +3018,33 @@ elif page=="Assistant de vie":
                 with a: _ = card('Revenus',f'{incomes:,.0f} FCFA')
                 with b: _ = card('Dépenses',f'{expenses:,.0f} FCFA')
                 with c: _ = card('Solde enregistré',f'{incomes-expenses:,.0f} FCFA')
-                _ = show_dataframe(budget,use_container_width=True,hide_index=True); _ = export_csv(budget,'le budget','budget')
-                opts={f"#{r.id} · {r.entry_date} · {r.kind} · {r.amount:g} FCFA":int(r.id) for r in budget.itertuples()}; pick=st.selectbox('Mouvement à supprimer',list(opts))
-                _edit_budget_id=st.selectbox('Mouvement à modifier rapidement',list(opts),key='budget_quick_edit_pick')
-                _edit_budget_row=budget[budget.id==_edit_budget_id].iloc[0]
-                try: _edit_budget_default_day=datetime.strptime(str(_edit_budget_row.entry_date),'%Y-%m-%d').date()
-                except (TypeError,ValueError): _edit_budget_default_day=date.today()
-                with st.form(f'budget_quick_edit_form_{_edit_budget_id}'):
-                    _edit_budget_day=st.date_input('Date du mouvement',value=_edit_budget_default_day,key=f'budget_edit_day_{_edit_budget_id}')
-                    _edit_budget_kind=st.selectbox('Type de mouvement',['Dépense','Revenu'],index=['Dépense','Revenu'].index(_edit_budget_row.kind) if _edit_budget_row.kind in ['Dépense','Revenu'] else 0,key=f'budget_edit_kind_{_edit_budget_id}')
-                    _edit_budget_amount=st.number_input('Montant à corriger (FCFA)',min_value=0.,value=float(_edit_budget_row.amount),step=500.,key=f'budget_edit_amount_{_edit_budget_id}')
-                    _edit_budget_category=st.text_input('Catégorie',value=str(_edit_budget_row.category or 'Autre'),key=f'budget_edit_category_{_edit_budget_id}')
-                    _edit_budget_description=st.text_input('Description',value=str(_edit_budget_row.description or ''),key=f'budget_edit_description_{_edit_budget_id}')
-                    _save_budget_changes=st.form_submit_button('💾 Enregistrer la correction')
-                if _save_budget_changes:
-                    if _edit_budget_amount<=0: _magic_result = st.error('Le montant doit être supérieur à zéro.')
-                    else:
-                        _ = run('UPDATE budgets SET entry_date=?,kind=?,amount=?,category=?,description=? WHERE id=?',(_edit_budget_day.isoformat(),_edit_budget_kind,float(_edit_budget_amount),_edit_budget_category.strip() or 'Autre',_edit_budget_description.strip(),_edit_budget_id)); _magic_result = st.rerun()
+                _budget_inline=budget[['id','entry_date','kind','category','amount','description']].copy()
+                _budget_inline['kind']=_budget_inline['kind'].map(lambda value:value if value in {'Dépense','Revenu'} else 'Dépense')
+                _budget_editor_key='budget_inline_'+hashlib.sha1(','.join(str(int(value)) for value in _budget_inline.id).encode()).hexdigest()[:10]
+                _budget_inline_edited=st.data_editor(_budget_inline,hide_index=True,use_container_width=True,num_rows='fixed',disabled=['id'],key=_budget_editor_key,column_config={'kind':st.column_config.SelectboxColumn('Type',options=['Dépense','Revenu']),'amount':st.column_config.NumberColumn('Montant FCFA',min_value=0,step=500,format='%.0f')})
+                if st.button('💾 Enregistrer les modifications du tableau budget',key='budget_inline_save'):
+                    try:
+                        with connect() as _budget_db:
+                            for _,_budget_row in _budget_inline_edited.iterrows():
+                                _budget_id=int(_budget_row['id'])
+                                _budget_original=budget[budget.id==_budget_id].iloc[0]
+                                _budget_date_raw=str(_budget_row['entry_date']).strip()
+                                _budget_kind=str(_budget_row['kind']).strip()
+                                _budget_amount=float(_budget_row['amount'])
+                                _budget_category=str(_budget_row['category'] or 'Autre').strip()
+                                _budget_description=str(_budget_row['description'] or '').strip()
+                                _budget_changed=(_budget_date_raw!=str(_budget_original['entry_date']) or _budget_kind!=str(_budget_original['kind']) or _budget_amount!=float(_budget_original['amount']) or _budget_category!=str(_budget_original['category'] or 'Autre').strip() or _budget_description!=str(_budget_original['description'] or '').strip())
+                                if not _budget_changed: continue
+                                _budget_date=date.fromisoformat(_budget_date_raw)
+                                if _budget_kind not in {'Dépense','Revenu'}: raise ValueError('Le type doit être « Dépense » ou « Revenu ».')
+                                if _budget_amount<=0: raise ValueError('Chaque montant doit être supérieur à zéro.')
+                                _budget_db.execute('UPDATE budgets SET entry_date=?,kind=?,category=?,amount=?,description=? WHERE id=?',(_budget_date.isoformat(),_budget_kind,_budget_category,_budget_amount,_budget_description,_budget_id))
+                        _magic_result = st.success('Tableau budget mis à jour.')
+                        _magic_result = st.rerun()
+                    except (TypeError,ValueError) as _budget_edit_error:
+                        _magic_result = st.error(f'Modification refusée : {_budget_edit_error}')
+                _ = export_csv(budget,'le budget','budget')
+                opts={f"#{r.id} · {r.entry_date} · {r.kind} · {r.amount:g} FCFA":int(r.id) for r in budget.itertuples()}; _budget_delete_key='budget_delete_pick'; normalize_widget_choice(_budget_delete_key,opts); pick=st.selectbox('Mouvement à supprimer',list(opts),key=_budget_delete_key)
                 if st.button('Supprimer le mouvement'): _ = run('DELETE FROM budgets WHERE id=?',(opts[pick],)); _magic_result = st.rerun()
             else: _magic_result = st.info('Aucun mouvement saisi. Le solde est calculé uniquement à partir des mouvements enregistrés ici.')
         with tabs[3]:
@@ -3044,11 +3062,52 @@ elif page=="Assistant de vie":
                 else: _magic_result = st.error('Saisis le titre de la tâche.')
             tasks=read_df("SELECT * FROM tasks ORDER BY CASE priority WHEN 'Urgente' THEN 1 WHEN 'Haute' THEN 2 WHEN 'Normale' THEN 3 ELSE 4 END, due_date")
             if not tasks.empty:
-                _ = show_dataframe(tasks[['id','title','due_date','priority','status','category','notes']],use_container_width=True,hide_index=True)
-                opts={f"#{r.id} · {r.title}":int(r.id) for r in tasks.itertuples()}; sel=st.selectbox('Tâche à mettre à jour',list(opts)); tid=opts[sel]
-                status=st.selectbox('Nouveau statut',['À faire','En cours','Terminée'],key='life_task_status')
-                if st.button('Enregistrer le statut',key='life_task_save'): _ = run('UPDATE tasks SET status=? WHERE id=?',(status,tid)); _magic_result = st.rerun()
-                if st.button('Supprimer cette tâche',key='life_task_delete'): _ = run('DELETE FROM tasks WHERE id=?',(tid,)); _magic_result = st.rerun()
+                _task_inline=tasks[['id','title','due_date','priority','status','category','notes']].copy()
+                _task_inline['priority']=_task_inline['priority'].map(lambda value:value if value in {'Basse','Normale','Haute','Urgente'} else 'Normale')
+                _task_inline['status']=_task_inline['status'].map(lambda value:value if value in {'À faire','En cours','Terminée','Terminé','Rendue','Rendu'} else 'À faire')
+                _task_editor_key='tasks_inline_'+hashlib.sha1(','.join(str(int(value)) for value in _task_inline.id).encode()).hexdigest()[:10]
+                _task_inline_edited=st.data_editor(_task_inline,hide_index=True,use_container_width=True,num_rows='fixed',disabled=['id'],key=_task_editor_key,column_config={'priority':st.column_config.SelectboxColumn('Priorité',options=['Basse','Normale','Haute','Urgente']),'status':st.column_config.SelectboxColumn('Statut',options=['À faire','En cours','Terminée','Terminé','Rendue','Rendu'])})
+                if st.button('💾 Enregistrer les modifications du tableau des tâches',key='tasks_inline_save'):
+                    try:
+                        with connect() as _tasks_db:
+                            for _,_task_row in _task_inline_edited.iterrows():
+                                _task_title=str(_task_row['title'] or '').strip()
+                                _task_due=str(_task_row['due_date'] or '').strip()
+                                _task_priority=str(_task_row['priority']).strip()
+                                _task_status=str(_task_row['status']).strip()
+                                if not _task_title: raise ValueError('Le titre d’une tâche ne peut pas être vide.')
+                                if _task_priority not in {'Basse','Normale','Haute','Urgente'}: raise ValueError('Choisis une priorité valide.')
+                                if _task_status not in {'À faire','En cours','Terminée','Terminé','Rendue','Rendu'}: raise ValueError('Choisis un statut valide.')
+                                _task_id=int(_task_row['id'])
+                                _task_category=str(_task_row['category'] or 'Personnel').strip()
+                                _task_notes=str(_task_row['notes'] or '').strip()
+                                _task_original=tasks[tasks.id==_task_id].iloc[0]
+                                _task_changed=any((str(_task_original[field] or '').strip()!=new_value) for field,new_value in [('title',_task_title),('due_date',_task_due),('priority',_task_priority),('status',_task_status),('category',_task_category),('notes',_task_notes)])
+                                if not _task_changed: continue
+                                if _task_due: _task_due=date.fromisoformat(_task_due).isoformat()
+                                _tasks_db.execute('UPDATE tasks SET title=?,due_date=?,priority=?,status=?,category=?,notes=? WHERE id=?',(_task_title,_task_due,_task_priority,_task_status,_task_category,_task_notes,_task_id))
+                                if _task_status in {'Terminée','Terminé','Rendue','Rendu'}:
+                                    _tasks_db.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type='task' AND source_id=? AND status IN ('En attente','Erreur')",(_task_id,))
+                                elif _task_due:
+                                    _task_due_date=date.fromisoformat(_task_due)
+                                    _task_remind=datetime.combine(max(date.today(),_task_due_date-timedelta(days=1)),time(8,0))
+                                    if _task_remind<datetime.now(): _task_remind=datetime.now()+timedelta(minutes=1)
+                                    _tasks_db.execute("UPDATE reminders SET title=?,details=?,remind_at=?,status=CASE WHEN enabled=1 THEN 'En attente' ELSE 'Désactivé' END,email_status=CASE WHEN enabled=1 THEN 'À envoyer' ELSE email_status END,email_sent_at=CASE WHEN enabled=1 THEN '' ELSE email_sent_at END,email_last_error=CASE WHEN enabled=1 THEN '' ELSE email_last_error END,last_attempt_at='' WHERE source_type='task' AND source_id=?",(f'Échéance : {_task_title}',f'Priorité : {_task_priority}. Domaine : {_task_category}. {_task_notes}',_task_remind.strftime('%Y-%m-%d %H:%M:%S'),_task_id))
+                                else:
+                                    _tasks_db.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type='task' AND source_id=? AND status IN ('En attente','Erreur')",(_task_id,))
+                        _magic_result = st.success('Tâches mises à jour. Les rappels associés ont été synchronisés.')
+                        _magic_result = st.rerun()
+                    except (TypeError,ValueError) as _task_edit_error:
+                        _magic_result = st.error(f'Modification refusée : {_task_edit_error}')
+                _task_delete_opts={f"#{r.id} · {r.title}":int(r.id) for r in tasks.itertuples()}
+                normalize_widget_choice('life_task_delete_pick',_task_delete_opts)
+                _task_delete_label=st.selectbox('Tâche à supprimer',list(_task_delete_opts),key='life_task_delete_pick')
+                if st.button('Supprimer cette tâche',key='life_task_delete'):
+                    _task_delete_id=_task_delete_opts[_task_delete_label]
+                    with connect() as _tasks_db:
+                        _tasks_db.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type='task' AND source_id=? AND status IN ('En attente','Erreur')",(_task_delete_id,))
+                        _tasks_db.execute('DELETE FROM tasks WHERE id=?',(_task_delete_id,))
+                    _magic_result = st.rerun()
             else: _magic_result = st.info('Ta liste est vide.')
         with tabs[4]:
             with st.form('note_form'):
@@ -3239,9 +3298,38 @@ elif page=="Rappels automatiques":
         with c1: _ = card('Rappels en attente',len(pending),'Échéances à venir ou à traiter')
         with c2: _ = card('À traiter maintenant',len(overdue),'Date/heure du rappel atteinte')
         with c3: _ = card('E-mails envoyés',int((reminders.status=='Envoyé').sum()),'Rappels ponctuels déjà transmis')
-        display=reminders.rename(columns={'template_key':'Modèle','email_status':'État e-mail','email_sent_at':'E-mail envoyé le','status':'État général','title':'Rappel automatique','details':'Détails / rubrique','remind_at':'Date et heure','repeat_rule':'Répétition','enabled':'Actif','last_sent_at':'Dernier e-mail','last_error':'Erreur éventuelle','source_type':'Rubrique source','source_id':'N° entrée'})
-        _ = show_dataframe(display[['Rappel automatique','Détails / rubrique','Date et heure','Rubrique source','Modèle','État e-mail','Actif','Dernier e-mail','Erreur éventuelle']],use_container_width=True,hide_index=True)
+        _magic_result = st.caption('Tu peux corriger le titre, les détails, la date/heure et la répétition directement dans le tableau, puis enregistrer.')
+        _reminder_inline=reminders[['id','title','details','remind_at','repeat_rule','template_key']].copy()
+        _reminder_inline['repeat_rule']=_reminder_inline['repeat_rule'].map(lambda value:value if value in {'Aucun','Quotidien','Hebdomadaire'} else 'Aucun')
+        _reminder_inline['template_key']=_reminder_inline['template_key'].map(lambda value:value if value in REMINDER_TEMPLATES else 'custom')
+        _reminder_editor_key='reminders_inline_'+hashlib.sha1(','.join(str(int(value)) for value in _reminder_inline.id).encode()).hexdigest()[:10]
+        _reminder_inline_edited=st.data_editor(_reminder_inline,hide_index=True,use_container_width=True,num_rows='fixed',disabled=['id'],key=_reminder_editor_key,column_config={'repeat_rule':st.column_config.SelectboxColumn('Répétition',options=['Aucun','Quotidien','Hebdomadaire']),'template_key':st.column_config.SelectboxColumn('Modèle',options=list(REMINDER_TEMPLATES))})
+        if st.button('💾 Enregistrer les modifications du tableau des rappels',key='reminders_inline_save'):
+            try:
+                with connect() as _reminders_db:
+                    for _,_reminder_row in _reminder_inline_edited.iterrows():
+                        _reminder_title=str(_reminder_row['title'] or '').strip()
+                        _reminder_raw_date=str(_reminder_row['remind_at'] or '').strip().replace('T',' ')
+                        _reminder_repeat=str(_reminder_row['repeat_rule']).strip()
+                        _reminder_template=str(_reminder_row['template_key']).strip()
+                        _reminder_id=int(_reminder_row['id'])
+                        _reminder_original=reminders[reminders.id==_reminder_id].iloc[0]
+                        _reminder_details=str(_reminder_row['details'] or '').strip()
+                        _reminder_changes=(_reminder_title!=str(_reminder_original['title'] or '').strip() or _reminder_details!=str(_reminder_original['details'] or '').strip() or _reminder_raw_date!=str(_reminder_original['remind_at']).strip() or _reminder_repeat!=str(_reminder_original['repeat_rule'] or 'Aucun').strip() or _reminder_template!=str(_reminder_original['template_key'] or 'custom').strip())
+                        if not _reminder_changes: continue
+                        if not _reminder_title: raise ValueError('Le titre d’un rappel ne peut pas être vide.')
+                        try: _reminder_dt=datetime.fromisoformat(_reminder_raw_date)
+                        except ValueError: raise ValueError('Chaque date doit suivre le format AAAA-MM-JJ HH:MM.')
+                        if _reminder_dt.tzinfo is not None: _reminder_dt=_reminder_dt.astimezone(ZoneInfo('Africa/Dakar')).replace(tzinfo=None)
+                        if _reminder_repeat not in {'Aucun','Quotidien','Hebdomadaire'}: raise ValueError('Choisis une répétition valide.')
+                        if _reminder_template not in REMINDER_TEMPLATES: raise ValueError('Choisis un modèle de rappel valide.')
+                        _reminders_db.execute("UPDATE reminders SET title=?,details=?,remind_at=?,repeat_rule=?,template_key=?,status=CASE WHEN enabled=1 THEN 'En attente' ELSE 'Désactivé' END,last_error='',email_status=CASE WHEN enabled=1 THEN 'À envoyer' ELSE email_status END,email_sent_at=CASE WHEN enabled=1 THEN '' ELSE email_sent_at END,email_last_error=CASE WHEN enabled=1 THEN '' ELSE email_last_error END,last_attempt_at='' WHERE id=?",(_reminder_title,_reminder_details,_reminder_dt.strftime('%Y-%m-%d %H:%M:%S'),_reminder_repeat,_reminder_template,_reminder_id))
+                _magic_result = st.success('Tableau des rappels mis à jour.')
+                _magic_result = st.rerun()
+            except (TypeError,ValueError) as _reminder_edit_error:
+                _magic_result = st.error(f'Modification refusée : {_reminder_edit_error}')
         choices={f"#{int(r.id)} — {r.title} — {r.remind_at}":int(r.id) for r in reminders.itertuples()}
+        normalize_widget_choice('auto_reminder_manage_pick',choices)
         selected=st.selectbox('Gérer un rappel automatique',list(choices),key='auto_reminder_manage_pick')
         rid=choices[selected]; a,b=st.columns(2)
         if a.button('Désactiver / réactiver ce rappel',key='auto_reminder_toggle'):
@@ -3761,6 +3849,7 @@ elif page=="Centre de productivité XXL":
             _magic_result = st.caption("Sessions à venir · elles démarreront à l’heure indiquée tant que l’application reste ouverte.")
             _magic_result = show_dataframe(_scheduled_focus_rows[["session_date", "scheduled_start", "activity", "duration_minutes", "notes"]].rename(columns={"session_date":"Date", "scheduled_start":"Départ", "activity":"Objectif", "duration_minutes":"Durée (min)", "notes":"Consignes"}), use_container_width=True, hide_index=True)
             _focus_plan_choices = {f"{row.scheduled_start} · {row.activity} · #{int(row.id)}": int(row.id) for row in _scheduled_focus_rows.itertuples()}
+            normalize_widget_choice("issa_focus_plan_manage_pick", _focus_plan_choices)
             _focus_plan_label = st.selectbox("Modifier ou supprimer une programmation", list(_focus_plan_choices), key="issa_focus_plan_manage_pick")
             _focus_plan_id = _focus_plan_choices[_focus_plan_label]
             _focus_plan_row = _scheduled_focus_rows[_scheduled_focus_rows.id == _focus_plan_id].iloc[0]
