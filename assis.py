@@ -7,6 +7,7 @@ Dépendances : streamlit, pandas, speechrecognition, openpyxl (facultatif), PyMu
 from pathlib import Path
 from datetime import date, datetime, time, timedelta
 import sqlite3, re, unicodedata, io, math, os, threading, time as time_module, smtplib, ssl, imaplib, email, email.policy, hashlib, hmac, base64, json, urllib.request, urllib.error, urllib.parse
+from zoneinfo import ZoneInfo
 from email.message import EmailMessage
 import pandas as pd
 import streamlit as st
@@ -1087,45 +1088,102 @@ def sync_reminders_if_due(interval_seconds=21600, force=False):
             guard["last_run"] = 0.0
         raise
 
+@st.cache_resource(show_spinner=False)
+def ensure_focus_sequence_schema():
+    """Crée la table de suivi des séances de l’agenda sur SQLite et Supabase."""
+    if DB_BACKEND in {"postgres", "postgresql", "supabase"}:
+        with connect() as _sequence_db:
+            _sequence_db.execute("CREATE TABLE IF NOT EXISTS focus_sequence_done (id BIGSERIAL PRIMARY KEY, source_type TEXT NOT NULL, source_id BIGINT NOT NULL, completed_at TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE(source_type, source_id))")
+    else:
+        with connect() as _sequence_db:
+            _sequence_db.execute("CREATE TABLE IF NOT EXISTS focus_sequence_done (id INTEGER PRIMARY KEY AUTOINCREMENT, source_type TEXT NOT NULL, source_id INTEGER NOT NULL, completed_at TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE(source_type, source_id))")
+    return True
+
+def _focus_duration_from_text(value):
+    text = str(value or '').lower()
+    hours = re.search(r'(?<!\d)(\d+(?:[.,]\d+)?)\s*(?:h|heure|heures)', text)
+    minutes = re.search(r'(?<!\d)(\d+)\s*(?:min|minute|minutes)', text)
+    if hours:
+        return max(60, int(float(hours.group(1).replace(',', '.')) * 3600))
+    if minutes:
+        return max(60, int(minutes.group(1)) * 60)
+    return 45 * 60
+
 def build_focus_sequence():
-    """Construit un parcours automatique à partir des tâches et de l’agenda."""
+    """Construit en une requête le parcours trié des tâches et séances à venir."""
+    ensure_focus_sequence_schema()
     today = date.today().isoformat()
-    tasks = read_df("SELECT id,title,due_date,priority,status,category,notes FROM tasks WHERE COALESCE(status,'À faire') NOT IN ('Terminée','Terminé','Rendue','Rendu')")
-    events = read_df("SELECT id,title,event_date,start_time,end_time,kind,location,notes FROM events WHERE event_date >= ?", (today,))
-    done_events = read_df("SELECT source_id FROM focus_sequence_done WHERE source_type='event'")
-    completed_ids = set(done_events['source_id'].dropna().astype(int).tolist()) if not done_events.empty else set()
+    sql = """SELECT source_type,source_id,title,kind,scheduled,details,sort_at,priority_key,end_at FROM (
+        SELECT 'task' AS source_type,id AS source_id,title,'Tâche' AS kind,
+               CASE WHEN COALESCE(due_date,'')='' THEN 'Sans échéance' ELSE due_date END AS scheduled,
+               COALESCE(category,'') || ' · ' || COALESCE(priority,'Normale') || ' · ' || COALESCE(notes,'') AS details,
+               CASE WHEN COALESCE(due_date,'')='' THEN '9999-12-31 23:59' ELSE due_date || ' 23:59' END AS sort_at,
+               CASE priority WHEN 'Urgente' THEN 0 WHEN 'Haute' THEN 1 WHEN 'Normale' THEN 2 ELSE 3 END AS priority_key,
+               '' AS end_at
+        FROM tasks WHERE COALESCE(status,'À faire') NOT IN ('Terminée','Terminé','Rendue','Rendu')
+        UNION ALL
+        SELECT 'event' AS source_type,e.id AS source_id,e.title,'Agenda' AS kind,
+               e.event_date || ' · ' || COALESCE(NULLIF(e.start_time,''),'08:00') AS scheduled,
+               COALESCE(e.kind,'Agenda') || ' · ' || COALESCE(NULLIF(e.start_time,''),'08:00') || ' · ' || COALESCE(e.location,'') || ' · ' || COALESCE(e.notes,'') AS details,
+               e.event_date || ' ' || COALESCE(NULLIF(e.start_time,''),'08:00') AS sort_at,
+               1 AS priority_key,COALESCE(e.end_time,'') AS end_at
+        FROM events e WHERE e.event_date >= ?
+          AND NOT EXISTS (SELECT 1 FROM focus_sequence_done d WHERE d.source_type='event' AND d.source_id=e.id)
+    ) AS sequence_items ORDER BY sort_at,priority_key,source_type,source_id"""
+    rows = read_df(sql, (today,))
     items = []
-    priority_order = {'Urgente': 0, 'Haute': 1, 'Normale': 2, 'Basse': 3}
-    for row in tasks.itertuples():
-        raw_date = str(row.due_date or '').strip()
-        try:
-            due_dt = datetime.combine(datetime.strptime(raw_date, '%Y-%m-%d').date(), time(23, 59)) if raw_date else None
-        except ValueError:
-            due_dt = None
-        items.append({
-            'source_type': 'task', 'source_id': int(row.id), 'title': str(row.title),
-            'kind': 'Tâche', 'scheduled': raw_date or 'Sans échéance',
-            'details': ' · '.join(part for part in [str(row.category or ''), str(row.priority or 'Normale'), str(row.notes or '')] if part),
-            'sort_key': due_dt.timestamp() if due_dt else float('inf'),
-            'priority_key': priority_order.get(str(row.priority or 'Normale'), 2),
-        })
-    for row in events.itertuples():
-        if int(row.id) in completed_ids:
-            continue
-        raw_date = str(row.event_date or '').strip()
-        raw_time = str(row.start_time or '08:00')[:5]
-        try:
-            scheduled_dt = datetime.strptime(f'{raw_date} {raw_time}', '%Y-%m-%d %H:%M')
-        except ValueError:
-            continue
-        details = ' · '.join(part for part in [str(row.kind or 'Agenda'), raw_time, str(row.location or ''), str(row.notes or '')] if part)
-        items.append({
-            'source_type': 'event', 'source_id': int(row.id), 'title': str(row.title),
-            'kind': 'Agenda', 'scheduled': f'{raw_date} · {raw_time}', 'details': details,
-            'sort_key': scheduled_dt.timestamp(), 'priority_key': 1,
-        })
-    items.sort(key=lambda item: (item['sort_key'], item['priority_key'], 0 if item['source_type'] == 'event' else 1, item['source_id']))
+    for row in rows.itertuples(index=False):
+        item = {
+            'source_type': str(row.source_type), 'source_id': int(row.source_id),
+            'title': str(row.title), 'kind': str(row.kind),
+            'scheduled': str(row.scheduled), 'details': str(row.details or '').strip(' ·'),
+            'scheduled_start': None, 'scheduled_end': None,
+            'focus_duration_seconds': _focus_duration_from_text(f"{row.title} {row.details}"),
+        }
+        if item['source_type'] == 'event':
+            try:
+                _start_dt = datetime.strptime(str(row.scheduled), '%Y-%m-%d · %H:%M').replace(tzinfo=ZoneInfo('Africa/Dakar'))
+                item['scheduled_start'] = _start_dt.timestamp()
+                if str(row.end_at or '').strip():
+                    _end_dt = datetime.strptime(f"{str(row.scheduled).split(' · ')[0]} {str(row.end_at)[:5]}", '%Y-%m-%d %H:%M').replace(tzinfo=ZoneInfo('Africa/Dakar'))
+                    if _end_dt > _start_dt:
+                        item['scheduled_end'] = _end_dt.timestamp()
+                        item['focus_duration_seconds'] = max(60, int((_end_dt-_start_dt).total_seconds()))
+            except ValueError:
+                pass
+        items.append(item)
     return items
+
+def _start_focus_for_sequence(item):
+    """Lance le chrono lié à l’étape; attend l’heure de début d’un événement futur."""
+    now = time_module.time()
+    start_at = item.get('scheduled_start')
+    end_at = item.get('scheduled_end')
+    if item.get('source_type') == 'event' and start_at and start_at > now:
+        st.session_state['issa_sequence_pending_focus'] = {
+            'source_type': item['source_type'], 'source_id': item['source_id'],
+            'title': item['title'], 'start_at': start_at, 'end_at': end_at,
+            'duration_seconds': int(item.get('focus_duration_seconds', 45*60)),
+        }
+        return 'waiting'
+    duration = int(item.get('focus_duration_seconds', 45*60))
+    if item.get('source_type') == 'event' and end_at and end_at > now:
+        duration = max(60, int(end_at-now))
+    _start = now
+    st.session_state['issa_focus_activity'] = item['title']
+    st.session_state['issa_focus_notes'] = f"Parcours automatique · {item['kind']} · {item['scheduled']}"
+    st.session_state['issa_focus_duration_seconds'] = duration
+    st.session_state['issa_focus_elapsed_seconds'] = 0
+    st.session_state['issa_focus_started'] = _start
+    st.session_state['issa_focus_segment_started'] = _start
+    st.session_state['issa_focus_until'] = _start + duration
+    st.session_state['issa_focus_status'] = 'running'
+    st.session_state['issa_focus_active'] = True
+    st.session_state['issa_focus_logged'] = False
+    st.session_state['issa_focus_expired'] = False
+    st.session_state['issa_focus_sequence_item'] = (item['source_type'], int(item['source_id']))
+    st.session_state.pop('issa_sequence_pending_focus', None)
+    return 'started'
 
 def display_text(value, fallback=""):
     """Retourne une valeur sûre pour l'interface, sans None/NULL/NaN visibles."""
@@ -1497,6 +1555,7 @@ def ensure_focus_sessions_schema():
             _focus_columns = {row["name"] for row in _focus_db.execute("PRAGMA table_info(focus_sessions)").fetchall()}
             if "duration_seconds" not in _focus_columns:
                 _focus_db.execute("ALTER TABLE focus_sessions ADD COLUMN duration_seconds INTEGER DEFAULT 0")
+    return True
 
 def _focus_elapsed_seconds(now=None):
     now = float(now if now is not None else time_module.time())
@@ -2090,17 +2149,53 @@ elif page=="Assistant de vie":
     if _sequence_strict:
         if not _sequence_items:
             st.session_state["issa_sequence_strict"] = False
+            st.session_state.pop("issa_sequence_pending_focus", None)
             _magic_result = st.success("Parcours terminé : toutes les étapes prévues ont été validées. Na nga def, Issa — beau travail !")
             _magic_result = st.rerun()
         _current_step = _sequence_items[0]
-        _magic_result = st.markdown("""<div style="padding:24px;border-radius:22px;background:linear-gradient(120deg,#12392e,#27694f,#8aa96c);color:#fff;margin:12px 0"><div style="font-size:.78rem;letter-spacing:.15em;font-weight:800;opacity:.85">PARCOURS SÉQUENTIEL · MODE STRICT</div><h2 style="color:#fff;margin:.4rem 0">Une étape à la fois</h2><p style="margin:0;color:#e5f4e8">Termine cette étape pour déverrouiller automatiquement la suivante.</p></div>""", unsafe_allow_html=True)
+        if st.session_state.pop("issa_sequence_autostart_next", False):
+            _focus_start_result = _start_focus_for_sequence(_current_step)
+            if _focus_start_result == 'started':
+                _magic_result = st.rerun()
+        _pending_focus = st.session_state.get('issa_sequence_pending_focus')
+        _sequence_waiting = bool(_pending_focus and (_pending_focus.get('source_type'), _pending_focus.get('source_id')) == (_current_step['source_type'], _current_step['source_id']) and time_module.time() < float(_pending_focus.get('start_at', 0)))
+        if _pending_focus and (_pending_focus.get('source_type'), _pending_focus.get('source_id')) == (_current_step['source_type'], _current_step['source_id']):
+            if time_module.time() >= float(_pending_focus.get('start_at', 0)):
+                _focus_start_result = _start_focus_for_sequence(_current_step)
+                if _focus_start_result == 'started':
+                    _magic_result = st.rerun()
+            else:
+                _pending_html = """<div style="padding:22px;border-radius:20px;background:linear-gradient(120deg,#143c32,#377253);color:#fff;text-align:center;font-family:system-ui"><div style="letter-spacing:.15em;font-weight:800;font-size:12px">PROCHAINE SÉANCE AU PROGRAMME</div><h2 style="color:white;margin:.45em 0">__TITLE__</h2><div style="font-size:clamp(38px,8vw,72px);font-weight:850;font-variant-numeric:tabular-nums" id="wait">--:--:--</div><p>Le mode Focus démarrera automatiquement à l’heure prévue dans ton agenda.</p></div><script>const start=__START__,o=document.getElementById('wait');function tick(){let x=Math.max(0,Math.floor(start-Date.now()/1000)),h=Math.floor(x/3600),m=Math.floor((x%3600)/60),s=x%60;o.textContent=[h,m,s].map(v=>String(v).padStart(2,'0')).join(':');if(x<=0){clearInterval(t);try{window.parent.location.reload()}catch(e){}}}tick();const t=setInterval(tick,500);</script>"""
+                _pending_html = _pending_html.replace('__TITLE__', json.dumps(_current_step['title'], ensure_ascii=False)[1:-1]).replace('__START__', str(int(_pending_focus['start_at'])))
+                _magic_result = st.components.v1.html(_pending_html, height=260, scrolling=False)
+        _magic_result = st.markdown("""<div style="padding:24px;border-radius:22px;background:linear-gradient(120deg,#12392e,#27694f,#8aa96c);color:#fff;margin:12px 0"><div style="font-size:.78rem;letter-spacing:.15em;font-weight:800;opacity:.85">PARCOURS SÉQUENTIEL · MODE STRICT</div><h2 style="color:#fff;margin:.4rem 0">Une étape à la fois</h2><p style="margin:0;color:#e5f4e8">Le chrono suit les horaires de l’agenda. Valide l’étape pour débloquer la suivante.</p></div>""", unsafe_allow_html=True)
         with st.container(border=True):
             _magic_result = st.caption(f"ÉTAPE ACTIVE · {_current_step['kind']} · {_current_step['scheduled']}")
             _magic_result = st.markdown(f"## {_current_step['title']}")
             if _current_step['details']:
                 _magic_result = st.write(_current_step['details'])
-            _magic_result = st.progress(1 / max(1, len(_sequence_items)), text=f"Étape active · {len(_sequence_items)} étape(s) restante(s)")
-            _complete_step = st.button("✅ Valider cette étape et débloquer la suivante", type="primary", use_container_width=True, key="issa_sequence_complete_step")
+            _magic_result = st.caption(f"{len(_sequence_items)} étape(s) restante(s) · Les suivantes restent masquées jusqu’à validation.")
+            _focus_status = st.session_state.get('issa_focus_status', 'idle')
+            if _focus_status == 'paused':
+                _paused_seconds = _focus_elapsed_seconds()
+                _magic_result = st.info(f"Chrono en pause · {_paused_seconds // 60} min {_paused_seconds % 60} s écoulées.")
+                _resume_col, _finish_col = st.columns(2)
+                if _resume_col.button('▶️ Reprendre le chrono', key='sequence_resume_focus', type='primary', use_container_width=True):
+                    _now_focus = time_module.time()
+                    _remaining_focus = max(0, int(st.session_state.get('issa_focus_duration_seconds', 0)) - _paused_seconds)
+                    st.session_state['issa_focus_segment_started'] = _now_focus
+                    st.session_state['issa_focus_until'] = _now_focus + _remaining_focus
+                    st.session_state['issa_focus_status'] = 'running'
+                    st.session_state['issa_focus_active'] = True
+                    _magic_result = st.rerun()
+                if _finish_col.button('⏹️ Terminer le chrono', key='sequence_finish_focus', use_container_width=True):
+                    _ = _finish_focus_session(_paused_seconds)
+                    _magic_result = st.rerun()
+            elif _pending_focus and (_pending_focus.get('source_type'), _pending_focus.get('source_id')) == (_current_step['source_type'], _current_step['source_id']) and time_module.time() < float(_pending_focus.get('start_at', 0)):
+                _magic_result = st.caption("La séance est programmée. Le chrono démarrera automatiquement à l’heure de début enregistrée dans l’agenda.")
+            else:
+                _magic_result = st.caption("Le chrono de concentration démarre automatiquement pour cette étape.")
+            _complete_step = st.button("✅ Valider cette étape et débloquer la suivante", type="primary", use_container_width=True, key="issa_sequence_complete_step", disabled=_sequence_waiting)
         _pause_sequence = st.button("⏸️ Mettre le parcours en pause", key="issa_sequence_pause")
         if _complete_step:
             with connect() as _sequence_db:
@@ -2109,10 +2204,13 @@ elif page=="Assistant de vie":
                     _sequence_db.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type='task' AND source_id=? AND status IN ('En attente','Erreur')", (int(_current_step['source_id']),))
                 else:
                     _sequence_db.execute("INSERT OR IGNORE INTO focus_sequence_done(source_type,source_id) VALUES('event',?)", (int(_current_step['source_id']),))
-            _magic_result = st.toast("Étape validée. La suivante est maintenant débloquée.")
+            st.session_state.pop('issa_sequence_pending_focus', None)
+            st.session_state['issa_sequence_autostart_next'] = bool(len(_sequence_items) > 1)
+            _magic_result = st.toast("Étape validée. Préparation automatique de la suivante.")
             _magic_result = st.rerun()
         if _pause_sequence:
             st.session_state["issa_sequence_strict"] = False
+            st.session_state.pop('issa_sequence_pending_focus', None)
             _magic_result = st.rerun()
         st.stop()
     else:
@@ -2125,10 +2223,9 @@ elif page=="Assistant de vie":
                 if _next_step['details']:
                     _magic_result = st.caption(_next_step['details'])
                 _magic_result = st.write(f"{len(_sequence_items)} étape(s) en attente. Le parcours suit automatiquement les dates de ton agenda et de tes tâches.")
-                if st.button("🔒 Démarrer le parcours strict", type="primary", key="issa_sequence_start"):
+                if st.button("🔒 Démarrer le parcours strict avec chrono automatique", type="primary", key="issa_sequence_start"):
                     st.session_state["issa_sequence_strict"] = True
-                    if _next_step['source_type'] == 'task':
-                        _ = run("UPDATE tasks SET status='En cours' WHERE id=? AND status IN ('À faire','En attente')", (int(_next_step['source_id']),))
+                    st.session_state['issa_sequence_autostart_next'] = True
                     _magic_result = st.rerun()
             else:
                 _magic_result = st.info("Aucune étape ouverte. Ajoute une tâche ou une séance à venir dans ton planning pour démarrer automatiquement le parcours.")
