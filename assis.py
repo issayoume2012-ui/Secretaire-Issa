@@ -1330,6 +1330,67 @@ def normalize_widget_choice(key, options):
         st.session_state[key] = choices[0]
     return choices
 
+@st.fragment(run_every=30)
+def render_dynamic_monitor():
+    """Moniteur de l'accueil : chiffres rafraîchis et tâches éditables sur place."""
+    _monitor_now=datetime.now().replace(microsecond=0)
+    _monitor_today=_monitor_now.date().isoformat()
+    _monitor_stats=read_df("""SELECT
+        (SELECT COUNT(*) FROM events WHERE event_date=?) AS events_today,
+        (SELECT COUNT(*) FROM tasks WHERE COALESCE(status,'À faire') NOT IN ('Terminée','Terminé','Rendue','Rendu') AND COALESCE(due_date,'')<>'' AND due_date<=?) AS tasks_due,
+        (SELECT COUNT(*) FROM reminders WHERE enabled=1 AND status='En attente' AND remind_at<=?) AS reminders_due,
+        (SELECT COUNT(*) FROM focus_sessions WHERE status='Planifiée' AND scheduled_start>=?) AS focus_planned""",(_monitor_today,_monitor_today,_monitor_now.strftime('%Y-%m-%d %H:%M:%S'),_monitor_today+' 00:00:00')).iloc[0]
+    _magic_result=st.caption("Actualisation automatique toutes les 30 secondes · Les modifications restent disponibles dans les tableaux.")
+    _monitor_cols=st.columns(4)
+    with _monitor_cols[0]: _=card('Événements aujourd’hui',int(_monitor_stats.events_today),'Agenda')
+    with _monitor_cols[1]: _=card('Tâches échues / du jour',int(_monitor_stats.tasks_due),'À traiter')
+    with _monitor_cols[2]: _=card('Rappels à traiter',int(_monitor_stats.reminders_due),'Notification prioritaire')
+    with _monitor_cols[3]: _=card('Sessions Focus à venir',int(_monitor_stats.focus_planned),'Programmées')
+    _monitor_events=read_df("SELECT event_date,start_time,title,kind,location FROM events WHERE event_date>=? AND event_date<=? ORDER BY event_date,start_time LIMIT 8",(_monitor_today,(_monitor_now.date()+timedelta(days=7)).isoformat()))
+    if not _monitor_events.empty:
+        _magic_result=st.markdown("**Prochains rendez-vous et cours**")
+        _=show_dataframe(_monitor_events.rename(columns={'event_date':'Date','start_time':'Heure','title':'Activité','kind':'Type','location':'Lieu'}),use_container_width=True,hide_index=True)
+    _monitor_tasks=read_df("SELECT id,title,due_date,priority,status,category,notes FROM tasks WHERE COALESCE(status,'À faire') NOT IN ('Terminée','Terminé','Rendue','Rendu') ORDER BY CASE priority WHEN 'Urgente' THEN 1 WHEN 'Haute' THEN 2 WHEN 'Normale' THEN 3 ELSE 4 END,due_date,id DESC LIMIT 25")
+    _magic_result=st.markdown("**Tâches ouvertes · modifiables directement**")
+    if _monitor_tasks.empty:
+        _magic_result=st.success("Aucune tâche ouverte. Na nga def, Issa — tu es à jour !")
+        return
+    _monitor_editor_data=_monitor_tasks.copy()
+    _monitor_editor_data['priority']=_monitor_editor_data['priority'].map(lambda value:value if value in {'Basse','Normale','Haute','Urgente'} else 'Normale')
+    _monitor_editor_data['status']=_monitor_editor_data['status'].map(lambda value:value if value in {'À faire','En cours','Terminée','Terminé','Rendue','Rendu'} else 'À faire')
+    _monitor_editor_key='monitor_tasks_'+hashlib.sha1(','.join(str(int(value)) for value in _monitor_editor_data.id).encode()).hexdigest()[:10]
+    _monitor_edited=st.data_editor(_monitor_editor_data,hide_index=True,use_container_width=True,num_rows='fixed',disabled=['id'],key=_monitor_editor_key,column_config={'title':st.column_config.TextColumn('Tâche'),'due_date':st.column_config.TextColumn('Échéance (AAAA-MM-JJ)'),'priority':st.column_config.SelectboxColumn('Priorité',options=['Basse','Normale','Haute','Urgente']),'status':st.column_config.SelectboxColumn('Statut',options=['À faire','En cours','Terminée','Terminé','Rendue','Rendu']),'category':st.column_config.TextColumn('Catégorie'),'notes':st.column_config.TextColumn('Notes')})
+    if st.button('💾 Enregistrer les modifications du moniteur',key='monitor_tasks_save'):
+        try:
+            with connect() as _monitor_db:
+                for _,_monitor_row in _monitor_edited.iterrows():
+                    _monitor_id=int(_monitor_row['id'])
+                    _monitor_original=_monitor_tasks[_monitor_tasks.id==_monitor_id].iloc[0]
+                    _monitor_title=str(_monitor_row['title'] or '').strip()
+                    _monitor_due=str(_monitor_row['due_date'] or '').strip()
+                    _monitor_priority=str(_monitor_row['priority']).strip()
+                    _monitor_status=str(_monitor_row['status']).strip()
+                    _monitor_category=str(_monitor_row['category'] or 'Personnel').strip()
+                    _monitor_notes=str(_monitor_row['notes'] or '').strip()
+                    _monitor_change=any((str(_monitor_original[field] or '').strip()!=new_value) for field,new_value in [('title',_monitor_title),('due_date',_monitor_due),('priority',_monitor_priority),('status',_monitor_status),('category',_monitor_category),('notes',_monitor_notes)])
+                    if not _monitor_change: continue
+                    if not _monitor_title: raise ValueError('Le titre d’une tâche ne peut pas être vide.')
+                    if _monitor_due: _monitor_due=date.fromisoformat(_monitor_due).isoformat()
+                    if _monitor_priority not in {'Basse','Normale','Haute','Urgente'}: raise ValueError('Choisis une priorité valide.')
+                    if _monitor_status not in {'À faire','En cours','Terminée','Terminé','Rendue','Rendu'}: raise ValueError('Choisis un statut valide.')
+                    _monitor_db.execute('UPDATE tasks SET title=?,due_date=?,priority=?,status=?,category=?,notes=? WHERE id=?',(_monitor_title,_monitor_due,_monitor_priority,_monitor_status,_monitor_category,_monitor_notes,_monitor_id))
+                    if _monitor_status in {'Terminée','Terminé','Rendue','Rendu'} or not _monitor_due:
+                        _monitor_db.execute("UPDATE reminders SET enabled=0,status='Désactivé' WHERE source_type='task' AND source_id=? AND status IN ('En attente','Erreur')",(_monitor_id,))
+                    else:
+                        _monitor_deadline=date.fromisoformat(_monitor_due)
+                        _monitor_remind=datetime.combine(max(date.today(),_monitor_deadline-timedelta(days=1)),time(8,0))
+                        if _monitor_remind<_monitor_now: _monitor_remind=_monitor_now+timedelta(minutes=1)
+                        _monitor_db.execute("UPDATE reminders SET title=?,details=?,remind_at=?,status=CASE WHEN enabled=1 THEN 'En attente' ELSE 'Désactivé' END,email_status=CASE WHEN enabled=1 THEN 'À envoyer' ELSE email_status END,email_sent_at=CASE WHEN enabled=1 THEN '' ELSE email_sent_at END,last_attempt_at='' WHERE source_type='task' AND source_id=?",(f'Échéance : {_monitor_title}',f'Priorité : {_monitor_priority}. Domaine : {_monitor_category}. {_monitor_notes}',_monitor_remind.strftime('%Y-%m-%d %H:%M:%S'),_monitor_id))
+            _magic_result=st.success('Tâches du moniteur enregistrées.')
+            _magic_result=st.rerun()
+        except (TypeError,ValueError) as _monitor_error:
+            _magic_result=st.error(f'Modification refusée : {_monitor_error}')
+
 def norm(s):
     return re.sub(r'[^a-z0-9]+',' ',unicodedata.normalize('NFKD',str(s or '')).encode('ascii','ignore').decode().lower()).strip()
 def header(kicker,title,desc):
@@ -2343,6 +2404,10 @@ if page=="Vue d’ensemble":
     with cols[2]: _ = card('Tâches ouvertes',int(_dashboard_stats.open_tasks_count),'À faire ou en cours')
 
     with cols[3]: _ = card('Heures étudiées',round(float(_dashboard_stats.studied_hours),1),'Journal de révision')
+
+    with st.container(border=True):
+        _magic_result=st.markdown('### 📡 Moniteur dynamique XXL')
+        render_dynamic_monitor()
 
     _today_priority_tasks = read_df("SELECT id,title,due_date,priority FROM tasks WHERE COALESCE(status,'À faire') NOT IN ('Terminée','Terminé','Rendue','Rendu') AND ((COALESCE(due_date,'')<>'' AND due_date<=?) OR priority='Urgente') ORDER BY CASE priority WHEN 'Urgente' THEN 1 WHEN 'Haute' THEN 2 WHEN 'Normale' THEN 3 ELSE 4 END,due_date LIMIT 8", (today,))
     if not _today_priority_tasks.empty:
