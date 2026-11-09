@@ -1508,24 +1508,66 @@ if _focus_active and _focus_until and time_module.time() >= _focus_until:
 
 if _focus_active:
     _remaining = max(0, int(_focus_until - time_module.time()))
-    _magic_result = st.markdown('''
-    <div style="padding:26px;border-radius:24px;background:linear-gradient(120deg,#10213c,#174b76,#087e91);color:white;margin:10px 0 20px">
-      <div style="font-size:.78rem;letter-spacing:.15em;font-weight:800;opacity:.85">MODE CONCENTRATION · SESSION EN COURS</div>
-      <h1 style="color:white;margin:.35rem 0">🎯 Reste dans ta zone de travail</h1>
-      <p style="color:#e5f5ff;margin:0">La navigation de Secrétaire Issa est mise en pause jusqu’à la fin du chronomètre.</p>
-    </div>''', unsafe_allow_html=True)
-    _magic_result = st.markdown(f"### {st.session_state.get('issa_focus_activity','Étude')}")
-    _magic_result = st.components.v1.html(f'''<div style="font-family:system-ui;text-align:center;padding:22px;border:1px solid #dbe5f2;border-radius:20px;background:#f8fbff">
-      <div id="issa-countdown" style="font-size:clamp(48px,9vw,82px);font-weight:850;letter-spacing:.04em;color:#12345a">--:--:--</div>
-      <div id="issa-countdown-state" style="color:#53657d;font-size:14px">Temps de concentration restant</div>
-      <script>
-      (function(){{const end={int(_focus_until*1000)};const out=document.getElementById('issa-countdown');const state=document.getElementById('issa-countdown-state');
-      function tick(){{let ms=Math.max(0,end-Date.now());let sec=Math.floor(ms/1000);let h=Math.floor(sec/3600),m=Math.floor((sec%3600)/60),s=sec%60;
-      out.textContent=[h,m,s].map(v=>String(v).padStart(2,'0')).join(':');
-      if(ms<=0){{state.textContent='Temps écoulé — actualisation de la session…';clearInterval(timer);try{{window.parent.location.reload()}}catch(e){{state.textContent='Temps écoulé — actualise la page pour terminer.'}}}}
-      }}tick();const timer=setInterval(tick,500);
-      }})();
-      </script></div>''', height=190)
+    _focus_activity_json = json.dumps(str(st.session_state.get("issa_focus_activity", "Étude")), ensure_ascii=False).replace("<", "\\u003c")
+    _focus_motivation_json = json.dumps([
+        "Une petite avancée aujourd’hui prépare une grande réussite demain.",
+        "Respire, recentre-toi, avance une étape après l’autre.",
+        "Comme une graine bien cultivée, ton effort prend racine.",
+        "Chaque minute de concentration rapproche ton projet de son objectif.",
+        "Xol ci li ngay def léegi — reste avec ton objectif du moment.",
+        "La régularité fait grandir les idées comme un champ bien entretenu.",
+        "Tu avances. Garde ce rythme calme et fais confiance à ton travail.",
+    ], ensure_ascii=False).replace("<", "\\u003c")
+    _focus_html = """<!doctype html><html><head><meta charset="utf-8"><style>
+    *{box-sizing:border-box}html,body{margin:0;padding:0;background:transparent;font-family:Inter,ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif}
+    .focus-scene{height:430px;position:relative;overflow:hidden;border-radius:28px;background:linear-gradient(135deg,#f3efdf 0%,#d8e8d5 43%,#a8c9ae 100%);box-shadow:0 20px 55px rgba(20,61,48,.18);color:#15382e}
+    .landscape{position:absolute;inset:0;width:100%;height:100%;opacity:.92}
+    .glow{position:absolute;width:245px;height:245px;left:50%;top:40px;transform:translateX(-50%);border-radius:50%;background:rgba(255,242,191,.34);filter:blur(7px)}
+    .focus-content{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;text-align:center;padding:24px;background:linear-gradient(90deg,rgba(241,246,232,.18),rgba(248,248,237,.42),rgba(241,246,232,.18))}
+    .eyebrow{font-size:11px;letter-spacing:.2em;font-weight:850;color:#355f4d;text-transform:uppercase;margin-bottom:11px}
+    .focus-title{font-size:clamp(19px,3vw,28px);font-weight:750;color:#173d31;margin-bottom:5px;max-width:88%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .timer{font-variant-numeric:tabular-nums;font-size:clamp(64px,12vw,112px);line-height:1.08;letter-spacing:.055em;font-weight:850;color:#123b30;text-shadow:0 3px 22px rgba(255,255,255,.68);margin:5px 0 7px}
+    .timer-label{font-size:12px;letter-spacing:.15em;text-transform:uppercase;color:#426653;font-weight:700}
+    .quote-wrap{height:55px;display:flex;align-items:center;justify-content:center;max-width:650px;margin-top:18px;padding:0 18px}
+    .quote{font-family:Georgia,serif;font-size:clamp(15px,2.2vw,19px);font-style:italic;color:#294c3d;opacity:1;transition:opacity 1.2s ease;line-height:1.45}
+    .quote.fade{opacity:0}
+    .tiny{position:absolute;bottom:17px;left:0;right:0;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#54715f;font-weight:700}
+    @media(max-width:560px){.focus-scene{height:400px;border-radius:20px}.quote-wrap{margin-top:10px}.timer{font-size:clamp(58px,17vw,90px)}}
+    </style></head><body><div class="focus-scene">
+    <svg class="landscape" viewBox="0 0 1200 620" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+      <defs><linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#fff6d8"/><stop offset="1" stop-color="#d6e8ce"/></linearGradient><linearGradient id="field" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#83aa78"/><stop offset="1" stop-color="#426d58"/></linearGradient></defs>
+      <rect width="1200" height="620" fill="url(#sky)"/><circle cx="600" cy="190" r="76" fill="#f1c978" opacity=".88"/>
+      <path d="M0 330 Q180 250 360 330 T720 315 T1200 300 V620 H0Z" fill="#b7cda3"/>
+      <path d="M0 395 Q230 300 450 380 T880 365 T1200 340 V620 H0Z" fill="#91b28b"/>
+      <path d="M0 455 Q240 390 470 440 T920 415 T1200 395 V620 H0Z" fill="url(#field)"/>
+      <g fill="none" stroke="#dce7bd" stroke-width="3" opacity=".55"><path d="M600 410 Q470 500 340 620"/><path d="M600 410 Q540 510 500 620"/><path d="M600 410 Q620 505 660 620"/><path d="M600 410 Q735 500 860 620"/><path d="M600 410 Q405 450 150 520"/><path d="M600 410 Q800 445 1080 500"/></g>
+      <g transform="translate(135 300)" stroke="#547b5c" stroke-width="9" stroke-linecap="round" fill="none"><path d="M30 175 Q38 100 64 15"/><path d="M47 110 Q-5 95 -28 55 Q18 57 52 91"/><path d="M57 76 Q95 29 140 27 Q120 70 67 91"/><path d="M38 145 Q-3 139 -23 111 Q15 105 45 130"/></g>
+      <g transform="translate(980 375)" opacity=".8"><path d="M0 90 Q80 55 150 90 V180 Q72 147 0 178Z" fill="#f7f0d8" stroke="#667e62" stroke-width="5"/><path d="M150 90 Q220 55 300 90 V178 Q225 147 150 180Z" fill="#fff9e7" stroke="#667e62" stroke-width="5"/><path d="M150 90 V180" stroke="#667e62" stroke-width="4"/></g>
+      <g fill="#fff9df" opacity=".65"><circle cx="280" cy="150" r="5"/><circle cx="910" cy="190" r="4"/><circle cx="825" cy="115" r="6"/></g>
+    </svg><div class="glow"></div><div class="focus-content">
+      <div class="eyebrow">✦ MODE FOCUS · CALME &amp; CONCENTRATION ✦</div>
+      <div class="focus-title" id="focus-activity"></div>
+      <div class="timer" id="issa-countdown">--:--:--</div>
+      <div class="timer-label" id="issa-countdown-state">Temps de concentration restant</div>
+      <div class="quote-wrap"><div class="quote" id="focus-quote"></div></div>
+    </div><div class="tiny">🌱 Un pas après l’autre · Jàng · Jëf · Màgg</div></div>
+    <script>
+    (function(){
+      const end=__TARGET__, activity=__ACTIVITY__, quotes=__QUOTES__;
+      const out=document.getElementById('issa-countdown'), state=document.getElementById('issa-countdown-state');
+      const quote=document.getElementById('focus-quote');
+      document.getElementById('focus-activity').textContent=activity;
+      let q=0; quote.textContent=quotes[q];
+      setInterval(()=>{quote.classList.add('fade');setTimeout(()=>{q=(q+1)%quotes.length;quote.textContent=quotes[q];quote.classList.remove('fade')},1200)},7500);
+      function tick(){let ms=Math.max(0,end-Date.now());let sec=Math.floor(ms/1000),h=Math.floor(sec/3600),m=Math.floor((sec%3600)/60),s=sec%60;
+        out.textContent=[h,m,s].map(v=>String(v).padStart(2,'0')).join(':');
+        if(ms<=0){state.textContent='Temps écoulé — enregistrement de ta séance…';clearInterval(timer);try{window.parent.location.reload()}catch(e){state.textContent='Temps écoulé — actualise la page pour terminer.'}}
+      }
+      tick();const timer=setInterval(tick,250);
+    })();
+    </script></body></html>"""
+    _focus_html = _focus_html.replace("__TARGET__", str(int(_focus_until*1000))).replace("__ACTIVITY__", _focus_activity_json).replace("__QUOTES__", _focus_motivation_json)
+    _magic_result = st.components.v1.html(_focus_html, height=450, scrolling=False)
     _magic_result = st.info("Pendant cette session, seuls les outils de recherche ci-dessous et ton document de travail sont proposés dans l’application.")
     _focus_control_cols = st.columns(2)
     if _focus_control_cols[0].button("⏸️ Mettre en pause", key="focus_pause_locked", use_container_width=True):
