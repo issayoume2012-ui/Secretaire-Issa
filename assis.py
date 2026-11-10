@@ -1855,7 +1855,7 @@ def _issa_ai_error_message(error):
         except Exception:
             pass
         if error.code == 400:
-            return "Gemini a rejeté la demande. Vérifie le modèle GEMINI_MODEL/GEMINI_FALLBACK_MODEL et réessaie avec un message plus court."
+            return f"Gemini a rejeté la demande (HTTP 400{', ' + status if status else ''}). Vérifie la configuration du modèle et la taille/structure de la demande. Détail : {detail[:220]}"
         if error.code == 401:
             return "Gemini ne reconnaît pas GEMINI_API_KEY. Vérifie que la clé AI Studio est valide et qu’elle est copiée sans espaces dans Streamlit Secrets."
         if error.code == 403:
@@ -1875,19 +1875,19 @@ def _issa_ai_error_message(error):
         return "Seugn bi n’a pas pu joindre Gemini à temps. Vérifie la connexion puis réessaie."
     return f"Seugn bi a rencontré une erreur ({type(error).__name__}). Réessaie dans un instant."
 
-@st.cache_data(ttl=900, show_spinner=False)
 def _issa_focus_search_web(query):
-    """Recherche des pages francophones via l’API MediaWiki, sans scraper de page HTML."""
+    """Recherche dans Wikipédia puis dans les métadonnées d’articles Crossref, sans cache des échecs."""
     query = str(query or "").strip()
     if not query:
         return []
-    api_url = "https://fr.wikipedia.org/w/api.php?" + urllib.parse.urlencode({
-        "action": "query", "list": "search", "srsearch": query, "format": "json", "utf8": 1, "srlimit": 8,
-    })
-    api_req = urllib.request.Request(api_url, headers={"User-Agent": "SecretaireIssa/1.0 (academic study assistant)"})
+    source_errors = []
     try:
-        with urllib.request.urlopen(api_req, timeout=4) as response:
-            data = json.loads(response.read(700_000).decode("utf-8", errors="replace"))
+        api_url = "https://fr.wikipedia.org/w/api.php?" + urllib.parse.urlencode({
+            "action": "query", "list": "search", "srsearch": query, "format": "json", "utf8": 1, "srlimit": 6,
+        })
+        api_req = urllib.request.Request(api_url, headers={"User-Agent": "SecretaireIssa/1.1 (academic assistant)"})
+        with urllib.request.urlopen(api_req, timeout=3.5) as response:
+            data = json.loads(response.read(500_000).decode("utf-8", errors="replace"))
         pages = data.get("query", {}).get("search", [])
         if pages:
             return [{
@@ -1896,8 +1896,40 @@ def _issa_focus_search_web(query):
                 "url": "https://fr.wikipedia.org/wiki/" + urllib.parse.quote(str(page.get("title", "")).replace(" ", "_")),
                 "source": "Wikipédia",
             } for page in pages]
-    except Exception:
-        return []
+    except Exception as error:
+        source_errors.append(type(error).__name__)
+    try:
+        crossref_url = "https://api.crossref.org/works?" + urllib.parse.urlencode({
+            "query.bibliographic": query, "rows": 6,
+            "select": "DOI,title,URL,author,published-print,published-online,container-title",
+        })
+        crossref_req = urllib.request.Request(crossref_url, headers={"User-Agent": "SecretaireIssa/1.1 (academic study assistant)"})
+        with urllib.request.urlopen(crossref_req, timeout=4.5) as response:
+            data = json.loads(response.read(700_000).decode("utf-8", errors="replace"))
+        items = data.get("message", {}).get("items", [])
+        results = []
+        for item in items:
+            title = str((item.get("title") or [""])[0]).strip()
+            if not title:
+                continue
+            authors = item.get("author") or []
+            author_text = ", ".join(" ".join(part for part in (author.get("given", ""), author.get("family", "")) if part) for author in authors[:3])
+            dates = item.get("published-print") or item.get("published-online") or {}
+            date_parts = dates.get("date-parts", [[]])
+            year = str(date_parts[0][0]) if date_parts and date_parts[0] else ""
+            journal = (item.get("container-title") or [""])[0]
+            details = " · ".join(part for part in (author_text, str(year), str(journal)) if part)
+            results.append({
+                "title": title,
+                "snippet": details or "Notice bibliographique Crossref.",
+                "url": str(item.get("URL") or ("https://doi.org/" + str(item.get("DOI", "")))),
+                "source": "Crossref · publication scientifique",
+            })
+        return results
+    except Exception as error:
+        source_errors.append(type(error).__name__)
+    if source_errors:
+        raise RuntimeError("Wikipédia et Crossref ne répondent pas depuis l’application (" + ", ".join(source_errors) + ").")
     return []
 
 REMINDER_WORKER = start_reminder_worker()
@@ -2306,7 +2338,7 @@ if _focus_active:
                     st.session_state["issa_focus_web_error"] = ""
                 except Exception as _search_error:
                     st.session_state["issa_focus_web_results"] = []
-                    st.session_state["issa_focus_web_error"] = f"Recherche indisponible ({type(_search_error).__name__}). Tu peux ouvrir la recherche dans un nouvel onglet."
+                    st.session_state["issa_focus_web_error"] = f"Recherche intégrée indisponible : {str(_search_error)[:180]} Tu peux aussi ouvrir les résultats Google ou Scholar ci-dessous."
             if st.session_state.get("issa_focus_web_error"):
                 _magic_result = st.warning(st.session_state["issa_focus_web_error"])
             for _result_idx, _search_result in enumerate(st.session_state.get("issa_focus_web_results", [])):
