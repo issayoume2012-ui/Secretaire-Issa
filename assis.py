@@ -1698,12 +1698,13 @@ def _issa_gemini_generate(contents, key, tools=None, system_instruction="", quic
     configured_models = [
         value.removeprefix("models/") for value in [
             _startup_secret("GEMINI_MODEL", "gemini-3.8-flash"),
-            _startup_secret("GEMINI_FALLBACK_MODEL", "gemini-3.7-flash"),
+            _startup_secret("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash-lite"),
         ] if value
     ]
-    models = list(dict.fromkeys(configured_models + ([] if quick else [
-        "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.1-flash-lite", "gemini-3.5-flash-lite",
-    ])))
+    additional_models = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
+    if not quick:
+        additional_models = ["gemini-3.7-flash", "gemini-3.6-flash"] + additional_models
+    models = list(dict.fromkeys(configured_models + additional_models))
     last_error = None
     retryable_errors = []
     failures = []
@@ -1866,7 +1867,7 @@ def _issa_ai_error_message(error):
         if error.code == 429:
             details = getattr(error, "issa_failures", [])
             used = ", ".join(f"{item['model']} ({item['http']}{' ' + item['status'] if item.get('status') else ''})" for item in details[:5])
-            return "Gemini indique une limite ou un quota atteint (HTTP 429)." + (f" Réponses reçues : {used}." if used else "") + " Vérifie les quotas du projet AI Studio."
+            return "Gemini indique que le quota de ces modèles est atteint (HTTP 429)." + (f" Réponses reçues : {used}." if used else "") + " Seugn bi a essayé les modèles de secours disponibles. Vérifie AI Studio → Usage & billing → Rate limits. Sur le niveau gratuit, il faut attendre le renouvellement du quota ; un quota supérieur peut nécessiter l’activation de la facturation."
         if error.code in {500, 502, 503, 504}:
             details = getattr(error, "issa_failures", [])
             used = ", ".join(f"{item['model']} ({item['http']}{' ' + item['status'] if item.get('status') else ''})" for item in details[:5])
