@@ -2305,16 +2305,15 @@ if _focus_active:
                     _magic_result = st.error(f"Enregistrement impossible : {str(_notes_error)[:180]}")
             _magic_result = st.caption("Les notes sont conservées dans la fiche de cette session et restent liées à son historique.")
         with _focus_tool_tabs[3]:
-            _magic_result = st.caption("L’assistant prépare un prompt à partir de l’objectif de la séance, des cours joints et des résultats de recherche. Copie-le ensuite dans l’outil choisi pour générer ton visuel.")
+            _magic_result = st.caption("L’assistant prépare un prompt 3D à partir de l’objectif de la séance, des cours joints et des résultats de recherche. Les liens ci-dessous mènent uniquement aux outils disposant d’une offre gratuite.")
             with st.form("issa_focus_visual_prompt_form", clear_on_submit=False):
-                _visual_type = st.selectbox("Créer", ["Une illustration pédagogique", "Un modèle 3D d’un objet ou système agricole", "Une courte vidéo pédagogique"], key="issa_focus_visual_type")
-                _visual_topic = st.text_input("Sujet du visuel", value=str(st.session_state.get("issa_focus_activity", "Étude / révision")), key="issa_focus_visual_topic")
-                _visual_prompt_submitted = st.form_submit_button("✨ Préparer un prompt avec l’assistant", disabled=not _visual_topic.strip())
+                _visual_topic = st.text_input("Sujet du modèle 3D", value=str(st.session_state.get("issa_focus_activity", "Étude / révision")), key="issa_focus_visual_topic")
+                _visual_prompt_submitted = st.form_submit_button("✨ Préparer le prompt 3D avec l’assistant", disabled=not _visual_topic.strip())
             if _visual_prompt_submitted:
                 _visual_sources = _focus_doc_text
                 if st.session_state.get("issa_focus_web_results"):
                     _visual_sources += "\n\nRésultats web :\n" + "\n".join(f"{item.get('title','')} — {item.get('snippet','')} ({item.get('url','')})" for item in st.session_state.get("issa_focus_web_results", []))
-                _visual_task = f"Rédige un prompt directement copiable pour générer { _visual_type.lower() } sur le sujet suivant : {_visual_topic}. Fais un texte précis, visuel, scientifiquement cohérent pour un étudiant en agronomie. Indique le cadrage, les éléments à montrer, le style et les détails à éviter. Ne produis pas une explication, uniquement le prompt prêt à utiliser."
+                _visual_task = f"Écris uniquement un prompt prêt à copier dans un générateur gratuit de modèle 3D pour créer un modèle pédagogique sur : {_visual_topic}. Le modèle doit être scientifiquement cohérent pour un étudiant en agronomie. Décris la forme, les parties visibles, les matériaux ou textures, l’angle de vue et le niveau de détail. Évite les légendes écrites intégrées à l’image."
                 try:
                     with st.spinner("L’assistant prépare le prompt visuel…"):
                         st.session_state["issa_focus_visual_prompt"] = _issa_gemini_document_action(_visual_task, _visual_sources, st.session_state.get("issa_focus_activity", "Étude"))
@@ -2324,12 +2323,14 @@ if _focus_active:
                 _magic_result = st.code(st.session_state["issa_focus_visual_prompt"], language=None)
             _media_cols = st.columns(3)
             with _media_cols[0]:
-                _magic_result = st.link_button("🌿 Tripo · images, 3D et vidéo", "https://www.tripoai.app/", use_container_width=True)
+                _magic_result = st.link_button("🌿 Tripo · génération 3D gratuite", "https://www.tripoai.app/", use_container_width=True)
             with _media_cols[1]:
-                _magic_result = st.link_button("🧊 Meshy · modèles 3D", "https://www.meshy.ai/", use_container_width=True)
+                _magic_result = st.link_button("🧊 Meshy · offre gratuite 3D", "https://www.meshy.ai/", use_container_width=True)
             with _media_cols[2]:
-                _magic_result = st.link_button("🎬 Luma · vidéos IA", "https://luma.ai/ai-video-generator", use_container_width=True)
-            _magic_result = st.caption("Ces services s’ouvrent dans un nouvel onglet. Leur accès gratuit, leurs quotas et leurs crédits dépendent de leurs règles du moment.")
+                _youtube_query = "vidéo pédagogique agronomie " + str(st.session_state.get("issa_focus_visual_topic", st.session_state.get("issa_focus_activity", "agronomie")))
+                _youtube_url = "https://www.youtube.com/results?search_query=" + urllib.parse.quote_plus(_youtube_query)
+                _magic_result = st.link_button("▶️ Vidéos pédagogiques YouTube", _youtube_url, use_container_width=True)
+            _magic_result = st.caption("Meshy indique une offre gratuite avec crédits mensuels; Tripo permet de tester gratuitement la génération. Les vidéos passent uniquement par YouTube. Les quotas gratuits peuvent évoluer.")
         if st.button("⏹️ Arrêter la session et enregistrer", key="focus_finish_locked", type="primary", use_container_width=True):
             try:
                 _focus_seconds = _focus_elapsed_seconds()
