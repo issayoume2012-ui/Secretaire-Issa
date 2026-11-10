@@ -1719,7 +1719,9 @@ def _issa_ai_chat_completion(messages, key, tools=None):
             return _issa_groq_request("chat/completions", key, body, timeout=10 if index == 0 else 7)
         except urllib.error.HTTPError as error:
             last_error = error
-            if index == 0 and error.code in {400, 401, 403}:
+            # 403 may apply only to the selected model: try the configured fallback.
+            # 400 indicates a malformed request; 401 means the credential itself failed.
+            if index == 0 and error.code in {400, 401}:
                 raise
             if error.code in {429, 500, 502, 503, 504} and transient_error is None:
                 transient_error = error
@@ -1826,15 +1828,21 @@ def _issa_ai_error_message(error):
     """Explique les erreurs Groq et les prochaines étapes pour Seugn bi."""
     if isinstance(error, urllib.error.HTTPError):
         detail = ""
+        error_code = ""
         try:
             payload = json.loads(error.read().decode("utf-8", errors="replace"))
-            detail = str(payload.get("error", {}).get("message", ""))
+            api_error = payload.get("error", {})
+            detail = str(api_error.get("message", ""))
+            error_code = str(api_error.get("code", ""))
         except Exception:
             pass
         if error.code == 401:
             return "Groq rejette la clé API (HTTP 401). Elle est invalide, révoquée ou mal copiée. Crée une nouvelle clé et remplace GROQ_API_KEY dans les Secrets Streamlit."
         if error.code == 403:
-            return "Groq refuse l’accès (HTTP 403). Vérifie que la clé appartient au bon projet/compte et que l’accès à l’API est activé."
+            if error_code in {"model_permission_blocked_org", "model_permission_blocked_project"} or "blocked at the" in detail.casefold():
+                scope = "organisation" if "org" in error_code or "organization" in detail.casefold() else "projet"
+                return f"Groq bloque le modèle configuré au niveau {scope}. Le modèle de secours a aussi été essayé. Dans Groq Console → Settings → Limits (organisation) ou Settings → Projects → Limits (projet), autorise un modèle disponible, puis vérifie GROQ_MODEL et GROQ_FALLBACK_MODEL dans les Secrets Streamlit."
+            return "Groq a refusé l’accès (HTTP 403), même après l’essai du modèle de secours. Dans Groq Console, vérifie les autorisations de modèles pour l’organisation et le projet de cette clé, puis sélectionne deux modèles autorisés dans GROQ_MODEL et GROQ_FALLBACK_MODEL."
         if error.code == 404:
             return "Le modèle Groq configuré n’est pas disponible. Vérifie GROQ_MODEL et GROQ_FALLBACK_MODEL."
         if error.code == 429:
