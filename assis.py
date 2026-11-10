@@ -8,6 +8,7 @@ from pathlib import Path
 from datetime import date, datetime, time, timedelta
 import sqlite3, re, unicodedata, io, math, os, threading, time as time_module, smtplib, ssl, imaplib, email, email.policy, hashlib, hmac, base64, json, urllib.request, urllib.error, urllib.parse
 from zoneinfo import ZoneInfo
+from concurrent.futures import ThreadPoolExecutor
 from email.message import EmailMessage
 import pandas as pd
 import streamlit as st
@@ -1876,35 +1877,32 @@ def _issa_ai_error_message(error):
     return f"Seugn bi a rencontré une erreur ({type(error).__name__}). Réessaie dans un instant."
 
 def _issa_focus_search_web(query):
-    """Recherche dans Wikipédia puis dans les métadonnées d’articles Crossref, sans cache des échecs."""
+    """Recherche en parallèle dans Wikipédia et les métadonnées scientifiques Crossref."""
     query = str(query or "").strip()
     if not query:
         return []
-    source_errors = []
-    try:
+    def search_wikipedia():
         api_url = "https://fr.wikipedia.org/w/api.php?" + urllib.parse.urlencode({
             "action": "query", "list": "search", "srsearch": query, "format": "json", "utf8": 1, "srlimit": 6,
         })
         api_req = urllib.request.Request(api_url, headers={"User-Agent": "SecretaireIssa/1.1 (academic assistant)"})
-        with urllib.request.urlopen(api_req, timeout=3.5) as response:
+        with urllib.request.urlopen(api_req, timeout=4) as response:
             data = json.loads(response.read(500_000).decode("utf-8", errors="replace"))
         pages = data.get("query", {}).get("search", [])
-        if pages:
-            return [{
+        return [{
                 "title": page.get("title", "Page"),
                 "snippet": re.sub(r"<[^>]+>", "", page.get("snippet", "")),
                 "url": "https://fr.wikipedia.org/wiki/" + urllib.parse.quote(str(page.get("title", "")).replace(" ", "_")),
                 "source": "Wikipédia",
             } for page in pages]
-    except Exception as error:
-        source_errors.append(type(error).__name__)
-    try:
+
+    def search_crossref():
         crossref_url = "https://api.crossref.org/works?" + urllib.parse.urlencode({
             "query.bibliographic": query, "rows": 6,
             "select": "DOI,title,URL,author,published-print,published-online,container-title",
         })
         crossref_req = urllib.request.Request(crossref_url, headers={"User-Agent": "SecretaireIssa/1.1 (academic study assistant)"})
-        with urllib.request.urlopen(crossref_req, timeout=4.5) as response:
+        with urllib.request.urlopen(crossref_req, timeout=4) as response:
             data = json.loads(response.read(700_000).decode("utf-8", errors="replace"))
         items = data.get("message", {}).get("items", [])
         results = []
@@ -1926,10 +1924,30 @@ def _issa_focus_search_web(query):
                 "source": "Crossref · publication scientifique",
             })
         return results
-    except Exception as error:
-        source_errors.append(type(error).__name__)
-    if source_errors:
-        raise RuntimeError("Wikipédia et Crossref ne répondent pas depuis l’application (" + ", ".join(source_errors) + ").")
+
+    errors = []
+    executor = ThreadPoolExecutor(max_workers=2)
+    wiki_future = executor.submit(search_wikipedia)
+    crossref_future = executor.submit(search_crossref)
+    results = []
+    try:
+        try:
+            results = wiki_future.result(timeout=4.2)
+        except Exception as error:
+            errors.append("Wikipédia : " + type(error).__name__)
+        if results:
+            crossref_future.cancel()
+            return results
+        try:
+            results = crossref_future.result(timeout=4.2)
+        except Exception as error:
+            errors.append("Crossref : " + type(error).__name__)
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+    if results:
+        return results
+    if errors:
+        raise RuntimeError("Sources de recherche injoignables (" + "; ".join(errors) + ").")
     return []
 
 REMINDER_WORKER = start_reminder_worker()
@@ -2330,8 +2348,12 @@ if _focus_active:
         with _focus_tool_tabs[0]:
             with st.form("issa_focus_web_search_form", clear_on_submit=False):
                 _focus_query = st.text_input("Rechercher un concept, une définition ou un article", placeholder="Ex. : fixation biologique de l’azote en agronomie", key="issa_focus_web_query")
-                _focus_search_submitted = st.form_submit_button("🔍 Rechercher sur le web", disabled=not _focus_query.strip())
-            if _focus_search_submitted:
+                _focus_search_submitted = st.form_submit_button("🔍 Rechercher sur le web", type="primary")
+            if _focus_search_submitted and not _focus_query.strip():
+                st.session_state["issa_focus_web_results"] = []
+                st.session_state["issa_focus_web_error"] = ""
+                _magic_result = st.warning("Écris un sujet dans le champ de recherche, puis clique à nouveau.")
+            elif _focus_search_submitted:
                 try:
                     with st.spinner("Recherche des résultats…"):
                         st.session_state["issa_focus_web_results"] = _issa_focus_search_web(_focus_query)
@@ -2359,11 +2381,18 @@ if _focus_active:
             elif st.session_state.get("issa_focus_web_results") == []:
                 _magic_result = st.info("Aucun résultat n’a été récupéré. Essaie une autre formulation ou utilise la recherche web complète ci-dessus.")
         with _focus_tool_tabs[1]:
+            if not _startup_secret("GEMINI_API_KEY", ""):
+                _magic_result = st.warning("Seugn bi attend la clé GEMINI_API_KEY dans les Secrets Streamlit.")
+            else:
+                _magic_result = st.caption("Écris ta question ou choisis une action sur tes documents, puis clique sur « Demander à l’IA ».")
             with st.form("issa_focus_live_ai_form", clear_on_submit=False):
                 _focus_ai_mode = st.selectbox("Que souhaites-tu faire ?", ["Répondre à une question", "Expliquer une notion simplement", "Résumer les documents joints", "Générer 5 flashcards", "Créer des exercices avec corrigé"], key="issa_focus_live_ai_mode")
                 _focus_live_question = st.text_area("Question ou consigne", placeholder="Ex. : Explique la capacité au champ et donne un exemple en sols tropicaux.", height=95, key="issa_focus_live_ai_question")
-                _focus_ai_submitted = st.form_submit_button("✨ Demander à l’IA", type="primary", disabled=not _focus_live_question.strip() and _focus_ai_mode not in {"Résumer les documents joints", "Générer 5 flashcards", "Créer des exercices avec corrigé"})
-            if _focus_ai_submitted:
+                _focus_ai_submitted = st.form_submit_button("✨ Demander à l’IA", type="primary")
+            if _focus_ai_submitted and not _focus_live_question.strip() and _focus_ai_mode not in {"Résumer les documents joints", "Générer 5 flashcards", "Créer des exercices avec corrigé"}:
+                st.session_state["issa_focus_live_ai_result"] = ""
+                _magic_result = st.warning("Écris ta question ou ta consigne avant d’envoyer la demande à Seugn bi.")
+            elif _focus_ai_submitted:
                 _focus_ai_task = _focus_live_question.strip() or _focus_ai_mode
                 if _focus_ai_mode == "Expliquer une notion simplement":
                     _focus_ai_task = "Explique simplement, avec un exemple concret lié à l’agronomie si possible : " + _focus_ai_task
@@ -2419,7 +2448,7 @@ if _focus_active:
                     key="issa_focus_youtube_video_link",
                     placeholder="https://www.youtube.com/watch?v=…",
                 )
-                _youtube_search_submitted = st.form_submit_button("▶️ Chercher sur YouTube", type="primary", disabled=not _youtube_topic.strip() and not _youtube_video_link.strip())
+                _youtube_search_submitted = st.form_submit_button("▶️ Chercher sur YouTube", type="primary")
             if _youtube_search_submitted:
                 st.session_state["issa_focus_youtube_error"] = ""
                 if _youtube_video_link.strip():
@@ -2436,6 +2465,8 @@ if _focus_active:
                     st.session_state["issa_focus_youtube_search_url"] = "https://www.youtube.com/results?search_query=" + urllib.parse.quote_plus(_youtube_query)
                     st.session_state["issa_focus_youtube_embed"] = ""
                     st.session_state["issa_focus_youtube_error"] = ""
+                else:
+                    st.session_state["issa_focus_youtube_error"] = "Saisis un sujet ou un lien YouTube avant de lancer la recherche."
             if st.session_state.get("issa_focus_youtube_error"):
                 _magic_result = st.warning(st.session_state["issa_focus_youtube_error"])
             if st.session_state.get("issa_focus_youtube_search_url"):
