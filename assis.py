@@ -8,7 +8,6 @@ from pathlib import Path
 from datetime import date, datetime, time, timedelta
 import sqlite3, re, unicodedata, io, math, os, threading, time as time_module, smtplib, ssl, imaplib, email, email.policy, hashlib, hmac, base64, json, urllib.request, urllib.error, urllib.parse
 from zoneinfo import ZoneInfo
-from html.parser import HTMLParser
 from email.message import EmailMessage
 import pandas as pd
 import streamlit as st
@@ -1733,79 +1732,91 @@ def _issa_gemini_document_action(action, document_text, activity=""):
     source = str(document_text or "").strip()[:18000]
     prompt = (
         "Tu es l'assistant pédagogique de Secrétaire Issa XXL. Réponds en français, en wolof si la demande est en wolof, "
-        "ou dans un mélange naturel si les deux langues sont utilisées. Si des documents sont fournis, fonde les réponses qui les concernent sur ces documents, "
-        "distingue clairement les explications générales et ne prétends pas qu'une information figure dans le cours si elle n'y est pas. "
+        "ou dans un mélange naturel si les deux langues sont utilisées. Utilise les cours joints et les extraits web fournis comme références, "
+        "distingue clairement les explications générales, et cite les URL présentes dans les extraits quand elles soutiennent la réponse. "
+        "Ne prétends pas qu'une information figure dans un cours si elle n'y est pas, et n'invente jamais de source. "
         "Si aucun document n'est fourni, réponds à la question avec tes connaissances et signale les incertitudes. "
         "Présente le résultat avec des titres et des étapes lisibles. Pour les flashcards, produis une liste numérotée avec Question et Réponse.\n"
         f"Activité de la séance : {activity or 'Étude'}\nTâche demandée : {action}\n\n"
-        + (f"DOCUMENTS JOINTS (extraits limités aux 18 000 caractères) :\n{source}" if source else "Aucun document n'est joint ; réponds à la question directement.")
+        + (f"SUPPORTS DE LA SÉANCE (extraits limités aux 18 000 caractères) :\n{source}" if source else "Aucun document ni extrait web n'est joint ; réponds à la question directement.")
     )
     body = {
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "generationConfig": {"temperature": 0.25, "maxOutputTokens": 1400},
     }
-    request = urllib.request.Request(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent",
-        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-        headers={"x-goog-api-key": key, "Content-Type": "application/json"}, method="POST",
-    )
-    with urllib.request.urlopen(request, timeout=20) as response:
-        result = json.loads(response.read().decode("utf-8"))
-    return "".join(part.get("text", "") for part in result["candidates"][0]["content"].get("parts", []) if "text" in part).strip() or "L’IA n’a pas renvoyé de texte. Essaie avec une demande plus précise."
+    models = [_startup_secret("GEMINI_MODEL", "gemini-3.5-flash-lite"), "gemini-3.6-flash"]
+    last_error = None
+    for model_index, model in enumerate(dict.fromkeys(models)):
+        request = urllib.request.Request(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+            headers={"x-goog-api-key": key, "Content-Type": "application/json"}, method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=12 if model_index == 0 else 7) as response:
+                result = json.loads(response.read().decode("utf-8"))
+            candidates = result.get("candidates") or []
+            if not candidates:
+                return "Gemini n’a pas produit de réponse. Reformule la demande ou réduis le contenu du document joint."
+            parts = candidates[0].get("content", {}).get("parts", [])
+            return "".join(part.get("text", "") for part in parts if "text" in part).strip() or "L’IA n’a pas renvoyé de texte. Essaie avec une demande plus précise."
+        except urllib.error.HTTPError as exc:
+            last_error = exc
+            if exc.code == 404:
+                continue
+            raise
+    if last_error:
+        raise last_error
+    return "L’assistant IA n’a pas pu démarrer."
 
-class _FocusSearchParser(HTMLParser):
-    """Extrait les titres et extraits de la page de résultats DuckDuckGo HTML."""
-    def __init__(self):
-        super().__init__()
-        self.results = []
-        self.active = None
-        self.capture = None
-        self.text = []
-    def handle_starttag(self, tag, attrs):
-        attrs = dict(attrs)
-        classes = attrs.get("class", "").split()
-        if tag == "a" and "result__a" in classes:
-            self.active = {"url": attrs.get("href", ""), "title": ""}
-            self.capture = "title"
-            self.text = []
-        elif "result__snippet" in classes:
-            self.capture = "snippet"
-            self.text = []
-    def handle_data(self, data):
-        if self.capture:
-            self.text.append(data)
-    def handle_endtag(self, tag):
-        if self.capture == "title" and tag == "a" and self.active:
-            self.active["title"] = " ".join("".join(self.text).split())
-            self.results.append(self.active)
-            self.active = None
-            self.capture = None
-        elif self.capture == "snippet" and tag in {"a", "div"} and self.results:
-            snippet = " ".join("".join(self.text).split())
-            if snippet and not self.results[-1].get("snippet"):
-                self.results[-1]["snippet"] = snippet
-            self.capture = None
+def _issa_focus_ai_error_message(error):
+    """Traduit les erreurs réseau/API Gemini en actions simples pour l’utilisateur."""
+    if isinstance(error, urllib.error.HTTPError):
+        detail = ""
+        try:
+            payload = json.loads(error.read().decode("utf-8", errors="replace"))
+            detail = str(payload.get("error", {}).get("message", ""))
+        except Exception:
+            pass
+        if error.code in {400, 401}:
+            return "La clé ou le modèle Gemini est refusé. Vérifie GEMINI_MODEL et remplace au besoin GEMINI_API_KEY par une clé Auth récente créée dans Google AI Studio."
+        if error.code == 403:
+            return "Google refuse l’accès à cette clé pour Gemini. Crée une clé Auth dans AI Studio, autorise l’API Gemini et remplace GEMINI_API_KEY dans les Secrets Streamlit."
+        if error.code == 404:
+            return "Le modèle Gemini demandé n’est pas disponible pour cette clé. Mets à jour GEMINI_MODEL dans les Secrets Streamlit."
+        if error.code == 429:
+            return "Le quota Gemini est atteint. Attends le renouvellement du quota ou vérifie les limites du projet dans AI Studio."
+        if error.code in {500, 502, 503, 504}:
+            return "Le service Gemini est temporairement indisponible. Réessaie dans quelques instants."
+        return f"Gemini a refusé la demande (HTTP {error.code}). {detail[:180]}"
+    if isinstance(error, (TimeoutError, urllib.error.URLError)):
+        return "Gemini n’a pas répondu à temps. Vérifie la connexion puis réessaie."
+    return f"L’assistant a rencontré une erreur ({type(error).__name__}). Réessaie dans un instant."
 
 @st.cache_data(ttl=900, show_spinner=False)
 def _issa_focus_search_web(query):
-    """Effectue une recherche web publique sans clé API, avec un délai court."""
+    """Recherche des pages francophones via l’API MediaWiki, sans scraper de page HTML."""
     query = str(query or "").strip()
     if not query:
         return []
-    url = "https://html.duckduckgo.com/html/?q=" + urllib.parse.quote_plus(query)
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; SecretaireIssa/1.0)"})
-    with urllib.request.urlopen(req, timeout=8) as response:
-        html = response.read(1_500_000).decode("utf-8", errors="replace")
-    parser = _FocusSearchParser()
-    parser.feed(html)
-    for result in parser.results:
-        href = result.get("url", "")
-        if "uddg=" in href:
-            try:
-                result["url"] = urllib.parse.parse_qs(urllib.parse.urlparse(href).query).get("uddg", [href])[0]
-            except Exception:
-                pass
-    return [r for r in parser.results if r.get("title") and r.get("url")][:8]
+    api_url = "https://fr.wikipedia.org/w/api.php?" + urllib.parse.urlencode({
+        "action": "query", "list": "search", "srsearch": query, "format": "json", "utf8": 1, "srlimit": 8,
+    })
+    api_req = urllib.request.Request(api_url, headers={"User-Agent": "SecretaireIssa/1.0 (academic study assistant)"})
+    try:
+        with urllib.request.urlopen(api_req, timeout=4) as response:
+            data = json.loads(response.read(700_000).decode("utf-8", errors="replace"))
+        pages = data.get("query", {}).get("search", [])
+        if pages:
+            return [{
+                "title": page.get("title", "Page"),
+                "snippet": re.sub(r"<[^>]+>", "", page.get("snippet", "")),
+                "url": "https://fr.wikipedia.org/wiki/" + urllib.parse.quote(str(page.get("title", "")).replace(" ", "_")),
+                "source": "Wikipédia",
+            } for page in pages]
+    except Exception:
+        return []
+    return []
 
 REMINDER_WORKER = start_reminder_worker()
 # Traitement allégé : ne pas refaire toutes les synchronisations SQL à chaque clic.
@@ -2014,7 +2025,6 @@ def _save_focus_workspace_notes(text):
     """Sauvegarde les notes de travail sur la fiche focus active, même avant la fin."""
     ensure_focus_sessions_schema()
     text = str(text or "")[:12000]
-    st.session_state["issa_focus_workspace_notes"] = text
     seconds = max(0, _focus_elapsed_seconds())
     minutes = max(1, int(round(seconds / 60)))
     activity = str(st.session_state.get("issa_focus_activity", "Étude") or "Étude").strip()
@@ -2196,13 +2206,13 @@ if _focus_active:
                         with st.spinner("L’assistant lit les documents et prépare le résultat…"):
                             st.session_state["issa_focus_ai_result"] = _issa_gemini_document_action(_focus_action_text, _focus_doc_text, st.session_state.get("issa_focus_activity", "Étude"))
                     except Exception as _focus_ai_error:
-                        st.session_state["issa_focus_ai_result"] = f"Je n’ai pas pu analyser les documents ({type(_focus_ai_error).__name__}). Vérifie la connexion, la clé IA et réessaie."
+                        st.session_state["issa_focus_ai_result"] = _issa_focus_ai_error_message(_focus_ai_error)
             if st.session_state.get("issa_focus_ai_result"):
                 with st.container(border=True):
                     _magic_result = st.markdown("#### Résultat de l’assistant")
                     _magic_result = st.markdown(st.session_state["issa_focus_ai_result"])
         _magic_result = st.markdown("### 🧰 Outils de révision dans ta bulle Focus")
-        _focus_tool_tabs = st.tabs(["🔎 Recherche web", "🤖 Assistant IA", "📝 Notes de séance"])
+        _focus_tool_tabs = st.tabs(["🔎 Recherche web", "🤖 Assistant IA", "📝 Notes de séance", "🧊 Images 3D & vidéo"])
         with _focus_tool_tabs[0]:
             with st.form("issa_focus_web_search_form", clear_on_submit=False):
                 _focus_query = st.text_input("Rechercher un concept, une définition ou un article", placeholder="Ex. : fixation biologique de l’azote en agronomie", key="issa_focus_web_query")
@@ -2219,11 +2229,21 @@ if _focus_active:
                 _magic_result = st.warning(st.session_state["issa_focus_web_error"])
             for _result_idx, _search_result in enumerate(st.session_state.get("issa_focus_web_results", [])):
                 with st.container(border=True):
-                    _magic_result = st.markdown(f"**[{_search_result['title']}]({_search_result['url']})**")
+                    _magic_result = st.markdown(f"**[{_search_result['title']}]({_search_result['url']})** · {_search_result.get('source', 'Web')}")
                     if _search_result.get("snippet"):
                         _magic_result = st.caption(_search_result["snippet"])
+            if _focus_query.strip() and not st.session_state.get("issa_focus_web_results"):
+                _magic_result = st.info("La recherche intégrée n’a pas renvoyé d’extraits. Ouvre les résultats web complets ci-dessous.")
             if _focus_query.strip():
-                _magic_result = st.link_button("Ouvrir la recherche complète", "https://duckduckgo.com/?q=" + urllib.parse.quote_plus(_focus_query), use_container_width=False)
+                _web_link_cols = st.columns(2)
+                _google_url = "https://www.google.com/search?q=" + urllib.parse.quote_plus(_focus_query)
+                _scholar_url = "https://scholar.google.com/scholar?q=" + urllib.parse.quote_plus(_focus_query)
+                with _web_link_cols[0]:
+                    _magic_result = st.link_button("🌐 Résultats web Google", _google_url, use_container_width=True)
+                with _web_link_cols[1]:
+                    _magic_result = st.link_button("🎓 Articles Google Scholar", _scholar_url, use_container_width=True)
+            elif st.session_state.get("issa_focus_web_results") == []:
+                _magic_result = st.info("Aucun résultat n’a été récupéré. Essaie une autre formulation ou utilise la recherche web complète ci-dessus.")
         with _focus_tool_tabs[1]:
             with st.form("issa_focus_live_ai_form", clear_on_submit=False):
                 _focus_ai_mode = st.selectbox("Que souhaites-tu faire ?", ["Répondre à une question", "Expliquer une notion simplement", "Résumer les documents joints", "Générer 5 flashcards", "Créer des exercices avec corrigé"], key="issa_focus_live_ai_mode")
@@ -2241,9 +2261,11 @@ if _focus_active:
                     _focus_ai_task = "Crée des exercices progressifs avec corrigé à partir des documents joints. " + _focus_live_question.strip()
                 try:
                     with st.spinner("L’assistant prépare sa réponse…"):
-                        st.session_state["issa_focus_live_ai_result"] = _issa_gemini_document_action(_focus_ai_task, _focus_doc_text, st.session_state.get("issa_focus_activity", "Étude"))
+                        _web_context = "\n\nEXTRAITS DE RECHERCHE WEB (à vérifier, avec leurs sources) :\n" + "\n".join(f"- {item.get('title','')} — {item.get('snippet','')} ({item.get('url','')})" for item in st.session_state.get("issa_focus_web_results", [])) if st.session_state.get("issa_focus_web_results") else ""
+                        _focus_ai_sources = (_focus_doc_text + _web_context).strip()
+                        st.session_state["issa_focus_live_ai_result"] = _issa_gemini_document_action(_focus_ai_task, _focus_ai_sources, st.session_state.get("issa_focus_activity", "Étude"))
                 except Exception as _live_ai_error:
-                    st.session_state["issa_focus_live_ai_result"] = f"Je n’ai pas pu joindre l’assistant ({type(_live_ai_error).__name__}). Vérifie la connexion puis réessaie."
+                    st.session_state["issa_focus_live_ai_result"] = _issa_focus_ai_error_message(_live_ai_error)
             if st.session_state.get("issa_focus_live_ai_result"):
                 with st.container(border=True):
                     _magic_result = st.markdown(st.session_state["issa_focus_live_ai_result"])
@@ -2269,6 +2291,32 @@ if _focus_active:
                 except Exception as _notes_error:
                     _magic_result = st.error(f"Enregistrement impossible : {str(_notes_error)[:180]}")
             _magic_result = st.caption("Les notes sont conservées dans la fiche de cette session et restent liées à son historique.")
+        with _focus_tool_tabs[3]:
+            _magic_result = st.caption("L’assistant prépare un prompt à partir de l’objectif de la séance, des cours joints et des résultats de recherche. Copie-le ensuite dans l’outil choisi pour générer ton visuel.")
+            with st.form("issa_focus_visual_prompt_form", clear_on_submit=False):
+                _visual_type = st.selectbox("Créer", ["Une illustration pédagogique", "Un modèle 3D d’un objet ou système agricole", "Une courte vidéo pédagogique"], key="issa_focus_visual_type")
+                _visual_topic = st.text_input("Sujet du visuel", value=str(st.session_state.get("issa_focus_activity", "Étude / révision")), key="issa_focus_visual_topic")
+                _visual_prompt_submitted = st.form_submit_button("✨ Préparer un prompt avec l’assistant", disabled=not _visual_topic.strip())
+            if _visual_prompt_submitted:
+                _visual_sources = _focus_doc_text
+                if st.session_state.get("issa_focus_web_results"):
+                    _visual_sources += "\n\nRésultats web :\n" + "\n".join(f"{item.get('title','')} — {item.get('snippet','')} ({item.get('url','')})" for item in st.session_state.get("issa_focus_web_results", []))
+                _visual_task = f"Rédige un prompt directement copiable pour générer { _visual_type.lower() } sur le sujet suivant : {_visual_topic}. Fais un texte précis, visuel, scientifiquement cohérent pour un étudiant en agronomie. Indique le cadrage, les éléments à montrer, le style et les détails à éviter. Ne produis pas une explication, uniquement le prompt prêt à utiliser."
+                try:
+                    with st.spinner("L’assistant prépare le prompt visuel…"):
+                        st.session_state["issa_focus_visual_prompt"] = _issa_gemini_document_action(_visual_task, _visual_sources, st.session_state.get("issa_focus_activity", "Étude"))
+                except Exception as _visual_error:
+                    st.session_state["issa_focus_visual_prompt"] = _issa_focus_ai_error_message(_visual_error)
+            if st.session_state.get("issa_focus_visual_prompt"):
+                _magic_result = st.code(st.session_state["issa_focus_visual_prompt"], language=None)
+            _media_cols = st.columns(3)
+            with _media_cols[0]:
+                _magic_result = st.link_button("🌿 Tripo · images, 3D et vidéo", "https://www.tripoai.app/", use_container_width=True)
+            with _media_cols[1]:
+                _magic_result = st.link_button("🧊 Meshy · modèles 3D", "https://www.meshy.ai/", use_container_width=True)
+            with _media_cols[2]:
+                _magic_result = st.link_button("🎬 Luma · vidéos IA", "https://luma.ai/ai-video-generator", use_container_width=True)
+            _magic_result = st.caption("Ces services s’ouvrent dans un nouvel onglet. Leur accès gratuit, leurs quotas et leurs crédits dépendent de leurs règles du moment.")
         if st.button("⏹️ Arrêter la session et enregistrer", key="focus_finish_locked", type="primary", use_container_width=True):
             try:
                 _focus_seconds = _focus_elapsed_seconds()
