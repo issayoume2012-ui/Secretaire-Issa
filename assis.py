@@ -1831,8 +1831,10 @@ def _issa_ai_error_message(error):
             detail = str(payload.get("error", {}).get("message", ""))
         except Exception:
             pass
-        if error.code in {401, 403}:
-            return "La clé Groq est absente, invalide ou sans accès API. Vérifie GROQ_API_KEY dans les Secrets Streamlit."
+        if error.code == 401:
+            return "Groq rejette la clé API (HTTP 401). Elle est invalide, révoquée ou mal copiée. Crée une nouvelle clé et remplace GROQ_API_KEY dans les Secrets Streamlit."
+        if error.code == 403:
+            return "Groq refuse l’accès (HTTP 403). Vérifie que la clé appartient au bon projet/compte et que l’accès à l’API est activé."
         if error.code == 404:
             return "Le modèle Groq configuré n’est pas disponible. Vérifie GROQ_MODEL et GROQ_FALLBACK_MODEL."
         if error.code == 429:
