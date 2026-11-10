@@ -1698,9 +1698,12 @@ def _issa_gemini_generate(contents, key, tools=None, system_instruction=""):
         value.removeprefix("models/") for value in [
             _startup_secret("GEMINI_MODEL", "gemini-3.8-flash"),
             _startup_secret("GEMINI_FALLBACK_MODEL", "gemini-3.7-flash"),
+            "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.1-flash-lite", "gemini-3.5-flash-lite",
         ] if value
     ))
     last_error = None
+    retryable_errors = []
+    failures = []
     for index, model in enumerate(models):
         body = {"contents": contents, "generationConfig": {"maxOutputTokens": 1600}}
         if system_instruction:
@@ -1715,26 +1718,40 @@ def _issa_gemini_generate(contents, key, tools=None, system_instruction=""):
             headers={"x-goog-api-key": key, "Content-Type": "application/json"},
             method="POST",
         )
-        try:
-            with urllib.request.urlopen(request, timeout=18 if index == 0 else 12) as response:
-                return json.loads(response.read().decode("utf-8", errors="replace"))
-        except urllib.error.HTTPError as error:
-            last_error = error
-            if error.code in {400, 401}:
-                raise
-            if error.code in {403, 404, 429, 500, 502, 503, 504}:
+        for retry in range(2):
+            try:
+                with urllib.request.urlopen(request, timeout=9 if index == 0 else 6) as response:
+                    return json.loads(response.read().decode("utf-8", errors="replace"))
+            except urllib.error.HTTPError as error:
+                last_error = error
                 try:
                     error.issa_response_body = error.read().decode("utf-8", errors="replace")
-                    error.issa_attempted_models = models[:index + 1]
+                    api_error = json.loads(error.issa_response_body).get("error", {})
+                    failures.append({"model": model, "http": error.code, "status": str(api_error.get("status", "")), "message": str(api_error.get("message", ""))[:180]})
                 except Exception:
-                    pass
-                continue
-            raise
-        except (TimeoutError, urllib.error.URLError):
-            if index + 1 == len(models):
+                    failures.append({"model": model, "http": error.code, "status": "", "message": ""})
+                if error.code in {400, 401}:
+                    raise
+                if error.code in {429, 500, 502, 503, 504}:
+                    retryable_errors.append(error)
+                if error.code in {500, 502, 503, 504} and retry == 0:
+                    time_module.sleep(0.6)
+                    continue
+                if error.code in {403, 404, 429, 500, 502, 503, 504}:
+                    break
                 raise
+            except (TimeoutError, urllib.error.URLError) as error:
+                if retry == 0:
+                    time_module.sleep(0.4)
+                    continue
+                if index + 1 == len(models):
+                    raise
+                break
     if last_error:
-        raise last_error
+        failure = retryable_errors[0] if retryable_errors else last_error
+        failure.issa_attempted_models = models
+        failure.issa_failures = failures
+        raise failure
     raise RuntimeError("Aucun modèle Gemini n’est configuré.")
 
 def _issa_gemini_function_declaration(function):
@@ -1844,9 +1861,13 @@ def _issa_ai_error_message(error):
         if error.code == 404:
             return "Le modèle Gemini configuré n’est pas disponible pour cette clé. Vérifie GEMINI_MODEL et GEMINI_FALLBACK_MODEL dans les Secrets Streamlit."
         if error.code == 429:
-            return "La limite d’utilisation Gemini est atteinte pour le moment. Vérifie les quotas du projet AI Studio et réessaie plus tard."
+            details = getattr(error, "issa_failures", [])
+            used = ", ".join(f"{item['model']} ({item['http']}{' ' + item['status'] if item.get('status') else ''})" for item in details[:5])
+            return "Gemini indique une limite ou un quota atteint (HTTP 429)." + (f" Réponses reçues : {used}." if used else "") + " Vérifie les quotas du projet AI Studio."
         if error.code in {500, 502, 503, 504}:
-            return "Gemini est temporairement indisponible. Le modèle de secours a aussi été essayé ; réessaie dans quelques instants."
+            details = getattr(error, "issa_failures", [])
+            used = ", ".join(f"{item['model']} ({item['http']}{' ' + item['status'] if item.get('status') else ''})" for item in details[:5])
+            return "Gemini n’a pas répondu après des tentatives avec plusieurs modèles." + (f" Résultats : {used}." if used else f" Dernier statut : HTTP {error.code}{' ' + status if status else ''}.") + " Si cela persiste, vérifie l’état du service Gemini et les quotas du projet AI Studio."
         return f"Gemini a refusé la demande (HTTP {error.code}{', ' + status if status else ''}). {detail[:180]}"
     if isinstance(error, (TimeoutError, urllib.error.URLError)):
         return "Seugn bi n’a pas pu joindre Gemini à temps. Vérifie la connexion puis réessaie."
