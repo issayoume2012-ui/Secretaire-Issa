@@ -1692,20 +1692,22 @@ def _issa_ai_system_prompt(context):
     "COLONNES AUTORISÉES (utilise exactement ces noms dans record_json/changes_json) :\\n"+schema+"\\n\\nCONTEXTE DES DONNÉES ACTUELLES :\\n"+context)
 
 
-def _issa_gemini_generate(contents, key, tools=None, system_instruction=""):
+def _issa_gemini_generate(contents, key, tools=None, system_instruction="", quick=False):
     """Appelle Gemini GenerateContent avec repli entre les modèles configurés."""
-    models = list(dict.fromkeys(
+    configured_models = [
         value.removeprefix("models/") for value in [
             _startup_secret("GEMINI_MODEL", "gemini-3.8-flash"),
             _startup_secret("GEMINI_FALLBACK_MODEL", "gemini-3.7-flash"),
-            "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.1-flash-lite", "gemini-3.5-flash-lite",
         ] if value
-    ))
+    ]
+    models = list(dict.fromkeys(configured_models + ([] if quick else [
+        "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.1-flash-lite", "gemini-3.5-flash-lite",
+    ])))
     last_error = None
     retryable_errors = []
     failures = []
     for index, model in enumerate(models):
-        body = {"contents": contents, "generationConfig": {"maxOutputTokens": 1600}}
+        body = {"contents": contents, "generationConfig": {"maxOutputTokens": 900 if quick else 1600}}
         if system_instruction:
             body["systemInstruction"] = {"parts": [{"text": system_instruction}]}
         if tools:
@@ -1718,9 +1720,9 @@ def _issa_gemini_generate(contents, key, tools=None, system_instruction=""):
             headers={"x-goog-api-key": key, "Content-Type": "application/json"},
             method="POST",
         )
-        for retry in range(2):
+        for retry in range(1 if quick else 2):
             try:
-                with urllib.request.urlopen(request, timeout=9 if index == 0 else 6) as response:
+                with urllib.request.urlopen(request, timeout=(6 if index == 0 else 5) if quick else (9 if index == 0 else 6)) as response:
                     return json.loads(response.read().decode("utf-8", errors="replace"))
             except urllib.error.HTTPError as error:
                 last_error = error
@@ -1734,14 +1736,14 @@ def _issa_gemini_generate(contents, key, tools=None, system_instruction=""):
                     raise
                 if error.code in {429, 500, 502, 503, 504}:
                     retryable_errors.append(error)
-                if error.code in {500, 502, 503, 504} and retry == 0:
+                if not quick and error.code in {500, 502, 503, 504} and retry == 0:
                     time_module.sleep(0.6)
                     continue
                 if error.code in {403, 404, 429, 500, 502, 503, 504}:
                     break
                 raise
             except (TimeoutError, urllib.error.URLError) as error:
-                if retry == 0:
+                if not quick and retry == 0:
                     time_module.sleep(0.4)
                     continue
                 if index + 1 == len(models):
@@ -1826,7 +1828,7 @@ def _issa_ai_document_action(action, document_text, activity=""):
     key = _startup_secret("GEMINI_API_KEY", "")
     if not key:
         return "Configure GEMINI_API_KEY dans les Secrets Streamlit pour utiliser l’assistant IA."
-    source = str(document_text or "").strip()[:18000]
+    source = str(document_text or "").strip()
     prompt = (
         "Tu es Seugn bi, l'assistant pédagogique d'Issa. Réponds en français, en wolof si la demande est en wolof, "
         "ou dans un mélange naturel si les deux langues sont utilisées. Utilise les cours joints et extraits web comme références, "
@@ -1834,9 +1836,9 @@ def _issa_ai_document_action(action, document_text, activity=""):
         "Si aucun support n'est fourni, réponds avec tes connaissances et signale les incertitudes. "
         "Pour des flashcards, numérote les cartes et donne Question puis Réponse.\n"
         f"Activité : {activity or 'Étude'}\nTâche : {action}\n\n"
-        + (f"SUPPORTS (limités à 18 000 caractères) :\n{source}" if source else "Aucun support joint.")
+        + (f"SUPPORTS COMPLETS :\n{source}" if source else "Aucun support joint.")
     )
-    result = _issa_gemini_generate([{"role": "user", "parts": [{"text": prompt}]}], key, system_instruction="Tu es Seugn bi, secrétaire pédagogique bilingue français-wolof.")
+    result = _issa_gemini_generate([{"role": "user", "parts": [{"text": prompt}]}], key, system_instruction="Tu es Seugn bi, secrétaire pédagogique bilingue français-wolof.", quick=True)
     candidates = result.get("candidates") or []
     return "".join(str(part.get("text", "")) for part in candidates[0].get("content", {}).get("parts", []) if part.get("text")).strip() if candidates else "Seugn bi n’a pas reçu de réponse. Réessaie avec une demande plus courte."
 
