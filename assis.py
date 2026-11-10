@@ -1692,10 +1692,40 @@ def _issa_ai_system_prompt(context):
     "COLONNES AUTORISÉES (utilise exactement ces noms dans record_json/changes_json) :\\n"+schema+"\\n\\nCONTEXTE DES DONNÉES ACTUELLES :\\n"+context)
 
 
+def _issa_gemini_generate_content(body, key):
+    """Appelle le modèle rapide, puis bascule sur un modèle de secours si l’API échoue."""
+    primary = _startup_secret("GEMINI_MODEL", "gemini-3.5-flash-lite")
+    fallback = _startup_secret("GEMINI_FALLBACK_MODEL", "gemini-3.6-flash")
+    last_error = None
+    transient_error = None
+    for index, model in enumerate(dict.fromkeys([primary, fallback])):
+        request = urllib.request.Request(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+            headers={"x-goog-api-key": key, "Content-Type": "application/json"}, method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=10 if index == 0 else 7) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as error:
+            last_error = error
+            if error.code in {400, 401, 403}:
+                raise
+            if error.code not in {404, 429, 500, 502, 503, 504}:
+                raise
+            if error.code in {429, 500, 502, 503, 504} and transient_error is None:
+                transient_error = error
+        except (TimeoutError, urllib.error.URLError) as error:
+            last_error = error
+            if transient_error is None:
+                transient_error = error
+    if transient_error or last_error:
+        raise transient_error or last_error
+    raise RuntimeError("Aucun modèle Gemini n’est configuré.")
+
 def _issa_gemini_reply(question, history=None, context=None, audio=None):
     st.session_state["issa_focus_immediate_request"] = _issa_focus_requested_now(question)
     key=_startup_secret("GEMINI_API_KEY","")
-    model="gemini-3.5-flash-lite"
     if not key: return "Ajoute GEMINI_API_KEY dans les Secrets Streamlit pour activer l’assistant."
     context=_issa_ai_context() if context is None else context
     contents=[]
@@ -1709,9 +1739,10 @@ def _issa_gemini_reply(question, history=None, context=None, audio=None):
     tools=[{"functionDeclarations":_ISSA_FUNCTIONS}]
     for _round in range(4):
         body={"systemInstruction":{"parts":[{"text":system}]},"contents":contents,"tools":tools,"toolConfig":{"functionCallingConfig":{"mode":"AUTO"}},"generationConfig":{"temperature":0.2,"maxOutputTokens":350}}
-        request=urllib.request.Request(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",data=json.dumps(body,ensure_ascii=False).encode("utf-8"),headers={"x-goog-api-key":key,"Content-Type":"application/json"},method="POST")
-        with urllib.request.urlopen(request,timeout=20) as response: result=json.loads(response.read().decode("utf-8"))
-        candidate=result["candidates"][0]["content"]
+        result=_issa_gemini_generate_content(body,key)
+        _candidates=result.get("candidates") or []
+        if not _candidates: return "Gemini n’a pas produit de réponse. Reformule ta demande et réessaie."
+        candidate=_candidates[0].get("content",{})
         calls=[part["functionCall"] for part in candidate.get("parts",[]) if "functionCall" in part]
         if not calls:
             return "".join(part.get("text","") for part in candidate.get("parts",[]) if "text" in part).strip()
@@ -1744,30 +1775,12 @@ def _issa_gemini_document_action(action, document_text, activity=""):
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "generationConfig": {"temperature": 0.25, "maxOutputTokens": 1400},
     }
-    models = [_startup_secret("GEMINI_MODEL", "gemini-3.5-flash-lite"), "gemini-3.6-flash"]
-    last_error = None
-    for model_index, model in enumerate(dict.fromkeys(models)):
-        request = urllib.request.Request(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-            headers={"x-goog-api-key": key, "Content-Type": "application/json"}, method="POST",
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=12 if model_index == 0 else 7) as response:
-                result = json.loads(response.read().decode("utf-8"))
-            candidates = result.get("candidates") or []
-            if not candidates:
-                return "Gemini n’a pas produit de réponse. Reformule la demande ou réduis le contenu du document joint."
-            parts = candidates[0].get("content", {}).get("parts", [])
-            return "".join(part.get("text", "") for part in parts if "text" in part).strip() or "L’IA n’a pas renvoyé de texte. Essaie avec une demande plus précise."
-        except urllib.error.HTTPError as exc:
-            last_error = exc
-            if exc.code == 404:
-                continue
-            raise
-    if last_error:
-        raise last_error
-    return "L’assistant IA n’a pas pu démarrer."
+    result = _issa_gemini_generate_content(body, key)
+    candidates = result.get("candidates") or []
+    if not candidates:
+        return "Gemini n’a pas produit de réponse. Reformule la demande ou réduis le contenu du document joint."
+    parts = candidates[0].get("content", {}).get("parts", [])
+    return "".join(part.get("text", "") for part in parts if "text" in part).strip() or "L’IA n’a pas renvoyé de texte. Essaie avec une demande plus précise."
 
 def _issa_focus_ai_error_message(error):
     """Traduit les erreurs réseau/API Gemini en actions simples pour l’utilisateur."""
@@ -1787,7 +1800,7 @@ def _issa_focus_ai_error_message(error):
         if error.code == 429:
             return "Le quota Gemini est atteint. Attends le renouvellement du quota ou vérifie les limites du projet dans AI Studio."
         if error.code in {500, 502, 503, 504}:
-            return "Le service Gemini est temporairement indisponible. Réessaie dans quelques instants."
+            return "Gemini n’a pas répondu avec les deux modèles disponibles. Vérifie l’état d’AI Studio et réessaie dans quelques minutes. Si le problème continue, vérifie GEMINI_MODEL et GEMINI_FALLBACK_MODEL dans les Secrets Streamlit."
         return f"Gemini a refusé la demande (HTTP {error.code}). {detail[:180]}"
     if isinstance(error, (TimeoutError, urllib.error.URLError)):
         return "Gemini n’a pas répondu à temps. Vérifie la connexion puis réessaie."
@@ -3671,10 +3684,9 @@ elif page=="Assistant IA XXL":
                 _api_history=st.session_state["issa_ai_messages"][:-1]
                 _ai_answer=_issa_gemini_reply(_ai_question,history=_api_history,context=_context,audio=_pending_audio)
             except urllib.error.HTTPError as _exc:
-                _detail=_exc.read().decode("utf-8",errors="replace")[:400]
-                _ai_answer=f"Gemini n’a pas répondu (HTTP {_exc.code}). Vérifie la clé et le quota gratuit. {_detail}"
+                _ai_answer=_issa_focus_ai_error_message(_exc)
             except Exception as _exc:
-                _ai_answer=f"Je n’ai pas pu joindre Gemini ({type(_exc).__name__}). Réessaie ; la requête s’arrête maintenant après 20 secondes maximum."
+                _ai_answer=_issa_focus_ai_error_message(_exc)
         _magic_result = st.session_state["issa_ai_messages"].append({"role":"assistant","content":_ai_answer})
         if _pending_audio: _magic_result = st.session_state.pop("issa_ai_pending_audio",None)
         with st.chat_message("assistant"):
@@ -4293,9 +4305,9 @@ with st.expander("🤖 Demander à Secrétaire Issa — disponible dans tous les
                 _magic_result = _global_history.extend([{"role":"user","content":_global_q.strip()},{"role":"assistant","content":_global_answer}])
                 st.session_state["issa_global_ai_history"]=_global_history[-10:]
             except urllib.error.HTTPError as _global_error:
-                _global_answer=f"Gemini n’a pas répondu (HTTP {_global_error.code}). Vérifie le quota gratuit et la clé API."
+                _global_answer=_issa_focus_ai_error_message(_global_error)
             except Exception as _global_error:
-                _global_answer=f"Connexion à Gemini impossible ({type(_global_error).__name__}). Réessaie dans un instant."
+                _global_answer=_issa_focus_ai_error_message(_global_error)
             _magic_result = st.markdown(_global_answer)
             _pending_open=st.session_state.get("issa_pending_app_link")
             if _pending_open:
