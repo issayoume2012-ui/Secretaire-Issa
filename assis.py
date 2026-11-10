@@ -1692,6 +1692,28 @@ def _issa_ai_system_prompt(context):
     "COLONNES AUTORISÉES (utilise exactement ces noms dans record_json/changes_json) :\\n"+schema+"\\n\\nCONTEXTE DES DONNÉES ACTUELLES :\\n"+context)
 
 
+_ISSA_GROQ_MODEL_CACHE = {"fingerprint": "", "expires": 0.0, "models": []}
+
+def _issa_groq_list_models(key, timeout=6):
+    """Renvoie les modèles annoncés comme accessibles par Groq pour cette clé."""
+    fingerprint = hashlib.sha256(key.encode("utf-8")).hexdigest()
+    now = time_module.monotonic()
+    cache = _ISSA_GROQ_MODEL_CACHE
+    if cache.get("fingerprint") == fingerprint and cache.get("expires", 0) > now:
+        return list(cache.get("models", []))
+    request = urllib.request.Request(
+        "https://api.groq.com/openai/v1/models",
+        headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},
+        method="GET",
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        payload = json.loads(response.read().decode("utf-8", errors="replace"))
+    models = [str(item.get("id", "")).strip() for item in payload.get("data", []) if item.get("id")]
+    if not models:
+        raise RuntimeError("Groq n’a annoncé aucun modèle accessible à cette clé.")
+    _ISSA_GROQ_MODEL_CACHE.update({"fingerprint": fingerprint, "expires": now + 300, "models": models})
+    return models
+
 def _issa_groq_request(path, key, payload=None, content_type="application/json", timeout=12):
     """Envoie une requête à GroqCloud sans dépendance SDK ni intégration Google."""
     data = payload if isinstance(payload, bytes) else json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -1703,14 +1725,40 @@ def _issa_groq_request(path, key, payload=None, content_type="application/json",
         return json.loads(response.read().decode("utf-8", errors="replace"))
 
 def _issa_ai_chat_completion(messages, key, tools=None):
-    """Utilise les modèles gratuits Groq, avec bascule rapide entre deux modèles actifs."""
-    models = [
+    """Choisit d’abord les modèles permis par Groq, puis essaie des solutions de repli."""
+    configured = [
         _startup_secret("GROQ_MODEL", "openai/gpt-oss-20b"),
         _startup_secret("GROQ_FALLBACK_MODEL", "openai/gpt-oss-120b"),
     ]
+    # Groq expose les modèles actifs pour la clé. Croiser cette liste évite de
+    # perdre une requête parce qu’un modèle configuré est bloqué au niveau org/projet.
+    try:
+        available = set(_issa_groq_list_models(key))
+    except urllib.error.HTTPError as error:
+        if error.code in {401, 403}:
+            error.issa_stage = "list_models"
+            raise
+        available = set()
+    except (TimeoutError, urllib.error.URLError, RuntimeError, ValueError, KeyError):
+        available = set()
+    preferred = configured + [
+        "openai/gpt-oss-20b", "openai/gpt-oss-120b",
+        "llama-3.3-70b-versatile", "llama-3.1-8b-instant",
+    ]
+    if available:
+        models = list(dict.fromkeys(model for model in preferred if model in available))
+        if not models:
+            # Keep an explicit, bounded list; arbitrary listed models may not be chat models.
+            models = sorted(model for model in available if model.startswith(("openai/gpt-oss-", "llama-")))[:8]
+    else:
+        models = list(dict.fromkeys(preferred))
+    if not models:
+        raise RuntimeError("Aucun modèle de conversation compatible n’est autorisé pour cette clé Groq.")
     last_error = None
     transient_error = None
-    for index, model in enumerate(dict.fromkeys(models)):
+    attempted = []
+    for index, model in enumerate(models):
+        attempted.append(model)
         body = {"model": model, "messages": messages, "max_completion_tokens": 1400}
         if tools:
             body["tools"] = tools
@@ -1719,16 +1767,32 @@ def _issa_ai_chat_completion(messages, key, tools=None):
             return _issa_groq_request("chat/completions", key, body, timeout=10 if index == 0 else 7)
         except urllib.error.HTTPError as error:
             last_error = error
-            # 403 may apply only to the selected model: try the configured fallback.
-            # 400 indicates a malformed request; 401 means the credential itself failed.
-            if index == 0 and error.code in {400, 401}:
+            # 403/404 can be model-specific; continue through permitted candidates.
+            # 400 indicates a malformed request; 401 means the credential failed.
+            if error.code in {400, 401}:
                 raise
+            if error.code == 403:
+                try:
+                    raw = error.read().decode("utf-8", errors="replace")
+                    error.issa_response_body = raw
+                    error_payload = json.loads(raw).get("error", {})
+                    if error_payload.get("code") in {"model_permission_blocked_org", "model_permission_blocked_project"}:
+                        continue
+                    # Generic 403 may be a model restriction too; try remaining models.
+                    continue
+                except Exception:
+                    continue
             if error.code in {429, 500, 502, 503, 504} and transient_error is None:
                 transient_error = error
             if error.code not in {400, 401, 403, 404, 429, 500, 502, 503, 504} and transient_error is None:
                 raise
     if transient_error or last_error:
-        raise transient_error or last_error
+        failure = transient_error or last_error
+        try:
+            failure.issa_attempted_models = attempted
+        except Exception:
+            pass
+        raise failure
     raise RuntimeError("Aucun modèle Groq n’est configuré.")
 
 def _issa_groq_transcribe_audio(audio, key):
@@ -1830,7 +1894,10 @@ def _issa_ai_error_message(error):
         detail = ""
         error_code = ""
         try:
-            payload = json.loads(error.read().decode("utf-8", errors="replace"))
+            raw = getattr(error, "issa_response_body", "")
+            if not raw:
+                raw = error.read().decode("utf-8", errors="replace")
+            payload = json.loads(raw)
             api_error = payload.get("error", {})
             detail = str(api_error.get("message", ""))
             error_code = str(api_error.get("code", ""))
@@ -1839,10 +1906,15 @@ def _issa_ai_error_message(error):
         if error.code == 401:
             return "Groq rejette la clé API (HTTP 401). Elle est invalide, révoquée ou mal copiée. Crée une nouvelle clé et remplace GROQ_API_KEY dans les Secrets Streamlit."
         if error.code == 403:
+            if getattr(error, "issa_stage", "") == "list_models":
+                return "Groq refuse à Seugn bi l’accès à la liste des modèles (HTTP 403). Cette autorisation dépend du compte/projet Groq et ne peut pas être corrigée dans l’application. Vérifie les permissions de l’organisation et du projet dans Groq Console, ou demande à l’administrateur du compte de rétablir l’accès API."
             if error_code in {"model_permission_blocked_org", "model_permission_blocked_project"} or "blocked at the" in detail.casefold():
                 scope = "organisation" if "org" in error_code or "organization" in detail.casefold() else "projet"
-                return f"Groq bloque le modèle configuré au niveau {scope}. Le modèle de secours a aussi été essayé. Dans Groq Console → Settings → Limits (organisation) ou Settings → Projects → Limits (projet), autorise un modèle disponible, puis vérifie GROQ_MODEL et GROQ_FALLBACK_MODEL dans les Secrets Streamlit."
-            return "Groq a refusé l’accès (HTTP 403), même après l’essai du modèle de secours. Dans Groq Console, vérifie les autorisations de modèles pour l’organisation et le projet de cette clé, puis sélectionne deux modèles autorisés dans GROQ_MODEL et GROQ_FALLBACK_MODEL."
+                return f"Groq bloque les modèles testés au niveau {scope}. Seugn bi a essayé les modèles autorisés annoncés par l’API, mais aucun n’a accepté la requête. Vérifie dans Groq Console → Settings → Limits (organisation) et Settings → Projects → Limits (projet) qu’au moins un modèle de conversation est autorisé."
+            attempted = getattr(error, "issa_attempted_models", [])
+            tried = ", ".join(attempted[:5])
+            tried_text = f" Modèles essayés : {tried}." if tried else ""
+            return "Groq a refusé l’accès à l’API (HTTP 403) pour tous les modèles essayés." + tried_text + " Vérifie les permissions des modèles au niveau de l’organisation et du projet. Si l’endpoint /models renvoie aussi 403, l’application ne peut pas débloquer le compte : seul l’administrateur Groq peut rétablir l’accès."
         if error.code == 404:
             return "Le modèle Groq configuré n’est pas disponible. Vérifie GROQ_MODEL et GROQ_FALLBACK_MODEL."
         if error.code == 429:
