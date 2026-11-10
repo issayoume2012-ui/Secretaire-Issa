@@ -2204,8 +2204,10 @@ if _focus_active:
         _magic_result = st.markdown("### 🧰 Outils de révision dans ta bulle Focus")
         _focus_tool_tabs = st.tabs(["🔎 Recherche web", "🤖 Assistant IA", "📝 Notes de séance"])
         with _focus_tool_tabs[0]:
-            _focus_query = st.text_input("Rechercher un concept, une définition ou un article", placeholder="Ex. : fixation biologique de l’azote en agronomie", key="issa_focus_web_query")
-            if st.button("🔍 Rechercher sur le web", key="issa_focus_web_search", disabled=not _focus_query.strip()):
+            with st.form("issa_focus_web_search_form", clear_on_submit=False):
+                _focus_query = st.text_input("Rechercher un concept, une définition ou un article", placeholder="Ex. : fixation biologique de l’azote en agronomie", key="issa_focus_web_query")
+                _focus_search_submitted = st.form_submit_button("🔍 Rechercher sur le web", disabled=not _focus_query.strip())
+            if _focus_search_submitted:
                 try:
                     with st.spinner("Recherche des résultats…"):
                         st.session_state["issa_focus_web_results"] = _issa_focus_search_web(_focus_query)
@@ -2223,10 +2225,12 @@ if _focus_active:
             if _focus_query.strip():
                 _magic_result = st.link_button("Ouvrir la recherche complète", "https://duckduckgo.com/?q=" + urllib.parse.quote_plus(_focus_query), use_container_width=False)
         with _focus_tool_tabs[1]:
-            _focus_ai_mode = st.selectbox("Que souhaites-tu faire ?", ["Répondre à une question", "Expliquer une notion simplement", "Résumer les documents joints", "Générer 5 flashcards", "Créer des exercices avec corrigé"], key="issa_focus_live_ai_mode")
-            _focus_live_question = st.text_area("Question ou consigne", placeholder="Ex. : Explique la capacité au champ et donne un exemple en sols tropicaux.", height=95, key="issa_focus_live_ai_question")
-            if st.button("✨ Demander à l’IA", key="issa_focus_live_ai_submit", type="primary", disabled=not _focus_live_question.strip() and _focus_ai_mode not in {"Résumer les documents joints", "Générer 5 flashcards", "Créer des exercices avec corrigé"}):
-                _focus_ai_task = _focus_live_ai_question.strip() or _focus_ai_mode
+            with st.form("issa_focus_live_ai_form", clear_on_submit=False):
+                _focus_ai_mode = st.selectbox("Que souhaites-tu faire ?", ["Répondre à une question", "Expliquer une notion simplement", "Résumer les documents joints", "Générer 5 flashcards", "Créer des exercices avec corrigé"], key="issa_focus_live_ai_mode")
+                _focus_live_question = st.text_area("Question ou consigne", placeholder="Ex. : Explique la capacité au champ et donne un exemple en sols tropicaux.", height=95, key="issa_focus_live_ai_question")
+                _focus_ai_submitted = st.form_submit_button("✨ Demander à l’IA", type="primary", disabled=not _focus_live_question.strip() and _focus_ai_mode not in {"Résumer les documents joints", "Générer 5 flashcards", "Créer des exercices avec corrigé"})
+            if _focus_ai_submitted:
+                _focus_ai_task = _focus_live_question.strip() or _focus_ai_mode
                 if _focus_ai_mode == "Expliquer une notion simplement":
                     _focus_ai_task = "Explique simplement, avec un exemple concret lié à l’agronomie si possible : " + _focus_ai_task
                 elif _focus_ai_mode == "Résumer les documents joints":
@@ -2255,8 +2259,10 @@ if _focus_active:
                     except Exception:
                         pass
                 st.session_state["issa_focus_workspace_notes"] = _workspace_saved
-            _focus_note_edit = st.text_area("Notes et synthèse rapide (sauvegardées avec cette séance)", placeholder="Note une idée, une définition, une question à revoir ou un résumé…", height=200, key="issa_focus_workspace_notes")
-            if st.button("💾 Enregistrer mes notes", key="issa_focus_save_workspace_notes"):
+            with st.form("issa_focus_workspace_notes_form", clear_on_submit=False):
+                _focus_note_edit = st.text_area("Notes et synthèse rapide (sauvegardées avec cette séance)", placeholder="Note une idée, une définition, une question à revoir ou un résumé…", height=200, key="issa_focus_workspace_notes")
+                _focus_notes_submitted = st.form_submit_button("💾 Enregistrer mes notes")
+            if _focus_notes_submitted:
                 try:
                     _save_focus_workspace_notes(_focus_note_edit)
                     _magic_result = st.success("Notes enregistrées avec la séance Focus.")
