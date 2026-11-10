@@ -2292,7 +2292,7 @@ if _focus_active:
                     _magic_result = st.markdown("#### Résultat de l’assistant")
                     _magic_result = st.markdown(st.session_state["issa_focus_ai_result"])
         _magic_result = st.markdown("### 🧰 Outils de révision dans ta bulle Focus")
-        _focus_tool_tabs = st.tabs(["🔎 Recherche web", "🤖 Assistant IA", "📝 Notes de séance", "🧊 Images 3D & vidéo"])
+        _focus_tool_tabs = st.tabs(["🔎 Recherche web", "🤖 Assistant IA", "📝 Notes de séance", "▶️ Vidéos YouTube"])
         with _focus_tool_tabs[0]:
             with st.form("issa_focus_web_search_form", clear_on_submit=False):
                 _focus_query = st.text_input("Rechercher un concept, une définition ou un article", placeholder="Ex. : fixation biologique de l’azote en agronomie", key="issa_focus_web_query")
@@ -2372,32 +2372,42 @@ if _focus_active:
                     _magic_result = st.error(f"Enregistrement impossible : {str(_notes_error)[:180]}")
             _magic_result = st.caption("Les notes sont conservées dans la fiche de cette session et restent liées à son historique.")
         with _focus_tool_tabs[3]:
-            _magic_result = st.caption("L’assistant prépare un prompt 3D à partir de l’objectif de la séance, des cours joints et des résultats de recherche. Les liens ci-dessous mènent uniquement aux outils disposant d’une offre gratuite.")
-            with st.form("issa_focus_visual_prompt_form", clear_on_submit=False):
-                _visual_topic = st.text_input("Sujet du modèle 3D", value=str(st.session_state.get("issa_focus_activity", "Étude / révision")), key="issa_focus_visual_topic")
-                _visual_prompt_submitted = st.form_submit_button("✨ Préparer le prompt 3D avec l’assistant", disabled=not _visual_topic.strip())
-            if _visual_prompt_submitted:
-                _visual_sources = _focus_doc_text
-                if st.session_state.get("issa_focus_web_results"):
-                    _visual_sources += "\n\nRésultats web :\n" + "\n".join(f"{item.get('title','')} — {item.get('snippet','')} ({item.get('url','')})" for item in st.session_state.get("issa_focus_web_results", []))
-                _visual_task = f"Écris uniquement un prompt prêt à copier dans un générateur gratuit de modèle 3D pour créer un modèle pédagogique sur : {_visual_topic}. Le modèle doit être scientifiquement cohérent pour un étudiant en agronomie. Décris la forme, les parties visibles, les matériaux ou textures, l’angle de vue et le niveau de détail. Évite les légendes écrites intégrées à l’image."
-                try:
-                    with st.spinner("L’assistant prépare le prompt visuel…"):
-                        st.session_state["issa_focus_visual_prompt"] = _issa_ai_document_action(_visual_task, _visual_sources, st.session_state.get("issa_focus_activity", "Étude"))
-                except Exception as _visual_error:
-                    st.session_state["issa_focus_visual_prompt"] = _issa_ai_error_message(_visual_error)
-            if st.session_state.get("issa_focus_visual_prompt"):
-                _magic_result = st.code(st.session_state["issa_focus_visual_prompt"], language=None)
-            _media_cols = st.columns(3)
-            with _media_cols[0]:
-                _magic_result = st.link_button("🌿 Tripo · génération 3D gratuite", "https://www.tripoai.app/", use_container_width=True)
-            with _media_cols[1]:
-                _magic_result = st.link_button("🧊 Meshy · offre gratuite 3D", "https://www.meshy.ai/", use_container_width=True)
-            with _media_cols[2]:
-                _youtube_query = "vidéo pédagogique agronomie " + str(st.session_state.get("issa_focus_visual_topic", st.session_state.get("issa_focus_activity", "agronomie")))
-                _youtube_url = "https://www.youtube.com/results?search_query=" + urllib.parse.quote_plus(_youtube_query)
-                _magic_result = st.link_button("▶️ Vidéos pédagogiques YouTube", _youtube_url, use_container_width=True)
-            _magic_result = st.caption("Meshy indique une offre gratuite avec crédits mensuels; Tripo permet de tester gratuitement la génération. Les vidéos passent uniquement par YouTube. Les quotas gratuits peuvent évoluer.")
+            _magic_result = st.caption("Trouve des vidéos YouTube liées à ta séance ou ouvre directement une vidéo dans cet espace.")
+            with st.form("issa_focus_youtube_form", clear_on_submit=False):
+                _youtube_topic = st.text_input(
+                    "Sujet de la vidéo",
+                    value=str(st.session_state.get("issa_focus_activity", "agronomie")),
+                    key="issa_focus_youtube_topic",
+                    placeholder="Ex. : irrigation goutte-à-goutte",
+                )
+                _youtube_video_link = st.text_input(
+                    "Lien direct d’une vidéo YouTube (facultatif)",
+                    key="issa_focus_youtube_video_link",
+                    placeholder="https://www.youtube.com/watch?v=…",
+                )
+                _youtube_search_submitted = st.form_submit_button("▶️ Chercher sur YouTube", type="primary", disabled=not _youtube_topic.strip() and not _youtube_video_link.strip())
+            if _youtube_search_submitted:
+                st.session_state["issa_focus_youtube_error"] = ""
+                if _youtube_video_link.strip():
+                    _parsed_youtube = urllib.parse.urlparse(_youtube_video_link.strip())
+                    if _parsed_youtube.scheme in {"http", "https"} and _parsed_youtube.netloc.lower() in {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be", "www.youtu.be"}:
+                        st.session_state["issa_focus_youtube_embed"] = _youtube_video_link.strip()
+                        st.session_state["issa_focus_youtube_search_url"] = ""
+                    else:
+                        st.session_state["issa_focus_youtube_error"] = "Saisis un lien YouTube valide (youtube.com ou youtu.be)."
+                        st.session_state["issa_focus_youtube_embed"] = ""
+                        st.session_state["issa_focus_youtube_search_url"] = ""
+                elif _youtube_topic.strip():
+                    _youtube_query = "cours agronomie " + _youtube_topic.strip()
+                    st.session_state["issa_focus_youtube_search_url"] = "https://www.youtube.com/results?search_query=" + urllib.parse.quote_plus(_youtube_query)
+                    st.session_state["issa_focus_youtube_embed"] = ""
+                    st.session_state["issa_focus_youtube_error"] = ""
+            if st.session_state.get("issa_focus_youtube_error"):
+                _magic_result = st.warning(st.session_state["issa_focus_youtube_error"])
+            if st.session_state.get("issa_focus_youtube_search_url"):
+                _magic_result = st.link_button("🔎 Ouvrir les résultats YouTube", st.session_state["issa_focus_youtube_search_url"], use_container_width=True)
+            if st.session_state.get("issa_focus_youtube_embed"):
+                _magic_result = st.video(st.session_state["issa_focus_youtube_embed"])
         if st.button("⏹️ Arrêter la session et enregistrer", key="focus_finish_locked", type="primary", use_container_width=True):
             try:
                 _focus_seconds = _focus_elapsed_seconds()
