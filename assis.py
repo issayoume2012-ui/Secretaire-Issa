@@ -8,6 +8,7 @@ from pathlib import Path
 from datetime import date, datetime, time, timedelta
 import sqlite3, re, unicodedata, io, math, os, threading, time as time_module, smtplib, ssl, imaplib, email, email.policy, hashlib, hmac, base64, json, urllib.request, urllib.error, urllib.parse
 from zoneinfo import ZoneInfo
+from html.parser import HTMLParser
 from email.message import EmailMessage
 import pandas as pd
 import streamlit as st
@@ -1303,6 +1304,7 @@ def _start_focus_for_sequence(item):
     _start = now
     st.session_state['issa_focus_activity'] = item['title']
     st.session_state['issa_focus_notes'] = f"Parcours automatique · {item['kind']} · {item['scheduled']}"
+    st.session_state['issa_focus_workspace_notes'] = ""
     st.session_state['issa_focus_duration_seconds'] = duration
     st.session_state['issa_focus_elapsed_seconds'] = 0
     st.session_state['issa_focus_started'] = _start
@@ -1615,6 +1617,7 @@ def _issa_tool_write(domain, record_json, record_id=None):
                 _focus_duration = int(data["duration_minutes"])
                 st.session_state["issa_focus_activity"] = str(data.get("activity") or "Étude / révision")
                 st.session_state["issa_focus_notes"] = str(data.get("notes") or "Session démarrée depuis l’assistant")
+                st.session_state["issa_focus_workspace_notes"] = ""
                 st.session_state["issa_focus_duration_seconds"] = _focus_duration * 60
                 st.session_state["issa_focus_elapsed_seconds"] = 0
                 st.session_state["issa_focus_started"] = _focus_now
@@ -1723,19 +1726,19 @@ def _issa_gemini_reply(question, history=None, context=None, audio=None):
     return "L’assistant a atteint la limite d’étapes pour cette demande. Précise l’action ou sépare-la en deux demandes."
 
 def _issa_gemini_document_action(action, document_text, activity=""):
-    """Produit une aide pédagogique fondée uniquement sur les documents joints au Focus."""
+    """Répond aux demandes pédagogiques du Focus, en privilégiant les documents joints."""
     key = _startup_secret("GEMINI_API_KEY", "")
     if not key:
         return "Ajoute GEMINI_API_KEY dans les Secrets Streamlit pour utiliser la génération IA."
     source = str(document_text or "").strip()[:18000]
-    if not source:
-        return "Ajoute d’abord un document lisible à l’espace Focus."
     prompt = (
         "Tu es l'assistant pédagogique de Secrétaire Issa XXL. Réponds en français, en wolof si la demande est en wolof, "
-        "ou dans un mélange naturel si les deux langues sont utilisées. Utilise le document fourni comme seule source factuelle. "
-        "N'invente pas de contenu absent ; signale clairement toute limite. Présente le résultat avec des titres et des étapes lisibles.\n"
+        "ou dans un mélange naturel si les deux langues sont utilisées. Si des documents sont fournis, fonde les réponses qui les concernent sur ces documents, "
+        "distingue clairement les explications générales et ne prétends pas qu'une information figure dans le cours si elle n'y est pas. "
+        "Si aucun document n'est fourni, réponds à la question avec tes connaissances et signale les incertitudes. "
+        "Présente le résultat avec des titres et des étapes lisibles. Pour les flashcards, produis une liste numérotée avec Question et Réponse.\n"
         f"Activité de la séance : {activity or 'Étude'}\nTâche demandée : {action}\n\n"
-        f"DOCUMENTS JOINTS (extraits limités aux 18 000 caractères) :\n{source}"
+        + (f"DOCUMENTS JOINTS (extraits limités aux 18 000 caractères) :\n{source}" if source else "Aucun document n'est joint ; réponds à la question directement.")
     )
     body = {
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
@@ -1749,6 +1752,60 @@ def _issa_gemini_document_action(action, document_text, activity=""):
     with urllib.request.urlopen(request, timeout=20) as response:
         result = json.loads(response.read().decode("utf-8"))
     return "".join(part.get("text", "") for part in result["candidates"][0]["content"].get("parts", []) if "text" in part).strip() or "L’IA n’a pas renvoyé de texte. Essaie avec une demande plus précise."
+
+class _FocusSearchParser(HTMLParser):
+    """Extrait les titres et extraits de la page de résultats DuckDuckGo HTML."""
+    def __init__(self):
+        super().__init__()
+        self.results = []
+        self.active = None
+        self.capture = None
+        self.text = []
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        classes = attrs.get("class", "").split()
+        if tag == "a" and "result__a" in classes:
+            self.active = {"url": attrs.get("href", ""), "title": ""}
+            self.capture = "title"
+            self.text = []
+        elif "result__snippet" in classes:
+            self.capture = "snippet"
+            self.text = []
+    def handle_data(self, data):
+        if self.capture:
+            self.text.append(data)
+    def handle_endtag(self, tag):
+        if self.capture == "title" and tag == "a" and self.active:
+            self.active["title"] = " ".join("".join(self.text).split())
+            self.results.append(self.active)
+            self.active = None
+            self.capture = None
+        elif self.capture == "snippet" and tag in {"a", "div"} and self.results:
+            snippet = " ".join("".join(self.text).split())
+            if snippet and not self.results[-1].get("snippet"):
+                self.results[-1]["snippet"] = snippet
+            self.capture = None
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _issa_focus_search_web(query):
+    """Effectue une recherche web publique sans clé API, avec un délai court."""
+    query = str(query or "").strip()
+    if not query:
+        return []
+    url = "https://html.duckduckgo.com/html/?q=" + urllib.parse.quote_plus(query)
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; SecretaireIssa/1.0)"})
+    with urllib.request.urlopen(req, timeout=8) as response:
+        html = response.read(1_500_000).decode("utf-8", errors="replace")
+    parser = _FocusSearchParser()
+    parser.feed(html)
+    for result in parser.results:
+        href = result.get("url", "")
+        if "uddg=" in href:
+            try:
+                result["url"] = urllib.parse.parse_qs(urllib.parse.urlparse(href).query).get("uddg", [href])[0]
+            except Exception:
+                pass
+    return [r for r in parser.results if r.get("title") and r.get("url")][:8]
 
 REMINDER_WORKER = start_reminder_worker()
 # Traitement allégé : ne pas refaire toutes les synchronisations SQL à chaque clic.
@@ -1844,6 +1901,7 @@ def ensure_focus_sessions_schema():
             _focus_db.execute("ALTER TABLE focus_sessions ADD COLUMN IF NOT EXISTS duration_seconds INTEGER DEFAULT 0")
             _focus_db.execute("ALTER TABLE focus_sessions ADD COLUMN IF NOT EXISTS scheduled_start TEXT DEFAULT ''")
             _focus_db.execute("ALTER TABLE focus_sessions ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'Terminée'")
+            _focus_db.execute("ALTER TABLE focus_sessions ADD COLUMN IF NOT EXISTS workspace_notes TEXT DEFAULT ''")
     else:
         with connect() as _focus_db:
             _focus_columns = {row["name"] for row in _focus_db.execute("PRAGMA table_info(focus_sessions)").fetchall()}
@@ -1853,6 +1911,8 @@ def ensure_focus_sessions_schema():
                 _focus_db.execute("ALTER TABLE focus_sessions ADD COLUMN scheduled_start TEXT DEFAULT ''")
             if "status" not in _focus_columns:
                 _focus_db.execute("ALTER TABLE focus_sessions ADD COLUMN status TEXT DEFAULT 'Terminée'")
+            if "workspace_notes" not in _focus_columns:
+                _focus_db.execute("ALTER TABLE focus_sessions ADD COLUMN workspace_notes TEXT DEFAULT ''")
     return True
 
 def _start_scheduled_focus_if_due():
@@ -1878,6 +1938,7 @@ def _start_scheduled_focus_if_due():
     duration = max(1, min(600, int(row["duration_minutes"] or 45))) * 60
     st.session_state["issa_focus_activity"] = str(row["activity"] or "Étude / révision")
     st.session_state["issa_focus_notes"] = str(row["notes"] or "Séance planifiée")
+    st.session_state["issa_focus_workspace_notes"] = ""
     st.session_state["issa_focus_duration_seconds"] = duration
     st.session_state["issa_focus_elapsed_seconds"] = 0
     st.session_state["issa_focus_started"] = now
@@ -1927,25 +1988,57 @@ def _save_focus_session(seconds):
     minutes = max(1, int(round(seconds / 60)))
     activity = str(st.session_state.get("issa_focus_activity", "Étude") or "Étude").strip() or "Étude"
     notes = str(st.session_state.get("issa_focus_notes", "") or "").strip()
+    workspace_notes = str(st.session_state.get("issa_focus_workspace_notes", "") or "").strip()
     _session_date = str(st.session_state.get("issa_focus_session_date") or date.today().isoformat())
     _existing_session_id = st.session_state.get("issa_focus_existing_session_id")
     with connect() as _focus_db:
         if _existing_session_id:
             _updated = _focus_db.execute(
-                "UPDATE focus_sessions SET session_date=?,duration_minutes=?,duration_seconds=?,activity=?,notes=?,status='Terminée' WHERE id=?",
-                (_session_date, minutes, seconds, activity, notes, int(_existing_session_id)),
+                "UPDATE focus_sessions SET session_date=?,duration_minutes=?,duration_seconds=?,activity=?,notes=?,workspace_notes=?,status='Terminée' WHERE id=?",
+                (_session_date, minutes, seconds, activity, notes, workspace_notes, int(_existing_session_id)),
             )
             if _updated.rowcount == 0:
                 _focus_db.execute(
-                    "INSERT INTO focus_sessions(session_date,duration_minutes,duration_seconds,activity,notes,status) VALUES(?,?,?,?,?,'Terminée')",
-                    (_session_date, minutes, seconds, activity, notes),
+                    "INSERT INTO focus_sessions(session_date,duration_minutes,duration_seconds,activity,notes,workspace_notes,status) VALUES(?,?,?,?,?,?,'Terminée')",
+                    (_session_date, minutes, seconds, activity, notes, workspace_notes),
                 )
         else:
             _focus_db.execute(
-                "INSERT INTO focus_sessions(session_date,duration_minutes,duration_seconds,activity,notes,status) VALUES(?,?,?,?,?,'Terminée')",
-                (_session_date, minutes, seconds, activity, notes),
+                "INSERT INTO focus_sessions(session_date,duration_minutes,duration_seconds,activity,notes,workspace_notes,status) VALUES(?,?,?,?,?,?,'Terminée')",
+                (_session_date, minutes, seconds, activity, notes, workspace_notes),
             )
     st.session_state["issa_focus_logged"] = True
+    return True
+
+def _save_focus_workspace_notes(text):
+    """Sauvegarde les notes de travail sur la fiche focus active, même avant la fin."""
+    ensure_focus_sessions_schema()
+    text = str(text or "")[:12000]
+    st.session_state["issa_focus_workspace_notes"] = text
+    seconds = max(0, _focus_elapsed_seconds())
+    minutes = max(1, int(round(seconds / 60)))
+    activity = str(st.session_state.get("issa_focus_activity", "Étude") or "Étude").strip()
+    session_date = str(st.session_state.get("issa_focus_session_date") or date.today().isoformat())
+    session_notes = str(st.session_state.get("issa_focus_notes", "") or "").strip()
+    existing_id = st.session_state.get("issa_focus_existing_session_id")
+    with connect() as db:
+        if existing_id:
+            result = db.execute("UPDATE focus_sessions SET workspace_notes=? WHERE id=?", (text, int(existing_id)))
+            if result.rowcount:
+                return True
+        if DB_BACKEND in {"postgres", "postgresql", "supabase"}:
+            row = db.execute(
+                "INSERT INTO focus_sessions(session_date,duration_minutes,duration_seconds,activity,notes,workspace_notes,status) VALUES(?,?,?,?,?,?, 'En cours') RETURNING id",
+                (session_date, minutes, seconds, activity, session_notes, text),
+            ).fetchone()
+            new_id = int(row["id"])
+        else:
+            cur = db.execute(
+                "INSERT INTO focus_sessions(session_date,duration_minutes,duration_seconds,activity,notes,workspace_notes,status) VALUES(?,?,?,?,?,?, 'En cours')",
+                (session_date, minutes, seconds, activity, session_notes, text),
+            )
+            new_id = int(cur.lastrowid)
+    st.session_state["issa_focus_existing_session_id"] = new_id
     return True
 
 def _finish_focus_session(seconds=None):
@@ -1978,6 +2071,7 @@ if _focus_active and _focus_until and time_module.time() >= _focus_until:
     _focus_active = False
 
 if _focus_active:
+    ensure_focus_sessions_schema()
     _remaining = max(0, int(_focus_until - time_module.time()))
     _focus_activity_json = json.dumps(str(st.session_state.get("issa_focus_activity", "Étude")), ensure_ascii=False).replace("<", "\\u003c")
     _focus_motivation_json = json.dumps([
@@ -2107,6 +2201,68 @@ if _focus_active:
                 with st.container(border=True):
                     _magic_result = st.markdown("#### Résultat de l’assistant")
                     _magic_result = st.markdown(st.session_state["issa_focus_ai_result"])
+        _magic_result = st.markdown("### 🧰 Outils de révision dans ta bulle Focus")
+        _focus_tool_tabs = st.tabs(["🔎 Recherche web", "🤖 Assistant IA", "📝 Notes de séance"])
+        with _focus_tool_tabs[0]:
+            _focus_query = st.text_input("Rechercher un concept, une définition ou un article", placeholder="Ex. : fixation biologique de l’azote en agronomie", key="issa_focus_web_query")
+            if st.button("🔍 Rechercher sur le web", key="issa_focus_web_search", disabled=not _focus_query.strip()):
+                try:
+                    with st.spinner("Recherche des résultats…"):
+                        st.session_state["issa_focus_web_results"] = _issa_focus_search_web(_focus_query)
+                    st.session_state["issa_focus_web_error"] = ""
+                except Exception as _search_error:
+                    st.session_state["issa_focus_web_results"] = []
+                    st.session_state["issa_focus_web_error"] = f"Recherche indisponible ({type(_search_error).__name__}). Tu peux ouvrir la recherche dans un nouvel onglet."
+            if st.session_state.get("issa_focus_web_error"):
+                _magic_result = st.warning(st.session_state["issa_focus_web_error"])
+            for _result_idx, _search_result in enumerate(st.session_state.get("issa_focus_web_results", [])):
+                with st.container(border=True):
+                    _magic_result = st.markdown(f"**[{_search_result['title']}]({_search_result['url']})**")
+                    if _search_result.get("snippet"):
+                        _magic_result = st.caption(_search_result["snippet"])
+            if _focus_query.strip():
+                _magic_result = st.link_button("Ouvrir la recherche complète", "https://duckduckgo.com/?q=" + urllib.parse.quote_plus(_focus_query), use_container_width=False)
+        with _focus_tool_tabs[1]:
+            _focus_ai_mode = st.selectbox("Que souhaites-tu faire ?", ["Répondre à une question", "Expliquer une notion simplement", "Résumer les documents joints", "Générer 5 flashcards", "Créer des exercices avec corrigé"], key="issa_focus_live_ai_mode")
+            _focus_live_question = st.text_area("Question ou consigne", placeholder="Ex. : Explique la capacité au champ et donne un exemple en sols tropicaux.", height=95, key="issa_focus_live_ai_question")
+            if st.button("✨ Demander à l’IA", key="issa_focus_live_ai_submit", type="primary", disabled=not _focus_live_question.strip() and _focus_ai_mode not in {"Résumer les documents joints", "Générer 5 flashcards", "Créer des exercices avec corrigé"}):
+                _focus_ai_task = _focus_live_ai_question.strip() or _focus_ai_mode
+                if _focus_ai_mode == "Expliquer une notion simplement":
+                    _focus_ai_task = "Explique simplement, avec un exemple concret lié à l’agronomie si possible : " + _focus_ai_task
+                elif _focus_ai_mode == "Résumer les documents joints":
+                    _focus_ai_task = "Fais un résumé clair, structuré et fidèle des documents joints. " + _focus_live_question.strip()
+                elif _focus_ai_mode == "Générer 5 flashcards":
+                    _focus_ai_task = "Génère 5 flashcards utiles à partir des documents joints. Pour chaque carte, donne Question puis Réponse. " + _focus_live_question.strip()
+                elif _focus_ai_mode == "Créer des exercices avec corrigé":
+                    _focus_ai_task = "Crée des exercices progressifs avec corrigé à partir des documents joints. " + _focus_live_question.strip()
+                try:
+                    with st.spinner("L’assistant prépare sa réponse…"):
+                        st.session_state["issa_focus_live_ai_result"] = _issa_gemini_document_action(_focus_ai_task, _focus_doc_text, st.session_state.get("issa_focus_activity", "Étude"))
+                except Exception as _live_ai_error:
+                    st.session_state["issa_focus_live_ai_result"] = f"Je n’ai pas pu joindre l’assistant ({type(_live_ai_error).__name__}). Vérifie la connexion puis réessaie."
+            if st.session_state.get("issa_focus_live_ai_result"):
+                with st.container(border=True):
+                    _magic_result = st.markdown(st.session_state["issa_focus_live_ai_result"])
+        with _focus_tool_tabs[2]:
+            _focus_session_id = st.session_state.get("issa_focus_existing_session_id")
+            if "issa_focus_workspace_notes" not in st.session_state:
+                _workspace_saved = ""
+                if _focus_session_id:
+                    try:
+                        _workspace_df = read_df("SELECT workspace_notes FROM focus_sessions WHERE id=?", (int(_focus_session_id),))
+                        if not _workspace_df.empty:
+                            _workspace_saved = str(_workspace_df.iloc[0].get("workspace_notes", "") or "")
+                    except Exception:
+                        pass
+                st.session_state["issa_focus_workspace_notes"] = _workspace_saved
+            _focus_note_edit = st.text_area("Notes et synthèse rapide (sauvegardées avec cette séance)", placeholder="Note une idée, une définition, une question à revoir ou un résumé…", height=200, key="issa_focus_workspace_notes")
+            if st.button("💾 Enregistrer mes notes", key="issa_focus_save_workspace_notes"):
+                try:
+                    _save_focus_workspace_notes(_focus_note_edit)
+                    _magic_result = st.success("Notes enregistrées avec la séance Focus.")
+                except Exception as _notes_error:
+                    _magic_result = st.error(f"Enregistrement impossible : {str(_notes_error)[:180]}")
+            _magic_result = st.caption("Les notes sont conservées dans la fiche de cette session et restent liées à son historique.")
         if st.button("⏹️ Arrêter la session et enregistrer", key="focus_finish_locked", type="primary", use_container_width=True):
             try:
                 _focus_seconds = _focus_elapsed_seconds()
@@ -3953,6 +4109,7 @@ elif page=="Centre de productivité XXL":
             _focus_now = time_module.time()
             st.session_state['issa_focus_activity']=activity.strip() or 'Étude / révision'
             st.session_state['issa_focus_notes']=notes.strip()
+            st.session_state['issa_focus_workspace_notes']=""
             st.session_state['issa_focus_duration_seconds']=int(duration)*60
             st.session_state['issa_focus_elapsed_seconds']=0
             st.session_state['issa_focus_started']=_focus_now
