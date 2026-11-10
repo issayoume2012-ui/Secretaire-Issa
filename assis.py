@@ -1692,101 +1692,138 @@ def _issa_ai_system_prompt(context):
     "COLONNES AUTORISÉES (utilise exactement ces noms dans record_json/changes_json) :\\n"+schema+"\\n\\nCONTEXTE DES DONNÉES ACTUELLES :\\n"+context)
 
 
-def _issa_gemini_generate_content(body, key):
-    """Appelle le modèle rapide, puis bascule sur un modèle de secours si l’API échoue."""
-    primary = _startup_secret("GEMINI_MODEL", "gemini-3.5-flash-lite")
-    fallback = _startup_secret("GEMINI_FALLBACK_MODEL", "gemini-3.6-flash")
+def _issa_groq_request(path, key, payload=None, content_type="application/json", timeout=12):
+    """Envoie une requête à GroqCloud sans dépendance SDK ni intégration Google."""
+    data = payload if isinstance(payload, bytes) else json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        "https://api.groq.com/openai/v1/" + path.lstrip("/"), data=data,
+        headers={"Authorization": "Bearer " + key, "Content-Type": content_type}, method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8", errors="replace"))
+
+def _issa_ai_chat_completion(messages, key, tools=None):
+    """Utilise les modèles gratuits Groq, avec bascule rapide entre deux modèles actifs."""
+    models = [
+        _startup_secret("GROQ_MODEL", "openai/gpt-oss-20b"),
+        _startup_secret("GROQ_FALLBACK_MODEL", "openai/gpt-oss-120b"),
+    ]
     last_error = None
     transient_error = None
-    for index, model in enumerate(dict.fromkeys([primary, fallback])):
-        request = urllib.request.Request(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-            headers={"x-goog-api-key": key, "Content-Type": "application/json"}, method="POST",
-        )
+    for index, model in enumerate(dict.fromkeys(models)):
+        body = {"model": model, "messages": messages, "max_completion_tokens": 1400}
+        if tools:
+            body["tools"] = tools
+            body["tool_choice"] = "auto"
         try:
-            with urllib.request.urlopen(request, timeout=10 if index == 0 else 7) as response:
-                return json.loads(response.read().decode("utf-8"))
+            return _issa_groq_request("chat/completions", key, body, timeout=10 if index == 0 else 7)
         except urllib.error.HTTPError as error:
             last_error = error
             if index == 0 and error.code in {400, 401, 403}:
                 raise
-            if error.code not in {404, 429, 500, 502, 503, 504}:
-                if transient_error is not None:
-                    break
-                raise
             if error.code in {429, 500, 502, 503, 504} and transient_error is None:
                 transient_error = error
-        except (TimeoutError, urllib.error.URLError) as error:
-            last_error = error
-            if transient_error is None:
-                transient_error = error
+            if error.code not in {400, 401, 403, 404, 429, 500, 502, 503, 504} and transient_error is None:
+                raise
     if transient_error or last_error:
         raise transient_error or last_error
-    raise RuntimeError("Aucun modèle Gemini n’est configuré.")
+    raise RuntimeError("Aucun modèle Groq n’est configuré.")
 
-def _issa_gemini_reply(question, history=None, context=None, audio=None):
-    st.session_state["issa_focus_immediate_request"] = _issa_focus_requested_now(question)
-    key=_startup_secret("GEMINI_API_KEY","")
-    if not key: return "Ajoute GEMINI_API_KEY dans les Secrets Streamlit pour activer l’assistant."
-    context=_issa_ai_context() if context is None else context
-    contents=[]
-    for item in (history or [])[-4:]:
-        _magic_result = contents.append({"role":"model" if item.get("role")=="assistant" else "user","parts":[{"text":str(item.get("content", ""))[:1200]}]})
-    if audio:
-        parts=[{"text":"Écoute cette question parlée en français ou en wolof, comprends-la et réponds directement. Si un passage est inaudible, indique-le brièvement."},{"inlineData":{"mimeType":audio.get("mime","audio/wav"),"data":audio["data"]}}]
-    else: parts=[{"text":question}]
-    _magic_result = contents.append({"role":"user","parts":parts})
-    system=_issa_ai_system_prompt(context)
-    tools=[{"functionDeclarations":_ISSA_FUNCTIONS}]
-    for _round in range(4):
-        body={"systemInstruction":{"parts":[{"text":system}]},"contents":contents,"tools":tools,"toolConfig":{"functionCallingConfig":{"mode":"AUTO"}},"generationConfig":{"temperature":0.2,"maxOutputTokens":350}}
-        result=_issa_gemini_generate_content(body,key)
-        _candidates=result.get("candidates") or []
-        if not _candidates: return "Gemini n’a pas produit de réponse. Reformule ta demande et réessaie."
-        candidate=_candidates[0].get("content",{})
-        calls=[part["functionCall"] for part in candidate.get("parts",[]) if "functionCall" in part]
-        if not calls:
-            answer="".join(part.get("text","") for part in candidate.get("parts",[]) if "text" in part).strip()
-            return answer or "Je n’ai pas reçu de texte pour cette réponse. Reformule ta question et réessaie."
-        _magic_result = contents.append(candidate)
-        tool_parts=[]
-        for call in calls:
-            args=call.get("args",{})
-            tool_result=_issa_execute_tool(call.get("name",""),args)
-            _magic_result = tool_parts.append({"functionResponse":{"name":call["name"],"response":{"result":tool_result}}})
-        _magic_result = contents.append({"role":"user","parts":tool_parts})
-    return "L’assistant a atteint la limite d’étapes pour cette demande. Précise l’action ou sépare-la en deux demandes."
+def _issa_groq_transcribe_audio(audio, key):
+    """Transcrit une dictée française ou wolof avec Whisper multilingue sur Groq."""
+    raw = base64.b64decode(audio.get("data", ""))
+    mime = str(audio.get("mime", "audio/wav")).lower()
+    ext = "webm" if "webm" in mime else "ogg" if "ogg" in mime else "mp3" if "mpeg" in mime or "mp3" in mime else "wav"
+    boundary = "IssaFocusBoundary7MA4YWxkTrZu0gW"
+    fields = [("model", "whisper-large-v3-turbo"), ("response_format", "json"), ("prompt", "Transcription fidèle en français ou en wolof sénégalais.")]
+    chunks = []
+    for name, value in fields:
+        chunks.extend([f"--{boundary}\r\n".encode(), f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode(), value.encode(), b"\r\n"])
+    chunks.extend([
+        f"--{boundary}\r\n".encode(), f'Content-Disposition: form-data; name="file"; filename="issa-question.{ext}"\r\n'.encode(),
+        f"Content-Type: {mime}\r\n\r\n".encode(), raw, b"\r\n", f"--{boundary}--\r\n".encode(),
+    ])
+    result = _issa_groq_request("audio/transcriptions", key, b"".join(chunks), f"multipart/form-data; boundary={boundary}", timeout=18)
+    return str(result.get("text", "")).strip()
 
-def _issa_gemini_document_action(action, document_text, activity=""):
-    """Répond aux demandes pédagogiques du Focus, en privilégiant les documents joints."""
-    key = _startup_secret("GEMINI_API_KEY", "")
+def _issa_openai_tool_schema(function):
+    """Convertit la déclaration de fonction existante au format OpenAI/Groq."""
+    def normalize(value):
+        if isinstance(value, dict):
+            return {key: (item.lower() if key == "type" and isinstance(item, str) else normalize(item)) for key, item in value.items()}
+        if isinstance(value, list):
+            return [normalize(item) for item in value]
+        return value
+    return {"type": "function", "function": {"name": function["name"], "description": function.get("description", ""), "parameters": normalize(function.get("parameters", {"type": "OBJECT", "properties": {}}))}}
+
+def _issa_ai_reply(question, history=None, context=None, audio=None):
+    key = _startup_secret("GROQ_API_KEY", "")
     if not key:
-        return "Ajoute GEMINI_API_KEY dans les Secrets Streamlit pour utiliser la génération IA."
+        return "Configure GROQ_API_KEY dans les Secrets Streamlit pour activer Seugn bi."
+    if audio:
+        try:
+            transcribed_question = _issa_groq_transcribe_audio(audio, key)
+            if not transcribed_question:
+                return "Je n’ai pas bien entendu la dictée. Réessaie ou écris ta question."
+            question = transcribed_question
+        except Exception as audio_error:
+            return _issa_ai_error_message(audio_error)
+    st.session_state["issa_focus_immediate_request"] = _issa_focus_requested_now(question)
+    context = _issa_ai_context() if context is None else context
+    messages = [{"role": "system", "content": _issa_ai_system_prompt(context)}]
+    for item in (history or [])[-6:]:
+        role = "assistant" if item.get("role") == "assistant" else "user"
+        messages.append({"role": role, "content": str(item.get("content", ""))[:1400]})
+    messages.append({"role": "user", "content": str(question or "Réponds à ma demande vocale.")})
+    tools = [_issa_openai_tool_schema(function) for function in _ISSA_FUNCTIONS]
+    for _round in range(4):
+        result = _issa_ai_chat_completion(messages, key, tools=tools)
+        choices = result.get("choices") or []
+        if not choices:
+            return "Je n’ai pas reçu de réponse de Seugn bi. Reformule ta question et réessaie."
+        message = choices[0].get("message", {})
+        calls = message.get("tool_calls") or []
+        if not calls:
+            content = message.get("content", "")
+            if isinstance(content, list):
+                content = "".join(str(part.get("text", "")) for part in content if isinstance(part, dict))
+            return str(content or "Je n’ai pas reçu de texte pour cette réponse. Reformule ta question et réessaie.").strip()
+        messages.append({"role": "assistant", "content": message.get("content"), "tool_calls": calls})
+        for call in calls:
+            function = call.get("function", {})
+            name = function.get("name", "")
+            try:
+                arguments = json.loads(function.get("arguments", "{}"))
+                tool_result = _issa_execute_tool(name, arguments)
+            except Exception as tool_error:
+                tool_result = {"ok": False, "error": f"Outil indisponible : {type(tool_error).__name__}"}
+            messages.append({"role": "tool", "tool_call_id": call.get("id", ""), "name": name, "content": json.dumps(tool_result, ensure_ascii=False, default=str)[:5000]})
+    return "Seugn bi a atteint la limite d’étapes pour cette demande. Sépare-la en deux questions."
+
+def _issa_ai_document_action(action, document_text, activity=""):
+    """Produit les résumés, réponses et prompts visuels de Focus avec Groq."""
+    key = _startup_secret("GROQ_API_KEY", "")
+    if not key:
+        return "Configure GROQ_API_KEY dans les Secrets Streamlit pour utiliser l’assistant IA."
     source = str(document_text or "").strip()[:18000]
     prompt = (
-        "Tu es Seugn bi, l'assistant pédagogique de Secrétaire Issa XXL. Réponds en français, en wolof si la demande est en wolof, "
-        "ou dans un mélange naturel si les deux langues sont utilisées. Utilise les cours joints et les extraits web fournis comme références, "
-        "distingue clairement les explications générales, et cite les URL présentes dans les extraits quand elles soutiennent la réponse. "
-        "Ne prétends pas qu'une information figure dans un cours si elle n'y est pas, et n'invente jamais de source. "
-        "Si aucun document n'est fourni, réponds à la question avec tes connaissances et signale les incertitudes. "
-        "Présente le résultat avec des titres et des étapes lisibles. Pour les flashcards, produis une liste numérotée avec Question et Réponse.\n"
-        f"Activité de la séance : {activity or 'Étude'}\nTâche demandée : {action}\n\n"
-        + (f"SUPPORTS DE LA SÉANCE (extraits limités aux 18 000 caractères) :\n{source}" if source else "Aucun document ni extrait web n'est joint ; réponds à la question directement.")
+        "Tu es Seugn bi, l'assistant pédagogique d'Issa. Réponds en français, en wolof si la demande est en wolof, "
+        "ou dans un mélange naturel si les deux langues sont utilisées. Utilise les cours joints et extraits web comme références, "
+        "cite les URL fournies, distingue les explications générales et n'invente ni fait ni source. "
+        "Si aucun support n'est fourni, réponds avec tes connaissances et signale les incertitudes. "
+        "Pour des flashcards, numérote les cartes et donne Question puis Réponse.\n"
+        f"Activité : {activity or 'Étude'}\nTâche : {action}\n\n"
+        + (f"SUPPORTS (limités à 18 000 caractères) :\n{source}" if source else "Aucun support joint.")
     )
-    body = {
-        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.25, "maxOutputTokens": 1400},
-    }
-    result = _issa_gemini_generate_content(body, key)
-    candidates = result.get("candidates") or []
-    if not candidates:
-        return "Gemini n’a pas produit de réponse. Reformule la demande ou réduis le contenu du document joint."
-    parts = candidates[0].get("content", {}).get("parts", [])
-    return "".join(part.get("text", "") for part in parts if "text" in part).strip() or "L’IA n’a pas renvoyé de texte. Essaie avec une demande plus précise."
+    result = _issa_ai_chat_completion([
+        {"role": "system", "content": "Tu es Seugn bi, secrétaire pédagogique bilingue français-wolof."},
+        {"role": "user", "content": prompt},
+    ], key)
+    choices = result.get("choices") or []
+    return str(choices[0].get("message", {}).get("content", "")).strip() if choices else "Seugn bi n’a pas reçu de réponse. Réessaie avec une demande plus courte."
 
-def _issa_focus_ai_error_message(error):
-    """Traduit les erreurs réseau/API Gemini en actions simples pour l’utilisateur."""
+def _issa_ai_error_message(error):
+    """Explique les erreurs Groq et les prochaines étapes pour Seugn bi."""
     if isinstance(error, urllib.error.HTTPError):
         detail = ""
         try:
@@ -1794,20 +1831,18 @@ def _issa_focus_ai_error_message(error):
             detail = str(payload.get("error", {}).get("message", ""))
         except Exception:
             pass
-        if error.code in {400, 401}:
-            return "La clé ou le modèle Gemini est refusé. Vérifie GEMINI_MODEL et remplace au besoin GEMINI_API_KEY par une clé Auth récente créée dans Google AI Studio."
-        if error.code == 403:
-            return "Google refuse l’accès à cette clé pour Gemini. Crée une clé Auth dans AI Studio, autorise l’API Gemini et remplace GEMINI_API_KEY dans les Secrets Streamlit."
+        if error.code in {401, 403}:
+            return "La clé Groq est absente, invalide ou sans accès API. Vérifie GROQ_API_KEY dans les Secrets Streamlit."
         if error.code == 404:
-            return "Le modèle Gemini demandé n’est pas disponible pour cette clé. Mets à jour GEMINI_MODEL dans les Secrets Streamlit."
+            return "Le modèle Groq configuré n’est pas disponible. Vérifie GROQ_MODEL et GROQ_FALLBACK_MODEL."
         if error.code == 429:
-            return "Le quota Gemini est atteint. Attends le renouvellement du quota ou vérifie les limites du projet dans AI Studio."
+            return "La limite gratuite Groq est atteinte pour le moment. Attends le renouvellement de la limite et réessaie."
         if error.code in {500, 502, 503, 504}:
-            return "Gemini n’a pas répondu avec les deux modèles disponibles. Vérifie l’état d’AI Studio et réessaie dans quelques minutes. Si le problème continue, vérifie GEMINI_MODEL et GEMINI_FALLBACK_MODEL dans les Secrets Streamlit."
-        return f"Gemini a refusé la demande (HTTP {error.code}). {detail[:180]}"
+            return "Groq n’a pas répondu avec les modèles configurés. Vérifie l’état de Groq et GROQ_MODEL/GROQ_FALLBACK_MODEL, puis réessaie."
+        return f"Groq a refusé la demande (HTTP {error.code}). {detail[:180]}"
     if isinstance(error, (TimeoutError, urllib.error.URLError)):
-        return "Gemini n’a pas répondu à temps. Vérifie la connexion puis réessaie."
-    return f"L’assistant a rencontré une erreur ({type(error).__name__}). Réessaie dans un instant."
+        return "Seugn bi n’a pas pu joindre Groq à temps. Vérifie la connexion puis réessaie."
+    return f"Seugn bi a rencontré une erreur ({type(error).__name__}). Réessaie dans un instant."
 
 @st.cache_data(ttl=900, show_spinner=False)
 def _issa_focus_search_web(query):
@@ -2220,9 +2255,9 @@ if _focus_active:
                     _focus_action_text = _focus_ai_custom.strip() if _focus_ai_action == "Répondre à ma consigne" else _focus_ai_action
                     try:
                         with st.spinner("L’assistant lit les documents et prépare le résultat…"):
-                            st.session_state["issa_focus_ai_result"] = _issa_gemini_document_action(_focus_action_text, _focus_doc_text, st.session_state.get("issa_focus_activity", "Étude"))
+                            st.session_state["issa_focus_ai_result"] = _issa_ai_document_action(_focus_action_text, _focus_doc_text, st.session_state.get("issa_focus_activity", "Étude"))
                     except Exception as _focus_ai_error:
-                        st.session_state["issa_focus_ai_result"] = _issa_focus_ai_error_message(_focus_ai_error)
+                        st.session_state["issa_focus_ai_result"] = _issa_ai_error_message(_focus_ai_error)
             if st.session_state.get("issa_focus_ai_result"):
                 with st.container(border=True):
                     _magic_result = st.markdown("#### Résultat de l’assistant")
@@ -2279,9 +2314,9 @@ if _focus_active:
                     with st.spinner("L’assistant prépare sa réponse…"):
                         _web_context = "\n\nEXTRAITS DE RECHERCHE WEB (à vérifier, avec leurs sources) :\n" + "\n".join(f"- {item.get('title','')} — {item.get('snippet','')} ({item.get('url','')})" for item in st.session_state.get("issa_focus_web_results", [])) if st.session_state.get("issa_focus_web_results") else ""
                         _focus_ai_sources = (_focus_doc_text + _web_context).strip()
-                        st.session_state["issa_focus_live_ai_result"] = _issa_gemini_document_action(_focus_ai_task, _focus_ai_sources, st.session_state.get("issa_focus_activity", "Étude"))
+                        st.session_state["issa_focus_live_ai_result"] = _issa_ai_document_action(_focus_ai_task, _focus_ai_sources, st.session_state.get("issa_focus_activity", "Étude"))
                 except Exception as _live_ai_error:
-                    st.session_state["issa_focus_live_ai_result"] = _issa_focus_ai_error_message(_live_ai_error)
+                    st.session_state["issa_focus_live_ai_result"] = _issa_ai_error_message(_live_ai_error)
             if st.session_state.get("issa_focus_live_ai_result"):
                 with st.container(border=True):
                     _magic_result = st.markdown(st.session_state["issa_focus_live_ai_result"])
@@ -2319,9 +2354,9 @@ if _focus_active:
                 _visual_task = f"Écris uniquement un prompt prêt à copier dans un générateur gratuit de modèle 3D pour créer un modèle pédagogique sur : {_visual_topic}. Le modèle doit être scientifiquement cohérent pour un étudiant en agronomie. Décris la forme, les parties visibles, les matériaux ou textures, l’angle de vue et le niveau de détail. Évite les légendes écrites intégrées à l’image."
                 try:
                     with st.spinner("L’assistant prépare le prompt visuel…"):
-                        st.session_state["issa_focus_visual_prompt"] = _issa_gemini_document_action(_visual_task, _visual_sources, st.session_state.get("issa_focus_activity", "Étude"))
+                        st.session_state["issa_focus_visual_prompt"] = _issa_ai_document_action(_visual_task, _visual_sources, st.session_state.get("issa_focus_activity", "Étude"))
                 except Exception as _visual_error:
-                    st.session_state["issa_focus_visual_prompt"] = _issa_focus_ai_error_message(_visual_error)
+                    st.session_state["issa_focus_visual_prompt"] = _issa_ai_error_message(_visual_error)
             if st.session_state.get("issa_focus_visual_prompt"):
                 _magic_result = st.code(st.session_state["issa_focus_visual_prompt"], language=None)
             _media_cols = st.columns(3)
@@ -3652,10 +3687,11 @@ elif page=="Rappels automatiques":
 elif page=="Assistant IA XXL":
     _ = header("ASSISTANT PERSONNEL XXL", "Seugn bi · assistant IA bilingue 🤖", "Na nga def Issa ? Parle-moi en français ou en wolof. Je m’appuie sur tes cours, ton planning, tes révisions, tes tâches, ton budget, ta carrière et tes documents.")
     _magic_result = st.caption("Seugn bi garde le fil de la conversation pendant cette session et consulte les informations enregistrées dans ton espace XXL.")
-    _ai_key = _startup_secret("GEMINI_API_KEY", "")
-    _ai_model = _startup_secret("GEMINI_MODEL", "gemini-3.5-flash-lite")
+    _ai_key = _startup_secret("GROQ_API_KEY", "")
+    _ai_model = _startup_secret("GROQ_MODEL", "openai/gpt-oss-20b")
     if not _ai_key:
-        _magic_result = st.warning("Pour activer les réponses de l’IA, ajoute GEMINI_API_KEY dans les Secrets Streamlit ou dans une variable d’environnement. Les instructions sont dans le fichier LIRE_AVANT_DEMARRER_IA.txt.")
+        _magic_result = st.warning("Pour activer Seugn bi, ajoute GROQ_API_KEY dans les Secrets Streamlit. Consulte LIRE_AVANT_DEMARRER_IA.txt.")
+        _magic_result = st.link_button("🔑 Créer une clé Groq", "https://console.groq.com/keys")
     _speech_col, _voice_col = st.columns([1, 1])
     with _speech_col:
         _ai_language = st.selectbox("Langue de dictée", ["Français", "Wolof (prise en charge variable)"], key="issa_ai_speech_language")
@@ -3680,7 +3716,7 @@ elif page=="Assistant IA XXL":
     if _ai_question:
         _magic_result = st.session_state["issa_ai_messages"].append({"role":"user", "content":_ai_question})
         if not _ai_key:
-            _ai_answer = "Na nga def, Issa ? Je suis prête à t’accompagner en français ou en wolof. Pour activer la génération des réponses, configure GEMINI_API_KEY dans les Secrets Streamlit comme indiqué dans LIRE_AVANT_DEMARRER_IA.txt."
+            _ai_answer = "Na nga def, Issa ? Maa ngi fi, man Seugn bi. Pour activer mes réponses, configure GROQ_API_KEY dans les Secrets Streamlit comme indiqué dans LIRE_AVANT_DEMARRER_IA.txt."
         else:
             _context=_issa_ai_context()
             _system_prompt=("Tu es Seugn bi, l’assistant personnel d’Issa Youme, étudiant en agronomie et sciences alimentaires à l’Université Amadou Makhtar Mbow (UAM), au Sénégal. Tu aides pour les études, la pédagogie, l’emploi du temps, les révisions, la productivité, les tâches et échéances, les habitudes, le journal, le budget en FCFA, les objectifs, les notes et contacts, les compétences, les formations et stages, les opportunités, les documents et les réunions.\n\n"
@@ -3689,11 +3725,11 @@ elif page=="Assistant IA XXL":
             "CONTEXTE ACTUEL DE L’ESPACE XXL :\n"+_context)
             try:
                 _api_history=st.session_state["issa_ai_messages"][:-1]
-                _ai_answer=_issa_gemini_reply(_ai_question,history=_api_history,context=_context,audio=_pending_audio)
+                _ai_answer=_issa_ai_reply(_ai_question,history=_api_history,context=_context,audio=_pending_audio)
             except urllib.error.HTTPError as _exc:
-                _ai_answer=_issa_focus_ai_error_message(_exc)
+                _ai_answer=_issa_ai_error_message(_exc)
             except Exception as _exc:
-                _ai_answer=_issa_focus_ai_error_message(_exc)
+                _ai_answer=_issa_ai_error_message(_exc)
         _magic_result = st.session_state["issa_ai_messages"].append({"role":"assistant","content":_ai_answer})
         if _pending_audio: _magic_result = st.session_state.pop("issa_ai_pending_audio",None)
         with st.chat_message("assistant"):
@@ -4303,18 +4339,18 @@ with st.expander("🤖 Demander à Seugn bi — disponible dans tous les onglets
         _magic_result = st.markdown(("**Toi :** " if _global_item["role"]=="user" else "**Seugn bi :** ")+_global_item["content"])
     with st.form("issa_global_ai_form",clear_on_submit=True):
         _global_q=st.text_input("Ta question",placeholder="Ex. Quelle matière dois-je réviser en priorité ?")
-        _global_send=st.form_submit_button("Envoyer à l’assistant",type="primary",disabled=not _startup_secret("GEMINI_API_KEY",""))
+        _global_send=st.form_submit_button("Envoyer à l’assistant",type="primary",disabled=not _startup_secret("GROQ_API_KEY",""))
     if _global_send and _global_q.strip():
         with st.spinner("L’assistant consulte tes informations…"):
             try:
                 _global_history=st.session_state.get("issa_global_ai_history",[])
-                _global_answer=_issa_gemini_reply(_global_q.strip(),history=_global_history,context=_issa_ai_context())
+                _global_answer=_issa_ai_reply(_global_q.strip(),history=_global_history,context=_issa_ai_context())
                 _magic_result = _global_history.extend([{"role":"user","content":_global_q.strip()},{"role":"assistant","content":_global_answer}])
                 st.session_state["issa_global_ai_history"]=_global_history[-10:]
             except urllib.error.HTTPError as _global_error:
-                _global_answer=_issa_focus_ai_error_message(_global_error)
+                _global_answer=_issa_ai_error_message(_global_error)
             except Exception as _global_error:
-                _global_answer=_issa_focus_ai_error_message(_global_error)
+                _global_answer=_issa_ai_error_message(_global_error)
             _magic_result = st.markdown(_global_answer)
             _pending_open=st.session_state.get("issa_pending_app_link")
             if _pending_open:
@@ -4327,8 +4363,8 @@ with st.expander("🤖 Demander à Seugn bi — disponible dans tous les onglets
             _focus_global_rerun = st.session_state.pop("issa_focus_schedule_changed", False) or _focus_global_rerun
             if _focus_global_rerun:
                 _magic_result = st.rerun()
-    elif not _startup_secret("GEMINI_API_KEY",""):
-        _magic_result = st.info("Ajoute GEMINI_API_KEY aux Secrets Streamlit pour activer le chat dans tous les onglets.")
+    elif not _startup_secret("GROQ_API_KEY",""):
+        _magic_result = st.info("Ajoute GROQ_API_KEY aux Secrets Streamlit pour activer le chat de Seugn bi dans tous les onglets.")
 
 _magic_result = st.markdown('<div class="issa-footer"><strong>🗂️ Secrétaire Issa</strong><br><small>Un espace personnel de secrétariat, de suivi et d’organisation · Données stockées dans Supabase PostgreSQL.</small></div>',unsafe_allow_html=True)
 role_icons={
