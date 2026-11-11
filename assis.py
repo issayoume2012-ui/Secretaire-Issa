@@ -1714,7 +1714,7 @@ def _issa_ai_system_prompt(context):
     "COLONNES AUTORISÉES (utilise exactement ces noms dans record_json/changes_json) :\n"+schema+"\n\nCONTEXTE DES DONNÉES ACTUELLES :\n"+context)
 
 
-def _issa_gemini_generate(contents, key, tools=None, system_instruction="", quick=False):
+def _issa_gemini_generate(contents, key, tools=None, system_instruction="", quick=False, max_output_tokens=None):
     """Appelle Gemini GenerateContent avec repli entre les modèles configurés."""
     configured_models = [
         value.removeprefix("models/") for value in [
@@ -1730,7 +1730,7 @@ def _issa_gemini_generate(contents, key, tools=None, system_instruction="", quic
     retryable_errors = []
     failures = []
     for index, model in enumerate(models):
-        body = {"contents": contents, "generationConfig": {"maxOutputTokens": 900 if quick else 1600}}
+        body = {"contents": contents, "generationConfig": {"maxOutputTokens": int(max_output_tokens or (900 if quick else 1600))}}
         if system_instruction:
             body["systemInstruction"] = {"parts": [{"text": system_instruction}]}
         if tools:
@@ -1793,7 +1793,19 @@ def _issa_gemini_function_declaration(function):
         "parameters": normalize(function.get("parameters", {"type": "OBJECT", "properties": {}})),
     }
 
-def _issa_tools_for_question(question):
+def _issa_confirmation_authorizes_write(question, history=None):
+    """Un oui ne vaut autorisation d'écriture que s'il répond à une offre explicite."""
+    answer = norm(question)
+    affirmative = answer in {"oui", "oui stp", "oui s il te plait", "d accord", "ok", "okay", "vas y", "waaw", "waaw def", "yes", "ajoute les", "enregistre les"}
+    if not affirmative:
+        return False
+    previous_assistant = next((str(item.get("content", "")) for item in reversed(history or []) if item.get("role") == "assistant"), "")
+    offer = norm(previous_assistant)
+    asks_permission = any(term in offer for term in ("veux tu", "souhaites tu", "dois je", "tu veux que", "est ce que tu veux"))
+    proposes_write = any(term in offer for term in ("ajoute", "ajouter", "enregistre", "enregistrer", "creer", "inscrire"))
+    return asks_permission and proposes_write
+
+def _issa_tools_for_question(question, history=None):
     """Expose seulement les outils correspondant à une intention clairement formulée."""
     text = norm(question)
     write_terms = ("ajoute", "ajouter", "cree", "creer", "enregistre", "enregistrer", "programme", "planifie", "planifier", "inscris", "inscrire", "mets", "met", "rappelle moi")
@@ -1816,7 +1828,123 @@ def _issa_tools_for_question(question):
         selected.extend(function for function in _ISSA_FUNCTIONS if function["name"] == "open_service")
     if any(term in text for term in read_terms):
         selected.extend(function for function in _ISSA_FUNCTIONS if function["name"] == "read_records")
+    if _issa_confirmation_authorizes_write(question, history):
+        selected.extend(function for function in _ISSA_FUNCTIONS if function["name"] == "create_record")
     return list({function["name"]: function for function in selected}.values())
+
+def _issa_execute_model_json_plan(answer, question, history=None):
+    """Exécute des appels d'outils textuels seulement après une demande ou confirmation explicite."""
+    if not any(term in norm(question) for term in ("ajoute", "ajouter", "cree", "creer", "enregistre", "enregistrer", "programme", "planifie", "oui", "waaw", "vas y", "d accord")):
+        return None
+    authorized_confirmation = _issa_confirmation_authorizes_write(question, history)
+    previous_assistant = next((norm(item.get("content", "")) for item in reversed(history or []) if item.get("role") == "assistant"), "")
+    text = str(answer or "").strip()
+    candidate = ""
+    fenced = re.search(r"```(?:json)?\s*(.*?)```", text, flags=re.IGNORECASE | re.DOTALL)
+    if fenced:
+        candidate = fenced.group(1).strip()
+    else:
+        start_positions = [position for marker in ("[", "{") if (position := text.find(marker)) >= 0]
+        if start_positions:
+            candidate = text[min(start_positions):]
+    if not candidate:
+        return None
+    try:
+        parsed, _end = json.JSONDecoder().raw_decode(candidate)
+    except Exception:
+        return None
+    plans = parsed if isinstance(parsed, list) else [parsed]
+    if not plans or not all(isinstance(plan, dict) for plan in plans):
+        return None
+    has_tool_plan = any(plan.get("tool") in {"create_record", "update_record"} or plan.get("action") in {"create_record", "update_record"} for plan in plans)
+    if not has_tool_plan:
+        return None
+    if not authorized_confirmation and not any(term in norm(question) for term in ("ajoute", "ajouter", "cree", "creer", "enregistre", "enregistrer", "programme", "planifie")):
+        return "Je n’ai effectué aucune modification : j’ai reçu une commande non confirmée. Dis-moi clairement quelle fiche tu veux ajouter ou modifier."
+
+    number_words = {"un": 1, "une": 1, "deux": 2, "trois": 3, "quatre": 4, "cinq": 5, "six": 6, "sept": 7, "huit": 8, "neuf": 9, "dix": 10}
+    def expected_count(pattern):
+        match = re.search(pattern, previous_assistant)
+        if not match:
+            return None
+        token = match.group(1)
+        return int(token) if token.isdigit() else number_words.get(token)
+    expected_income = expected_count(r"\b(un|une|deux|trois|quatre|cinq|six|sept|huit|neuf|dix|\d+)\s+(?:entrees?\s+(?:de\s+)?)?revenus?\b")
+    expected_expense = expected_count(r"\b(un|une|deux|trois|quatre|cinq|six|sept|huit|neuf|dix|\d+)\s+(?:entrees?\s+(?:de\s+)?)?depenses?\b")
+    if authorized_confirmation and (expected_income is not None or expected_expense is not None):
+        plan_records = []
+        for plan in plans:
+            args = plan.get("arguments") if isinstance(plan.get("arguments"), dict) else plan
+            record = args.get("record_json", {})
+            if isinstance(record, str):
+                try:
+                    record = json.loads(record)
+                except Exception:
+                    record = {}
+            if isinstance(record, dict) and str(args.get("table_name", args.get("domain", args.get("rubric", "")))).casefold() in {"budget", "budgets"}:
+                plan_records.append(record)
+        actual_income = sum(1 for record in plan_records if norm(record.get("kind", "")) in {"revenu", "recette", "income"})
+        actual_expense = sum(1 for record in plan_records if norm(record.get("kind", "")) in {"depense", "sortie", "expense"})
+        if (expected_income is not None and actual_income != expected_income) or (expected_expense is not None and actual_expense != expected_expense):
+            expected_parts = []
+            actual_parts = []
+            if expected_income is not None:
+                expected_parts.append(f"{expected_income} revenu(s)")
+                actual_parts.append(f"{actual_income} revenu(s)")
+            if expected_expense is not None:
+                expected_parts.append(f"{expected_expense} dépense(s)")
+                actual_parts.append(f"{actual_expense} dépense(s)")
+            return "Je n’ai rien ajouté : le détail proposé ne correspond pas à la confirmation précédente (" + ", ".join(actual_parts) + " au lieu de " + ", ".join(expected_parts) + "). Envoie les lignes exactes à enregistrer pour éviter une erreur de budget."
+
+    outcomes = []
+    for plan in plans:
+        tool_name = plan.get("tool") or plan.get("action") or ""
+        if tool_name not in {"create_record", "update_record"}:
+            continue
+        arguments = plan.get("arguments") if isinstance(plan.get("arguments"), dict) else plan
+        domain = arguments.get("domain") or arguments.get("rubric") or arguments.get("table_name") or arguments.get("table") or ""
+        domain = str(domain)
+        if domain not in _ISSA_DOMAINS:
+            domain = next((label for label, table in _ISSA_DOMAINS.items() if table.casefold() == domain.casefold()), domain)
+        record_data = arguments.get("record_json", {})
+        if isinstance(record_data, str):
+            try:
+                record_data = json.loads(record_data)
+            except Exception:
+                record_data = {}
+        if not isinstance(record_data, dict):
+            outcomes.append({"ok": False, "error": "Les données de la fiche sont illisibles."})
+            continue
+        if tool_name == "create_record":
+            result = _issa_tool_write(domain, record_data)
+        else:
+            record_id = arguments.get("record_id")
+            if not str(record_id or "").isdigit() or int(record_id) < 1:
+                outcomes.append({"ok": False, "error": "La fiche à modifier n’a pas été identifiée."})
+                continue
+            changes = arguments.get("changes_json", record_data)
+            if isinstance(changes, str):
+                try:
+                    changes = json.loads(changes)
+                except Exception:
+                    changes = {}
+            result = _issa_tool_write(domain, changes, int(record_id))
+        outcomes.append(result)
+    completed = [result for result in outcomes if result.get("ok")]
+    failed = [result for result in outcomes if not result.get("ok")]
+    if completed and not failed:
+        return f"C’est fait : {len(completed)} fiche(s) ont été enregistrées dans l’application."
+    if completed:
+        return f"{len(completed)} fiche(s) enregistrées. {len(failed)} n’ont pas pu l’être : " + "; ".join(str(item.get("error", "erreur")) for item in failed[:3])
+    return "Je n’ai rien enregistré : " + "; ".join(str(item.get("error", "commande invalide")) for item in failed[:3])
+
+def _issa_clean_model_reply(answer):
+    """Évite d'afficher les marqueurs None et les blocs JSON d'exécution à l'utilisateur."""
+    lines = [line for line in str(answer or "").splitlines() if line.strip().casefold() not in {"none", "null"}]
+    cleaned = "\n".join(lines).strip()
+    if re.search(r"\b(?:tool|arguments|record_json|table_name)\b", cleaned, flags=re.IGNORECASE) and ("```json" in cleaned.casefold() or cleaned.lstrip().startswith(("{", "["))):
+        return "Seugn bi a préparé une commande mais ne l’a pas exécutée. Reformule en demandant clairement l’ajout ou la modification."
+    return cleaned
 
 def _issa_handle_focus_command(question):
     """Exécute directement les demandes explicites de séance Focus, sans attendre Gemini."""
@@ -1924,7 +2052,7 @@ def _issa_ai_reply(question, history=None, context=None, audio=None):
     if not user_parts:
         user_parts.append({"text": "Réponds à ma demande."})
     contents.append({"role": "user", "parts": user_parts})
-    relevant_functions = _issa_tools_for_question(question_text)
+    relevant_functions = _issa_tools_for_question(question_text, history)
     tools = [{"functionDeclarations": [_issa_gemini_function_declaration(function) for function in relevant_functions]}] if relevant_functions else None
     for _round in range(3):
         result = _issa_gemini_generate(contents, key, tools=tools, system_instruction=system_instruction, quick=True)
@@ -1939,7 +2067,38 @@ def _issa_ai_reply(question, history=None, context=None, audio=None):
         calls = [part.get("functionCall") for part in parts if part.get("functionCall")]
         if not calls:
             answer = "".join(str(part.get("text", "")) for part in parts if part.get("text"))
-            return answer.strip() or "Je n’ai pas reçu de texte pour cette réponse. Reformule ta question et réessaie."
+            planned_result = _issa_execute_model_json_plan(answer, question_text, history)
+            if planned_result is not None:
+                return planned_result
+            return _issa_clean_model_reply(answer) or "Je n’ai pas reçu de texte pour cette réponse. Reformule ta question et réessaie."
+        # Vérifie les appels Gemini natifs avant toute écriture budgétaire.
+        if _issa_confirmation_authorizes_write(question_text, history):
+            _prior_offer = norm(next((str(item.get("content", "")) for item in reversed(history or []) if item.get("role") == "assistant"), ""))
+            _num_words = {"un": 1, "une": 1, "deux": 2, "trois": 3, "quatre": 4, "cinq": 5, "six": 6, "sept": 7, "huit": 8, "neuf": 9, "dix": 10}
+            def _offered_count(_pattern):
+                _m = re.search(_pattern, _prior_offer)
+                if not _m:
+                    return None
+                return int(_m.group(1)) if _m.group(1).isdigit() else _num_words.get(_m.group(1))
+            _expected_income = _offered_count(r"\b(un|une|deux|trois|quatre|cinq|six|sept|huit|neuf|dix|\d+)\s+(?:entrees?\s+(?:de\s+)?)?revenus?\b")
+            _expected_expense = _offered_count(r"\b(un|une|deux|trois|quatre|cinq|six|sept|huit|neuf|dix|\d+)\s+(?:entrees?\s+(?:de\s+)?)?depenses?\b")
+            if _expected_income is not None or _expected_expense is not None:
+                _budget_rows = []
+                for _call in calls:
+                    _args = _call.get("args", {})
+                    if isinstance(_args, dict) and str(_args.get("table_name", _args.get("domain", _args.get("rubric", "")))).casefold() in {"budget", "budgets"}:
+                        _record = _args.get("record_json", {})
+                        if isinstance(_record, str):
+                            try:
+                                _record = json.loads(_record)
+                            except Exception:
+                                _record = {}
+                        if isinstance(_record, dict):
+                            _budget_rows.append(_record)
+                _actual_income = sum(1 for _row in _budget_rows if norm(_row.get("kind", "")) in {"revenu", "recette", "income"})
+                _actual_expense = sum(1 for _row in _budget_rows if norm(_row.get("kind", "")) in {"depense", "sortie", "expense"})
+                if (_expected_income is not None and _expected_income != _actual_income) or (_expected_expense is not None and _expected_expense != _actual_expense):
+                    return "Je n’ai rien ajouté : le nombre de transactions ne correspond pas à la proposition précédente. Renvoie les lignes exactes à enregistrer pour éviter une erreur de budget."
         contents.append(model_content)
         function_responses = []
         for call in calls:
@@ -2473,7 +2632,7 @@ if _focus_active:
                     _magic_result = st.markdown("#### Résultat de l’assistant")
                     _magic_result = st.markdown(st.session_state["issa_focus_ai_result"])
         _magic_result = st.markdown("### 🧰 Outils de révision dans ta bulle Focus")
-        _focus_tool_tabs = st.tabs(["🔎 Recherche web", "🤖 Assistant IA", "📝 Notes de séance", "▶️ Vidéos YouTube"])
+        _focus_tool_tabs = st.tabs(["🔎 Recherche web", "🤖 Assistant IA", "📝 Notes de séance", "▶️ Vidéos YouTube", "🌍 Traduction"])
         with _focus_tool_tabs[0]:
             with st.form("issa_focus_web_search_form", clear_on_submit=False):
                 _focus_query = st.text_input("Rechercher un concept, une définition ou un article", placeholder="Ex. : fixation biologique de l’azote en agronomie", key="issa_focus_web_query")
@@ -2602,6 +2761,56 @@ if _focus_active:
                 _magic_result = st.link_button("🔎 Ouvrir les résultats YouTube", st.session_state["issa_focus_youtube_search_url"], use_container_width=True)
             if st.session_state.get("issa_focus_youtube_embed"):
                 _magic_result = st.video(st.session_state["issa_focus_youtube_embed"])
+        with _focus_tool_tabs[4]:
+            _magic_result = st.caption("Traduis tes notes et extraits de cours en français, anglais ou wolof. Le texte saisi est transmis intégralement à Seugn bi.")
+            with st.form("issa_focus_translation_form", clear_on_submit=False):
+                _translation_cols = st.columns(2)
+                with _translation_cols[0]:
+                    _translation_source = st.selectbox("Langue du texte", ["Détection automatique", "Français", "Anglais", "Wolof"], key="issa_focus_translation_source")
+                with _translation_cols[1]:
+                    _translation_target = st.selectbox("Traduire vers", ["Français", "Anglais", "Wolof"], key="issa_focus_translation_target")
+                _translation_text = st.text_area("Texte à traduire", height=180, placeholder="Colle ou écris le texte à traduire…", key="issa_focus_translation_text")
+                _translation_submitted = st.form_submit_button("🌍 Traduire", type="primary")
+            if _translation_submitted:
+                if not _translation_text.strip():
+                    st.session_state["issa_focus_translation_result"] = ""
+                    st.session_state["issa_focus_translation_error"] = "Colle ou écris un texte avant de lancer la traduction."
+                elif not _startup_secret("GEMINI_API_KEY", ""):
+                    st.session_state["issa_focus_translation_result"] = ""
+                    st.session_state["issa_focus_translation_error"] = "Seugn bi attend GEMINI_API_KEY dans les Secrets Streamlit."
+                else:
+                    try:
+                        _source_language = "détecte automatiquement" if _translation_source == "Détection automatique" else _translation_source
+                        _translation_prompt = (
+                            f"Traduis tout le texte ci-dessous depuis {_source_language} vers {_translation_target}. "
+                            "Ne le résume pas et ne supprime aucune phrase. Préserve les nombres, noms propres, unités, listes, tableaux et la mise en forme. "
+                            "Pour le wolof, utilise le wolof sénégalais naturel et n'invente pas de termes techniques; garde le terme français entre parenthèses si une traduction est incertaine. "
+                            "Retourne uniquement la traduction complète.\n\nTEXTE À TRADUIRE :\n" + _translation_text
+                        )
+                        _translation_key = _startup_secret("GEMINI_API_KEY", "")
+                        _translation_tokens = max(900, min(8192, int(len(_translation_text) * 0.8)))
+                        with st.spinner("Seugn bi traduit le texte…"):
+                            _translation_response = _issa_gemini_generate(
+                                [{"role": "user", "parts": [{"text": _translation_prompt}]}],
+                                _translation_key,
+                                system_instruction="Tu es un traducteur français-anglais-wolof soigneux et fidèle.",
+                                quick=True,
+                                max_output_tokens=_translation_tokens,
+                            )
+                        _translation_candidates = _translation_response.get("candidates") or []
+                        st.session_state["issa_focus_translation_result"] = "".join(
+                            str(part.get("text", "")) for part in _translation_candidates[0].get("content", {}).get("parts", []) if part.get("text")
+                        ).strip() if _translation_candidates else ""
+                        st.session_state["issa_focus_translation_error"] = "" if st.session_state["issa_focus_translation_result"] else "Gemini n’a pas renvoyé de traduction. Réessaie avec un passage plus court."
+                    except Exception as _translation_exception:
+                        st.session_state["issa_focus_translation_result"] = ""
+                        st.session_state["issa_focus_translation_error"] = _issa_ai_error_message(_translation_exception)
+            if st.session_state.get("issa_focus_translation_error"):
+                _magic_result = st.warning(st.session_state["issa_focus_translation_error"])
+            if st.session_state.get("issa_focus_translation_result"):
+                with st.container(border=True):
+                    _magic_result = st.markdown("#### Traduction")
+                    _magic_result = st.code(st.session_state["issa_focus_translation_result"], language=None)
         if st.button("⏹️ Arrêter la session et enregistrer", key="focus_finish_locked", type="primary", use_container_width=True):
             try:
                 _focus_seconds = _focus_elapsed_seconds()
@@ -4603,6 +4812,7 @@ role_icons={
 roles_html=''.join(f'<span class="issa-role-pill">{role_icons.get(p, "🤖")} {display_text(PAGE_ROLE.get(p), p)}</span>' for p in PAGES)
 _magic_result = st.markdown(f'<div class="issa-roles"><div class="issa-roles-title">Les rôles de vos secrétaires spécialisés</div><div class="issa-role-pills">{roles_html}</div></div>',unsafe_allow_html=True)
 _magic_result = st.caption('Navigation disponible dans le menu supérieur · Base de données : Supabase PostgreSQL · tables créées automatiquement')
+
 
 
 
