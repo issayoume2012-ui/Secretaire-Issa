@@ -1818,12 +1818,93 @@ def _issa_tools_for_question(question):
         selected.extend(function for function in _ISSA_FUNCTIONS if function["name"] == "read_records")
     return list({function["name"]: function for function in selected}.values())
 
+def _issa_handle_focus_command(question):
+    """Exécute directement les demandes explicites de séance Focus, sans attendre Gemini."""
+    raw = str(question or "").strip()
+    text = norm(raw)
+    mentions_focus = bool(set(text.split()) & {"focus", "concentration", "chrono", "pomodoro"}) or "session focus" in text
+    action_terms = ("ouvre", "ouvrir", "lance", "lancer", "demarre", "demarrer", "commence", "commencer", "active", "activer", "programme", "programmer", "planifie", "planifier", "faire une session")
+    if not mentions_focus or not any(term in text for term in action_terms):
+        return None
+
+    scheduling_request = any(term in text for term in ("programme", "programmer", "planifie", "planifier"))
+    explicit_now = any(term in text for term in ("maintenant", "tout de suite", "immediatement", "leegi", "now"))
+
+    local_now = datetime.now(ZoneInfo("Africa/Dakar"))
+    session_day = local_now.date()
+    iso_date = re.search(r"\b(20\d{2}-\d{2}-\d{2})\b", raw)
+    if iso_date:
+        try:
+            session_day = date.fromisoformat(iso_date.group(1))
+        except ValueError:
+            return "La date indiquée n’est pas valide. Donne la date au format AAAA-MM-JJ."
+    elif "demain" in text:
+        session_day += timedelta(days=1)
+
+    clock_match = re.search(r"\b(?:à|a|vers)\s*(\d{1,2})\s*h(?:\s*(\d{1,2}))?\b", raw, flags=re.IGNORECASE)
+    requested_time = None
+    if clock_match:
+        hour = int(clock_match.group(1))
+        minute = int(clock_match.group(2) or 0)
+        if hour > 23 or minute > 59:
+            return "L’heure n’est pas valide. Indique-la au format 9h17 ou 09:17."
+        requested_time = time(hour, minute)
+    else:
+        colon_time = re.search(r"\b(?:à|a|vers)\s*(\d{1,2}):(\d{2})\b", raw, flags=re.IGNORECASE)
+        if colon_time:
+            hour, minute = int(colon_time.group(1)), int(colon_time.group(2))
+            if hour > 23 or minute > 59:
+                return "L’heure n’est pas valide. Indique-la au format 9h17 ou 09:17."
+            requested_time = time(hour, minute)
+    if scheduling_request and requested_time is None and not explicit_now:
+        return "À quelle date et à quelle heure veux-tu programmer cette session Focus ?"
+
+    duration = 45
+    duration_match = re.search(r"\b(?:pour|pou|pendant|durant|duree de)\s*(\d{1,3})\s*(h|heure|heures|min|minute|minutes)\b", text)
+    if duration_match:
+        amount = int(duration_match.group(1))
+        unit = duration_match.group(2)
+        duration = amount * 60 if unit in {"h", "heure", "heures"} else amount
+    else:
+        minute_match = re.search(r"\b(\d{1,3})\s*(?:min|minute|minutes)\b", text)
+        if minute_match:
+            duration = int(minute_match.group(1))
+    if duration < 1 or duration > 600:
+        return "La durée doit être comprise entre 1 minute et 10 heures."
+
+    record = {
+        "session_date": session_day.isoformat(),
+        "duration_minutes": duration,
+        "activity": "Étude / révision",
+        "notes": "Session demandée à Seugn bi : " + raw[:1000],
+    }
+    scheduled_at = None
+    if requested_time is not None:
+        scheduled_at = datetime.combine(session_day, requested_time).replace(tzinfo=ZoneInfo("Africa/Dakar"))
+    if scheduled_at is not None and scheduled_at.timestamp() > local_now.timestamp():
+        record["scheduled_start"] = scheduled_at.strftime("%Y-%m-%d %H:%M:%S")
+        st.session_state["issa_focus_immediate_request"] = False
+    else:
+        # Une heure déjà passée aujourd’hui ne peut pas être rejouée : démarrer maintenant.
+        st.session_state["issa_focus_immediate_request"] = True
+
+    result = _issa_tool_write("Sessions focus", record)
+    if not result.get("ok"):
+        st.session_state.pop("issa_focus_immediate_request", None)
+        return "Je n’ai pas pu enregistrer la séance Focus : " + str(result.get("error", "erreur inconnue"))
+    if result.get("focus_started_now"):
+        return f"C’est fait, Issa : ta session Focus démarre maintenant pour {duration} minutes. Le chrono est lancé et la séance est enregistrée."
+    return f"C’est fait, Issa : ta session Focus est programmée le {session_day.strftime('%d/%m/%Y')} à {requested_time.strftime('%H:%M')} pour {duration} minutes. Le chrono démarrera automatiquement à l’heure prévue si l’application reste ouverte."
+
 def _issa_ai_reply(question, history=None, context=None, audio=None):
     key = _startup_secret("GEMINI_API_KEY", "")
     if not key:
         return "Configure GEMINI_API_KEY dans les Secrets Streamlit pour activer Seugn bi."
     question_text = str(question or "").strip()
     st.session_state["issa_focus_immediate_request"] = _issa_focus_requested_now(question_text)
+    focus_answer = _issa_handle_focus_command(question_text)
+    if focus_answer is not None:
+        return focus_answer
     context = _issa_ai_context(question_text) if context is None else context
     system_instruction = _issa_ai_system_prompt(context)
     contents = []
@@ -3870,14 +3951,9 @@ elif page=="Assistant IA XXL":
         if not _ai_key:
             _ai_answer = "Na nga def, Issa ? Maa ngi fi, man Seugn bi. Pour activer mes réponses, configure GEMINI_API_KEY dans les Secrets Streamlit comme indiqué dans LIRE_AVANT_DEMARRER_IA.txt."
         else:
-            _context=_issa_ai_context(_ai_question)
-            _system_prompt=("Tu es Seugn bi, l’assistant personnel d’Issa Youme, étudiant en agronomie et sciences alimentaires à l’Université Amadou Makhtar Mbow (UAM), au Sénégal. Tu aides pour les études, la pédagogie, l’emploi du temps, les révisions, la productivité, les tâches et échéances, les habitudes, le journal, le budget en FCFA, les objectifs, les notes et contacts, les compétences, les formations et stages, les opportunités, les documents et les réunions.\n\n"
-            "LANGUE : comprends le français et le wolof. Réponds naturellement dans la langue utilisée par Issa ; s’il mélange les langues, réponds dans un mélange fluide français–wolof. Garde un ton chaleureux, professionnel, clair et rigoureux. Ne prétends pas parler ou comprendre parfaitement le wolof si une formulation est incertaine ; demande une précision avec tact.\n\n"
-            "UTILISATION DES DONNÉES : appuie-toi sur le contexte enregistré ci-dessous pour croiser les dates d’examens avec les révisions et le niveau de maîtrise, relever les priorités et échéances, résumer le budget et proposer des actions concrètes. Les données peuvent être incomplètes ou anciennes : indique les limites et ne fabrique jamais de faits, de dépenses, de cours, de dates ou d’opportunités. Pour les questions générales, sépare clairement les conseils des faits du dossier. N’affirme pas avoir modifié une donnée, envoyé un e-mail ou connecté un service externe. Réponds de manière concise et propose une prochaine étape utile.\n\n"
-            "CONTEXTE ACTUEL DE L’ESPACE XXL :\n"+_context)
             try:
                 _api_history=st.session_state["issa_ai_messages"][:-1]
-                _ai_answer=_issa_ai_reply(_ai_question,history=_api_history,context=_context,audio=_pending_audio)
+                _ai_answer=_issa_ai_reply(_ai_question,history=_api_history,audio=_pending_audio)
             except urllib.error.HTTPError as _exc:
                 _ai_answer=_issa_ai_error_message(_exc)
             except Exception as _exc:
@@ -4496,7 +4572,7 @@ with st.expander("🤖 Demander à Seugn bi — disponible dans tous les onglets
         with st.spinner("L’assistant consulte tes informations…"):
             try:
                 _global_history=st.session_state.get("issa_global_ai_history",[])
-                _global_answer=_issa_ai_reply(_global_q.strip(),history=_global_history,context=_issa_ai_context(_global_q.strip()))
+                _global_answer=_issa_ai_reply(_global_q.strip(),history=_global_history)
                 _magic_result = _global_history.extend([{"role":"user","content":_global_q.strip()},{"role":"assistant","content":_global_answer}])
                 st.session_state["issa_global_ai_history"]=_global_history[-10:]
             except urllib.error.HTTPError as _global_error:
