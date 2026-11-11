@@ -1689,6 +1689,7 @@ def _issa_open_service(service_or_url):
 
 
 _ISSA_FUNCTIONS=[
+    {"name":"navigate_page","description":"Ouvrir une rubrique interne de l’application. Utilise cette fonction pour les demandes vocales où Issa demande d’aller sur une page ou une section.","parameters":{"type":"OBJECT","properties":{"page_name":{"type":"STRING","enum":["Vue d’ensemble","Maquettes & matières","Emploi du temps","Programmes de révision","Suivi & progression","Assistant IA XXL","Assistant de vie","Rappels automatiques","Assistant e-mail & documents","Compétences & Carrière","Centre de productivité XXL","Paramètres & sauvegarde"]}},"required":["page_name"]}},
     {"name":"read_records","description":"Lire ou rechercher les fiches de l’application. Utilise cette fonction avant une modification pour identifier précisément la fiche.","parameters":{"type":"OBJECT","properties":{"domain":{"type":"STRING","enum":list(_ISSA_DOMAINS)},"search":{"type":"STRING","description":"Mot ou expression à rechercher dans les fiches; chaîne vide pour les plus récentes."}},"required":["domain"]}},
     {"name":"create_record","description":"Créer une fiche dans une rubrique de Secrétaire Issa XXL. À utiliser seulement si Issa demande explicitement d’enregistrer ou d’ajouter. record_json doit contenir les colonnes autorisées précisées dans les instructions système.","parameters":{"type":"OBJECT","properties":{"domain":{"type":"STRING","enum":list(_ISSA_DOMAINS)},"record_json":{"type":"STRING","description":"Objet JSON avec les champs à enregistrer."}},"required":["domain","record_json"]}},
     {"name":"update_record","description":"Modifier une fiche existante. Lis d’abord les fiches avec read_records si l’identifiant n’est pas connu. N’appelle cette fonction que sur demande explicite d’Issa.","parameters":{"type":"OBJECT","properties":{"domain":{"type":"STRING","enum":list(_ISSA_DOMAINS)},"record_id":{"type":"INTEGER"},"changes_json":{"type":"STRING","description":"Objet JSON contenant uniquement les champs à modifier."}},"required":["domain","record_id","changes_json"]}},
@@ -1697,6 +1698,11 @@ _ISSA_FUNCTIONS=[
 
 
 def _issa_execute_tool(name,args):
+    if name=="navigate_page":
+        target=str(args.get("page_name", "")).strip()
+        if target not in PAGES: return {"ok":False,"error":"Rubrique inconnue."}
+        message=_issa_handle_navigation_command("ouvre " + target)
+        return {"ok":bool(st.session_state.get("issa_pending_navigation_target")),"page":target,"message":message or "Navigation refusée."}
     if name=="read_records": return _issa_tool_records(args.get("domain",""),args.get("search",""))
     if name=="create_record": return _issa_tool_write(args.get("domain",""),args.get("record_json","{}"))
     if name=="update_record": return _issa_tool_write(args.get("domain",""),args.get("changes_json","{}"),args.get("record_id"))
@@ -1730,7 +1736,7 @@ def _issa_gemini_generate(contents, key, tools=None, system_instruction="", quic
     retryable_errors = []
     failures = []
     for index, model in enumerate(models):
-        body = {"contents": contents, "generationConfig": {"maxOutputTokens": int(max_output_tokens or (900 if quick else 1600))}}
+        body = {"contents": contents, "generationConfig": {"maxOutputTokens": int(max_output_tokens or (4096 if quick else 8192))}}
         if system_instruction:
             body["systemInstruction"] = {"parts": [{"text": system_instruction}]}
         if tools:
@@ -2024,11 +2030,103 @@ def _issa_handle_focus_command(question):
         return f"C’est fait, Issa : ta session Focus démarre maintenant pour {duration} minutes. Le chrono est lancé et la séance est enregistrée."
     return f"C’est fait, Issa : ta session Focus est programmée le {session_day.strftime('%d/%m/%Y')} à {requested_time.strftime('%H:%M')} pour {duration} minutes. Le chrono démarrera automatiquement à l’heure prévue si l’application reste ouverte."
 
+def _issa_handle_navigation_command(question):
+    """Route les demandes de navigation vers une rubrique interne sans appel Gemini."""
+    text = norm(str(question or "").strip())
+    # Une demande de séance Focus relève du lanceur de chronomètre, pas de la navigation.
+    if "session focus" in text or "seance focus" in text:
+        return None
+    nav_verbs = ("ouvre", "ouvrir", "va dans", "va sur", "affiche", "montre", "accede a", "aller dans", "aller sur", "emmene moi", "navigue vers", "passe a", "je veux voir")
+    if not any(verb in text for verb in nav_verbs):
+        return None
+    aliases = {
+        "Vue d’ensemble": ("accueil", "tableau de bord", "vue d ensemble", "dashboard", "home"),
+        "Maquettes & matières": ("academique", "maquettes", "matieres", "mes cours", "cours", "unites d enseignement", "ue"),
+        "Emploi du temps": ("emploi du temps", "planning", "agenda", "calendrier", "seances"),
+        "Programmes de révision": ("programmes de revision", "revision", "revisions", "programme de revision"),
+        "Suivi & progression": ("suivi", "progression", "resultats", "notes scolaires"),
+        "Assistant IA XXL": ("assistant ia", "seugn bi", "intelligence artificielle", "chat ia"),
+        "Assistant de vie": ("assistant de vie", "vie personnelle", "budget", "depenses", "revenus", "taches", "objectifs", "habitudes", "journal quotidien", "contacts", "bien etre", "notes personnelles"),
+        "Rappels automatiques": ("rappels", "rappel", "notifications", "echeances"),
+        "Assistant e-mail & documents": ("assistant email", "assistant e mail", "emails", "mail", "courriels", "documents", "mes documents"),
+        "Compétences & Carrière": ("carriere", "competences", "formations", "certifications", "stages", "opportunites", "bourses", "concours", "cv"),
+        "Centre de productivité XXL": ("centre de productivite", "productivite", "focus", "concentration", "pomodoro", "flashcards", "projets", "recherche globale", "reunions", "organisateur de vie"),
+        "Paramètres & sauvegarde": ("parametres", "sauvegarde", "exporter mes donnees", "configuration"),
+    }
+    candidates = []
+    for page_name in PAGES:
+        for option in [page_name, PAGE_SHORT.get(page_name, ""), *aliases.get(page_name, ())]:
+            normalized = norm(option)
+            if normalized and re.search(r"(?<![a-z0-9])" + re.escape(normalized) + r"(?![a-z0-9])", text):
+                candidates.append((len(normalized), page_name))
+    section_routes = [
+        (("maquette enregistree", "maquettes enregistrees"), "Maquettes & matières", "subjects", "📚 Maquette enregistrée"),
+        (("import en lot", "importer les matieres"), "Maquettes & matières", "subjects", "📥 Import en lot"),
+        (("ajouter une seance", "importer un edt", "importer emploi du temps"), "Emploi du temps", "events", "➕ Ajouter une séance"),
+        (("agenda", "planning", "agenda enregistre", "seances enregistrees", "mes seances"), "Emploi du temps", "events", "🗓️ Agenda enregistré"),
+        (("budget", "depenses", "revenus", "finances"), "Assistant de vie", "life", "💰 Budget"),
+        (("habitudes", "habitude"), "Assistant de vie", "life", "✅ Habitudes"),
+        (("taches", "demarches", "tasks"), "Assistant de vie", "life", "📝 Tâches & démarches"),
+        (("objectifs", "mes objectifs"), "Assistant de vie", "life", "🎯 Objectifs"),
+        (("notes personnelles", "notes de vie"), "Assistant de vie", "life", "📓 Notes personnelles"),
+        (("contacts", "carnet d adresses"), "Assistant de vie", "life", "👥 Contacts"),
+        (("bien etre", "routines"), "Assistant de vie", "life", "🌿 Bien-être & routines"),
+        (("boite de reception", "emails recus", "e mails recus"), "Assistant e-mail & documents", "mail", "✉️ Messagerie"),
+        (("documents", "mes documents", "cours joints"), "Assistant e-mail & documents", "mail", "📚 Documents & questions"),
+        (("rediger un mail", "nouveau mail", "preparer un email"), "Assistant e-mail & documents", "mail", "✉️ Messagerie"),
+        (("competences", "mes competences"), "Compétences & Carrière", "career", "🧠 Compétences"),
+        (("formations", "certifications"), "Compétences & Carrière", "career", "🎓 Formations & certifications"),
+        (("stages", "opportunites", "bourses", "concours"), "Compétences & Carrière", "career", "🌍 Stages & opportunités"),
+        (("tableau de bord carriere",), "Compétences & Carrière", "career", "📊 Tableau de bord"),
+        (("recherche globale", "recherche dans l application"), "Centre de productivité XXL", "productivity", "🔎 Recherche globale"),
+        (("capture rapide", "saisie rapide"), "Centre de productivité XXL", "productivity", "⚡ Capture rapide"),
+        (("projets", "mes projets"), "Centre de productivité XXL", "productivity", "📌 Projets"),
+        (("flashcards", "cartes memoire"), "Centre de productivité XXL", "productivity", "🧠 Flashcards"),
+        (("session focus", "pomodoro", "focus", "concentration"), "Centre de productivité XXL", "productivity", "⏱️ Concentration"),
+        (("journal quotidien", "mon humeur"), "Centre de productivité XXL", "productivity", "📔 Journal quotidien"),
+        (("reunions", "compte rendu de reunion"), "Centre de productivité XXL", "productivity", "🤝 Réunions"),
+        (("organisateur de vie",), "Centre de productivité XXL", "productivity", "🗓️ Organisateur de vie"),
+    ]
+    matched_routes = [
+        (len(alias), route)
+        for aliases_for_route, *route in section_routes
+        for alias in aliases_for_route
+        if re.search(r"(?<![a-z0-9])" + re.escape(norm(alias)) + r"(?![a-z0-9])", text)
+    ]
+    selected_route = max(matched_routes, default=(0, None))[1]
+    if selected_route:
+        target, tab_slot, tab_label = selected_route
+    else:
+        if not candidates:
+            return None
+        target = max(candidates)[1]
+        tab_slot = tab_label = None
+    if bool(st.session_state.get("issa_focus_active", False)) and float(st.session_state.get("issa_focus_until", 0) or 0) > time_module.time():
+        return "Le mode Focus verrouille la navigation jusqu’à la fin de la séance. Dinaa la navigation bi bu session bi jeex."
+    if st.session_state.get("issa_sequence_strict", False):
+        return "Le parcours séquentiel verrouille la navigation pour le moment. Termine l’étape en cours pour ouvrir une autre rubrique."
+    st.session_state["issa_pending_navigation_target"] = target
+    if tab_slot and tab_label:
+        st.session_state["issa_pending_navigation_tab"] = {"page": target, "slot": tab_slot, "label": tab_label}
+    return f"Waw, j’ouvre « {target} » maintenant."
+
+
+def _issa_navigation_tab_default(slot, page_name=None):
+    """Renvoie la sous-rubrique demandée avant l'affichage de la page correspondante."""
+    request = st.session_state.get("issa_navigation_tab_request")
+    current_page = page_name or st.session_state.get("top_nav")
+    if isinstance(request, dict) and request.get("page") == current_page and request.get("slot") == slot:
+        st.session_state.pop("issa_navigation_tab_request", None)
+        return request.get("label")
+    return None
 def _issa_ai_reply(question, history=None, context=None, audio=None):
+    question_text = str(question or "").strip()
+    navigation_answer = _issa_handle_navigation_command(question_text)
+    if navigation_answer is not None:
+        return navigation_answer
     key = _startup_secret("GEMINI_API_KEY", "")
     if not key:
         return "Configure GEMINI_API_KEY dans les Secrets Streamlit pour activer Seugn bi."
-    question_text = str(question or "").strip()
     st.session_state["issa_focus_immediate_request"] = _issa_focus_requested_now(question_text)
     focus_answer = _issa_handle_focus_command(question_text)
     if focus_answer is not None:
@@ -2053,6 +2151,8 @@ def _issa_ai_reply(question, history=None, context=None, audio=None):
         user_parts.append({"text": "Réponds à ma demande."})
     contents.append({"role": "user", "parts": user_parts})
     relevant_functions = _issa_tools_for_question(question_text, history)
+    if audio:
+        relevant_functions = list({item["name"]: item for item in [*relevant_functions, *[function for function in _ISSA_FUNCTIONS if function["name"] == "navigate_page"]]}.values())
     tools = [{"functionDeclarations": [_issa_gemini_function_declaration(function) for function in relevant_functions]}] if relevant_functions else None
     for _round in range(3):
         result = _issa_gemini_generate(contents, key, tools=tools, system_instruction=system_instruction, quick=True)
@@ -2108,6 +2208,8 @@ def _issa_ai_reply(question, history=None, context=None, audio=None):
                 tool_result = _issa_execute_tool(name, arguments if isinstance(arguments, dict) else {})
             except Exception as tool_error:
                 tool_result = {"ok": False, "error": f"Outil indisponible : {type(tool_error).__name__}"}
+            if name == "navigate_page":
+                return str(tool_result.get("message", "Navigation refusée."))
             function_responses.append({"functionResponse": {"name": name, "response": tool_result}})
         contents.append({"role": "user", "parts": function_responses})
     return "Seugn bi a atteint la limite d’étapes pour cette demande. Sépare-la en deux questions."
@@ -2927,6 +3029,15 @@ _NAV_GROUPS = {
 
 _GROUP_FOR_PAGE = {item: group for group, items in _NAV_GROUPS.items() for item in items}
 
+_pending_navigation_target = st.session_state.pop("issa_pending_navigation_target", None)
+if _pending_navigation_target in PAGES:
+    st.session_state["issa_nav_group"] = _GROUP_FOR_PAGE[_pending_navigation_target]
+    st.session_state["issa_nav_subpage"] = _pending_navigation_target
+    st.session_state["top_nav"] = _pending_navigation_target
+    st.session_state["issa_navigation_notice"] = _pending_navigation_target
+    _pending_navigation_tab = st.session_state.pop("issa_pending_navigation_tab", None)
+    if isinstance(_pending_navigation_tab, dict) and _pending_navigation_tab.get("page") == _pending_navigation_target:
+        st.session_state["issa_navigation_tab_request"] = _pending_navigation_tab
 _focus_navigation_locked = bool(st.session_state.get("issa_focus_active", False)) and float(st.session_state.get("issa_focus_until", 0) or 0) > time_module.time()
 _sequence_navigation_locked = bool(st.session_state.get("issa_sequence_strict", False)) and not _focus_navigation_locked
 
@@ -3004,6 +3115,9 @@ else:
 page = st.session_state["issa_nav_subpage"]
 
 st.session_state["top_nav"] = page
+_navigation_notice = st.session_state.pop("issa_navigation_notice", None)
+if _navigation_notice == page:
+    _magic_result = st.success(f"Seugn bi a ouvert la rubrique « {page} ».")
 
 _logout_col, _empty_col = st.columns([1, 8])
 
@@ -3198,7 +3312,7 @@ elif page=="Maquettes & matières":
 
     _ = header('PÉDAGOGIE','Maquettes & matières','Saisie manuelle, import en lot par CSV/Excel et contrôle des doublons. Les PDF peuvent être lus, mais leur conversion nécessite une vérification.')
 
-    tab1,tab2,tab3=st.tabs(['➕ Saisie directe','📥 Import en lot','📚 Maquette enregistrée'])
+    tab1,tab2,tab3=st.tabs(['➕ Saisie directe','📥 Import en lot','📚 Maquette enregistrée'], default=_issa_navigation_tab_default('subjects', page))
 
     with tab1:
 
@@ -3332,7 +3446,7 @@ elif page=="Emploi du temps":
 
     _ = header('AGENDA','Emploi du temps','Saisis les séances une à une ou importe un tableau CSV/Excel. Toute ligne importée est affichée avant enregistrement.')
 
-    subjects,subopts=subject_choices(); tab1,tab2,tab3=st.tabs(['➕ Ajouter une séance','📥 Importer un EDT','🗓️ Agenda enregistré'])
+    subjects,subopts=subject_choices(); tab1,tab2,tab3=st.tabs(['➕ Ajouter une séance','📥 Importer un EDT','🗓️ Agenda enregistré'], default=_issa_navigation_tab_default('events', page))
 
     with tab1:
 
@@ -3727,7 +3841,7 @@ elif page=="Assistant de vie":
                     _magic_result = st.rerun()
             else:
                 _magic_result = st.info("Aucune étape ouverte. Ajoute une tâche ou une séance à venir dans ton planning pour démarrer automatiquement le parcours.")
-        tabs=st.tabs(['🎯 Objectifs','✅ Habitudes','💰 Budget','📝 Tâches & démarches','📓 Notes personnelles','👥 Contacts','🌿 Bien-être & routines'])
+        tabs=st.tabs(['🎯 Objectifs','✅ Habitudes','💰 Budget','📝 Tâches & démarches','📓 Notes personnelles','👥 Contacts','🌿 Bien-être & routines'], default=_issa_navigation_tab_default('life', page))
         with tabs[0]:
             with st.form('goal_form'):
                 a,b,c=st.columns(3); title=a.text_input('Objectif *'); category=b.selectbox('Domaine',['Études','Carrière','Finances','Famille','Personnel','Projet','Santé / équilibre']); target=c.date_input('Date cible',date.today()+timedelta(days=30))
@@ -4158,7 +4272,7 @@ elif page=="Assistant IA XXL":
     if _ai_question:
         _magic_result = st.session_state["issa_ai_messages"].append({"role":"user", "content":_ai_question})
         if not _ai_key:
-            _ai_answer = "Na nga def, Issa ? Maa ngi fi, man Seugn bi. Pour activer mes réponses, configure GEMINI_API_KEY dans les Secrets Streamlit comme indiqué dans LIRE_AVANT_DEMARRER_IA.txt."
+            _ai_answer = _issa_handle_navigation_command(_ai_question) or "Na nga def, Issa ? Maa ngi fi, man Seugn bi. Pour activer mes réponses, configure GEMINI_API_KEY dans les Secrets Streamlit comme indiqué dans LIRE_AVANT_DEMARRER_IA.txt."
         else:
             try:
                 _api_history=st.session_state["issa_ai_messages"][:-1]
@@ -4168,6 +4282,8 @@ elif page=="Assistant IA XXL":
             except Exception as _exc:
                 _ai_answer=_issa_ai_error_message(_exc)
         _magic_result = st.session_state["issa_ai_messages"].append({"role":"assistant","content":_ai_answer})
+        if st.session_state.get('issa_pending_navigation_target') in PAGES:
+            _magic_result = st.rerun()
         if _pending_audio: _magic_result = st.session_state.pop("issa_ai_pending_audio",None)
         with st.chat_message("assistant"):
             _magic_result = st.markdown(_ai_answer)
@@ -4191,9 +4307,9 @@ elif page=="Assistant IA XXL":
 elif page=="Assistant e-mail & documents":
     _ = header("ASSISTANT PERSONNEL", "E-mails, voix et documents ✉️", "Prépare tes messages, dicte-les à la voix, envoie-les depuis Gmail, consulte ta boîte de réception et interroge tes documents importés.")
     _magic_result = st.info(f"Adresse d’expédition fixe : **{FIXED_SENDER_EMAIL}**. La lecture de la boîte utilise IMAP Gmail et le même mot de passe d’application.")
-    mail_tab, docs_tab = st.tabs(["✉️ Messagerie", "📚 Documents & questions"])
+    mail_tab, docs_tab = st.tabs(["✉️ Messagerie", "📚 Documents & questions"], default=_issa_navigation_tab_default('mail', page))
     with mail_tab:
-        compose_tab, inbox_tab = st.tabs(["📝 Préparer / envoyer", "📥 Ouvrir les e-mails reçus"])
+        compose_tab, inbox_tab = st.tabs(["📝 Préparer / envoyer", "📥 Ouvrir les e-mails reçus"], default=_issa_navigation_tab_default('mail_inbox', page))
         with compose_tab:
             # Les réponses préremplies sont injectées avant la création des widgets Streamlit.
             if st.session_state.pop("issa_pending_reply", False):
@@ -4427,7 +4543,7 @@ elif page=="Compétences & Carrière":
     with metrics[1]: _ = card('Formations',len(trainings),'Formations et certifications')
     with metrics[2]: _ = card('Opportunités',len(opportunities),'Stages, emplois, bourses…')
     with metrics[3]: _ = card('Candidatures suivies',len(applied),'Démarches déjà engagées')
-    tabs=st.tabs(['🧠 Compétences','🎓 Formations & certifications','🌍 Stages & opportunités','📊 Tableau de bord'])
+    tabs=st.tabs(['🧠 Compétences','🎓 Formations & certifications','🌍 Stages & opportunités','📊 Tableau de bord'], default=_issa_navigation_tab_default('career', page))
     with tabs[0]:
         _magic_result = st.markdown('#### Ajouter une compétence')
         with st.form('career_skill_form'):
@@ -4525,7 +4641,7 @@ elif page=="Compétences & Carrière":
 # ---------- Sauvegarde ----------
 elif page=="Centre de productivité XXL":
     _ = header('CENTRE DE PRODUCTIVITÉ XXL','🧠 Le Central — tout piloter au même endroit','Recherche transversale, capture rapide, projets, mémorisation, concentration, journal quotidien, réunions et organisation de vie. Les autres modules restent inchangés.')
-    tabs=st.tabs(['🔎 Recherche globale','⚡ Capture rapide','📌 Projets','🧠 Flashcards','⏱️ Concentration','📔 Journal quotidien','🤝 Réunions','🗓️ Organisateur de vie'])
+    tabs=st.tabs(['🔎 Recherche globale','⚡ Capture rapide','📌 Projets','🧠 Flashcards','⏱️ Concentration','📔 Journal quotidien','🤝 Réunions','🗓️ Organisateur de vie'], default=_issa_navigation_tab_default('productivity', page))
     with tabs[0]:
         query=st.text_input('Rechercher dans les données de l’application',placeholder='Ex. agronomie, examen, stage, budget…',key='central_global_search')
         if query.strip():
@@ -4812,6 +4928,7 @@ role_icons={
 roles_html=''.join(f'<span class="issa-role-pill">{role_icons.get(p, "🤖")} {display_text(PAGE_ROLE.get(p), p)}</span>' for p in PAGES)
 _magic_result = st.markdown(f'<div class="issa-roles"><div class="issa-roles-title">Les rôles de vos secrétaires spécialisés</div><div class="issa-role-pills">{roles_html}</div></div>',unsafe_allow_html=True)
 _magic_result = st.caption('Navigation disponible dans le menu supérieur · Base de données : Supabase PostgreSQL · tables créées automatiquement')
+
 
 
 
