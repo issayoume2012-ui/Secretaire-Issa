@@ -2194,7 +2194,8 @@ def _issa_ai_reply(question, history=None, context=None, audio=None):
     contents.append({"role": "user", "parts": user_parts})
     relevant_functions = _issa_tools_for_question(question_text, history)
     if audio:
-        relevant_functions = list({item["name"]: item for item in [*relevant_functions, *[function for function in _ISSA_FUNCTIONS if function["name"] == "navigate_page"]]}.values())
+        # La transcription est inconnue au moment de préparer la requête : l’IA vocale doit pouvoir consulter, créer, modifier ou naviguer selon la demande réellement entendue.
+        relevant_functions = list({item["name"]: item for item in [*relevant_functions, *_ISSA_FUNCTIONS]}.values())
     tools = [{"functionDeclarations": [_issa_gemini_function_declaration(function) for function in relevant_functions]}] if relevant_functions else None
     for _round in range(3):
         result = _issa_gemini_generate(contents, key, tools=tools, system_instruction=system_instruction, quick=True)
@@ -4991,37 +4992,116 @@ elif page=="Paramètres & sauvegarde":
     _magic_result = st.code('streamlit\npandas\nSpeechRecognition>=3.10.0\nstreamlit-mic-recorder>=0.0.8\nopenpyxl\nPyMuPDF\npython-docx',language='text')
     _magic_result = st.caption('openpyxl permet les imports Excel. PyMuPDF permet de lire le texte des PDF. L’application reste utilisable sans ces deux dépendances si tu utilises CSV et la saisie manuelle.')
 
-with st.expander("🤖 Demander à Seugn bi — disponible dans tous les onglets",expanded=False):
-    _magic_result = st.caption("Pose une question sur tes cours, tâches, échéances, révisions, budget, carrière ou documents. L’assistant croise les données enregistrées dans l’application.")
-    for _global_item in st.session_state.get("issa_global_ai_history",[])[-4:]:
-        _magic_result = st.markdown(("**Toi :** " if _global_item["role"]=="user" else "**Seugn bi :** ")+_global_item["content"])
-    with st.form("issa_global_ai_form",clear_on_submit=True):
-        _global_q=st.text_input("Ta question",placeholder="Ex. Quelle matière dois-je réviser en priorité ?")
-        _global_send=st.form_submit_button("Envoyer à l’assistant",type="primary",disabled=not _startup_secret("GEMINI_API_KEY",""))
-    if _global_send and _global_q.strip():
-        with st.spinner("L’assistant consulte tes informations…"):
-            try:
-                _global_history=st.session_state.get("issa_global_ai_history",[])
-                _global_answer=_issa_ai_reply(_global_q.strip(),history=_global_history)
-                _magic_result = _global_history.extend([{"role":"user","content":_global_q.strip()},{"role":"assistant","content":_global_answer}])
-                st.session_state["issa_global_ai_history"]=_global_history[-10:]
-            except urllib.error.HTTPError as _global_error:
-                _global_answer=_issa_ai_error_message(_global_error)
-            except Exception as _global_error:
-                _global_answer=_issa_ai_error_message(_global_error)
-            _magic_result = st.markdown(_global_answer)
-            _pending_open=st.session_state.get("issa_pending_app_link")
-            if _pending_open:
-                _magic_result=st.link_button("↗ Ouvrir "+_pending_open["service"],_pending_open["url"],key="issa_global_open_service_link")
-                _magic_result=st.session_state.pop("issa_pending_app_link",None)
-            _global_speech=json.dumps(_global_answer,ensure_ascii=False).replace("<","\\\\u003c")
-            _magic_result = st.components.v1.html(f"""<button style='padding:8px 12px;border-radius:8px;cursor:pointer' onclick='const u=new SpeechSynthesisUtterance({_global_speech});u.lang="fr-FR";speechSynthesis.cancel();speechSynthesis.speak(u)'>🔊 Lire la réponse</button>""",height=48)
-            st.session_state.pop("issa_focus_immediate_request", None)
-            _focus_global_rerun = st.session_state.pop("issa_focus_launch_pending", False)
-            _focus_global_rerun = st.session_state.pop("issa_focus_schedule_changed", False) or _focus_global_rerun
-            if _focus_global_rerun:
+with st.expander("🤖 Demander à Seugn bi — disponible dans tous les onglets", expanded=False):
+    _magic_result = st.caption("Pose une question en français ou en wolof, dicte-la, joins un document ou demande clairement d’ajouter une information à une rubrique. Seugn bi peut consulter les données et créer une fiche lorsque la demande et ses détails sont explicites.")
+    for _global_item in st.session_state.get("issa_global_ai_history", [])[-4:]:
+        _magic_result = st.markdown(("**Toi :** " if _global_item["role"] == "user" else "**Seugn bi :** ") + _global_item["content"])
+    with st.expander("📎 Documents à utiliser dans cette conversation", expanded=False):
+        _global_upload = st.file_uploader("Joindre un cours ou document", type=["pdf", "docx", "txt", "md", "csv"], key="issa_global_ai_upload")
+        if _global_upload is not None:
+            _global_digest = hashlib.sha256(_global_upload.getvalue()).hexdigest()
+            _global_preview = st.session_state.get("issa_global_ai_upload_preview", {})
+            if _global_preview.get("digest") != _global_digest:
+                try:
+                    _global_preview = {"digest": _global_digest, "title": _global_upload.name, "content": extract_document_text(_global_upload)}
+                    st.session_state["issa_global_ai_upload_preview"] = _global_preview
+                except Exception as _global_doc_error:
+                    _global_preview = {"digest": _global_digest, "title": _global_upload.name, "content": "", "error": str(_global_doc_error)}
+                    st.session_state["issa_global_ai_upload_preview"] = _global_preview
+            if _global_preview.get("error"):
+                _magic_result = st.warning("Lecture du document impossible : " + str(_global_preview["error"]))
+            elif not str(_global_preview.get("content", "")).strip():
+                _magic_result = st.warning("Aucun texte n’a été extrait. Un PDF scanné nécessite un OCR.")
+            else:
+                _magic_result = st.caption(f"{_global_preview['title']} · {len(_global_preview['content']):,} caractères extraits.".replace(",", " "))
+                _global_doc_col1, _global_doc_col2 = st.columns(2)
+                with _global_doc_col1:
+                    if st.button("📎 Joindre à Seugn bi", key="issa_global_attach_upload", type="primary", use_container_width=True):
+                        _global_attached = list(st.session_state.get("issa_ai_attached_documents", []))
+                        if not any(item.get("digest") == _global_digest for item in _global_attached):
+                            _global_attached.append({"digest": _global_digest, "title": _global_preview["title"], "content": _global_preview["content"]})
+                        st.session_state["issa_ai_attached_documents"] = _global_attached
+                        _magic_result = st.rerun()
+                with _global_doc_col2:
+                    if st.button("💾 Ajouter à la bibliothèque du site", key="issa_global_save_upload", use_container_width=True):
+                        try:
+                            _global_existing = read_df("SELECT id FROM assistant_docs WHERE title=? AND content=? LIMIT 1", (_global_preview["title"], _global_preview["content"]))
+                            if _global_existing.empty:
+                                _ = run("INSERT INTO assistant_docs(title,content) VALUES(?,?)", (_global_preview["title"], _global_preview["content"]))
+                            _global_attached = list(st.session_state.get("issa_ai_attached_documents", []))
+                            if not any(item.get("digest") == _global_digest for item in _global_attached):
+                                _global_attached.append({"digest": _global_digest, "title": _global_preview["title"], "content": _global_preview["content"]})
+                            st.session_state["issa_ai_attached_documents"] = _global_attached
+                            _magic_result = st.rerun()
+                        except Exception as _global_save_error:
+                            _magic_result = st.error(f"Enregistrement impossible : {str(_global_save_error)[:180]}")
+        _global_doc_catalog = read_df("SELECT id,title,uploaded_at FROM assistant_docs ORDER BY uploaded_at DESC LIMIT 100")
+        if not _global_doc_catalog.empty:
+            _global_doc_ids = [int(row.id) for row in _global_doc_catalog.itertuples()]
+            _global_doc_labels = {int(row.id): f"{row.title} · {row.uploaded_at}" for row in _global_doc_catalog.itertuples()}
+            _global_doc_id = st.selectbox("Ou choisir un document de la bibliothèque", _global_doc_ids, format_func=lambda doc_id: _global_doc_labels.get(doc_id, str(doc_id)), key="issa_global_saved_doc_choice")
+            if st.button("📚 Joindre le document sélectionné", key="issa_global_attach_saved_doc"):
+                _global_saved_doc = read_df("SELECT title,content FROM assistant_docs WHERE id=?", (int(_global_doc_id),))
+                if not _global_saved_doc.empty:
+                    _global_doc_title = str(_global_saved_doc.iloc[0].get("title", "Document"))
+                    _global_doc_text = str(_global_saved_doc.iloc[0].get("content", "") or "")
+                    _global_saved_digest = hashlib.sha256((_global_doc_title + _global_doc_text).encode("utf-8")).hexdigest()
+                    _global_attached = list(st.session_state.get("issa_ai_attached_documents", []))
+                    if not any(item.get("digest") == _global_saved_digest for item in _global_attached):
+                        _global_attached.append({"digest": _global_saved_digest, "title": _global_doc_title, "content": _global_doc_text})
+                    st.session_state["issa_ai_attached_documents"] = _global_attached
+                    _magic_result = st.rerun()
+        _global_attached = st.session_state.get("issa_ai_attached_documents", [])
+        if _global_attached:
+            _magic_result = st.markdown("**Documents joints :** " + " · ".join(item.get("title", "Document") for item in _global_attached))
+            if st.button("Retirer les documents joints", key="issa_global_clear_docs"):
+                st.session_state["issa_ai_attached_documents"] = []
                 _magic_result = st.rerun()
-    elif not _startup_secret("GEMINI_API_KEY",""):
+        _magic_result = st.caption("Un document enregistré reste disponible dans Assistant e-mail & documents → Documents & questions.")
+    with st.form("issa_global_ai_form", clear_on_submit=True):
+        _global_q = st.text_input("Ta question ou la fiche à ajouter", placeholder="Ex. Ajoute une tâche pour réviser la pédologie vendredi.")
+        _global_target = st.selectbox("Rubrique à utiliser (facultatif)", ["Laisser Seugn bi choisir"] + list(_ISSA_DOMAINS), key="issa_global_target_domain")
+        _global_send = st.form_submit_button("Envoyer à l’assistant", type="primary")
+    _global_audio = st.audio_input("🎙️ Ou dicter une demande en français ou en wolof", key="issa_global_ai_audio")
+    _global_voice_send = st.button("Envoyer la dictée à Seugn bi", key="issa_global_ai_voice_send", disabled=_global_audio is None or not _startup_secret("GEMINI_API_KEY", ""))
+    _global_request = None
+    _global_audio_payload = None
+    if _global_send and _global_q.strip():
+        _global_request = _global_q.strip()
+    elif _global_voice_send and _global_audio is not None:
+        _global_request = "🎙️ Question vocale"
+        _global_audio_payload = {"data": base64.b64encode(_global_audio.getvalue()).decode("ascii"), "mime": getattr(_global_audio, "type", None) or "audio/wav"}
+    if _global_request:
+        if _global_audio_payload and _global_target != "Laisser Seugn bi choisir":
+            _global_request = f"Rubrique demandée : {_global_target}."
+        elif not _global_audio_payload and _global_target != "Laisser Seugn bi choisir":
+            _global_request += f"\nRubrique demandée : {_global_target}."
+        _global_history = list(st.session_state.get("issa_global_ai_history", []))
+        _global_history.append({"role": "user", "content": _global_request})
+        try:
+            with st.spinner("Seugn bi traite ta demande…"):
+                _global_answer = _issa_ai_reply(_global_request, history=_global_history[:-1], audio=_global_audio_payload)
+        except urllib.error.HTTPError as _global_error:
+            _global_answer = _issa_ai_error_message(_global_error)
+        except Exception as _global_error:
+            _global_answer = _issa_ai_error_message(_global_error)
+        _global_history.append({"role": "assistant", "content": _global_answer})
+        st.session_state["issa_global_ai_history"] = _global_history[-10:]
+        if st.session_state.get("issa_pending_navigation_target") in PAGES:
+            _magic_result = st.rerun()
+        _magic_result = st.markdown("**Seugn bi :** " + _global_answer)
+        _pending_open = st.session_state.get("issa_pending_app_link")
+        if _pending_open:
+            _magic_result = st.link_button("↗ Ouvrir " + _pending_open["service"], _pending_open["url"], key="issa_global_open_service_link")
+            _magic_result = st.session_state.pop("issa_pending_app_link", None)
+        _global_speech = json.dumps(_global_answer, ensure_ascii=False).replace("<", "\\\\u003c")
+        _magic_result = st.components.v1.html(f"""<button style='padding:8px 12px;border-radius:8px;cursor:pointer' onclick='const u=new SpeechSynthesisUtterance({_global_speech});u.lang="fr-FR";speechSynthesis.cancel();speechSynthesis.speak(u)'>🔊 Lire la réponse</button>""", height=48)
+        st.session_state.pop("issa_focus_immediate_request", None)
+        _focus_global_rerun = st.session_state.pop("issa_focus_launch_pending", False)
+        _focus_global_rerun = st.session_state.pop("issa_focus_schedule_changed", False) or _focus_global_rerun
+        if _focus_global_rerun:
+            _magic_result = st.rerun()
+    elif not _startup_secret("GEMINI_API_KEY", ""):
         _magic_result = st.info("Ajoute GEMINI_API_KEY aux Secrets Streamlit pour activer le chat de Seugn bi dans tous les onglets.")
 
 _magic_result = st.markdown('<div class="issa-footer"><strong>🗂️ Secrétaire Issa</strong><br><small>Un espace personnel de secrétariat, de suivi et d’organisation · Données stockées dans Supabase PostgreSQL.</small></div>',unsafe_allow_html=True)
